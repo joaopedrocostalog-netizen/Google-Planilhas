@@ -335,6 +335,7 @@
   }
   App.fmtValue = (v, nf) => {
     if (v === null || v === undefined) return '';
+    if ((E.Sparkline && v instanceof E.Sparkline) || (E.CellImage && v instanceof E.CellImage)) return '';
     if (E.isErr(v)) return v.code;
     if (typeof v === 'boolean') return v ? 'VERDADEIRO' : 'FALSO';
     if (typeof v === 'number') return nf && nf !== '@' ? E.formatValue(v, nf) : fmtAuto(v);

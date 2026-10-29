@@ -261,7 +261,7 @@
           continue;
         }
         const info = cellInfo(sh, si, r, c);
-        if (info.text === '' && !info.s.bg && !info.s.bd && !info.dv && !info.note && !info.comment) continue;
+        if (info.text === '' && !info.s.bg && !info.s.bd && !info.dv && !info.note && !info.comment && !(info.v && typeof info.v === 'object' && !info.isErr)) continue;
         items.push({ r, c, x: X(c), y: Y(r), w: colW(c), h: rowH(r), info });
       }
     }
@@ -399,6 +399,9 @@
       ctx.beginPath(); ctx.moveTo(it.x + it.w - 7 * z, it.y); ctx.lineTo(it.x + it.w - 1, it.y); ctx.lineTo(it.x + it.w - 1, it.y + 7 * z - 1); ctx.closePath(); ctx.fill();
     };
     const invalid = inf.dv && inf.raw !== '' && inf.dv.type !== 'checkbox' && !App.validate(sh, it.r, it.c, String(inf.raw));
+    // minigráfico (SPARKLINE) e imagem na célula (IMAGEM)
+    if (E.Sparkline && inf.v instanceof E.Sparkline) { drawSparkline(inf.v, it); ctx.restore(); return; }
+    if (E.CellImage && inf.v instanceof E.CellImage) { drawCellImage(inf.v, it); ctx.restore(); return; }
     // caixa de seleção
     if (inf.dv && inf.dv.type === 'checkbox') {
       const size = Math.round(12 * z);
@@ -484,6 +487,83 @@
     if (inf.isErr || invalid) tri(C.err);
     else if (inf.comment) tri(C.comment);
     else if (inf.note) tri(C.note);
+  }
+
+  function drawSparkline(sp, it) {
+    const o = sp.opts, z = st.z;
+    const vals = sp.values;
+    const nums = vals.filter((v) => v !== null);
+    if (!nums.length) return;
+    const pad = 3 * z, x = it.x + pad, y = it.y + pad, w = it.w - 2 * pad, h = it.h - 2 * pad;
+    const type = String(o.charttype || 'line').toLowerCase();
+    const color = o.color || o.color1 || '#e30613';
+    ctx.save();
+    ctx.beginPath(); ctx.rect(it.x + 1, it.y + 1, it.w - 2, it.h - 2); ctx.clip();
+    if (type === 'bar') {
+      // barra única empilhada com 1 ou 2 valores
+      const max = typeof o.max === 'number' ? o.max : nums.reduce((a, b) => a + Math.max(0, b), 0) || 1;
+      let cx = x;
+      nums.slice(0, 2).forEach((v, i) => {
+        const bw = Math.max(0, Math.min(w, (Math.max(0, v) / max) * w));
+        ctx.fillStyle = i === 0 ? color : (o.color2 || '#1a1a1a');
+        ctx.fillRect(cx, y + h * 0.2, bw, h * 0.6);
+        cx += bw;
+      });
+    } else {
+      const min = typeof o.ymin === 'number' ? o.ymin : Math.min(0, ...nums), max = typeof o.ymax === 'number' ? o.ymax : Math.max(...nums);
+      const span = max - min || 1;
+      const n = vals.length;
+      const Y = (v) => y + h - ((v - min) / span) * h;
+      if (type === 'column' || type === 'winloss') {
+        const bw = w / n;
+        vals.forEach((v, i) => {
+          if (v === null) return;
+          if (type === 'winloss') {
+            ctx.fillStyle = v >= 0 ? color : (o.negcolor || '#1a1a1a');
+            ctx.fillRect(x + i * bw + bw * 0.1, v >= 0 ? y : y + h / 2, bw * 0.8, h / 2 - 1);
+          } else {
+            ctx.fillStyle = v < 0 ? (o.negcolor || '#1a1a1a') : (i === n - 1 && o.highcolor ? o.highcolor : color);
+            const top = Y(Math.max(v, 0)), bottom = Y(Math.min(v, 0));
+            ctx.fillRect(x + i * bw + bw * 0.12, top, bw * 0.76, Math.max(1, bottom - top));
+          }
+        });
+      } else {
+        ctx.strokeStyle = color; ctx.lineWidth = (o.linewidth || 1.5) * z;
+        ctx.beginPath();
+        let started = false;
+        vals.forEach((v, i) => {
+          if (v === null) return;
+          const px = x + (n === 1 ? w / 2 : (i / (n - 1)) * w);
+          if (!started) { ctx.moveTo(px, Y(v)); started = true; } else ctx.lineTo(px, Y(v));
+        });
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+  const imgCache = new Map();
+  function drawCellImage(im, it) {
+    let img = imgCache.get(im.url);
+    if (!img) {
+      img = new Image();
+      img.onload = schedule;
+      img.onerror = () => { img.failed = true; schedule(); };
+      img.src = im.url;
+      imgCache.set(im.url, img);
+    }
+    if (!img.complete || img.failed || !img.naturalWidth) {
+      if (img.failed) { ctx.fillStyle = '#8a8a8a'; ctx.font = `${11 * st.z}px Arial`; ctx.textBaseline = 'middle'; ctx.fillText('Imagem indisponível', it.x + 4, it.y + it.h / 2); }
+      return;
+    }
+    const pad = 2 * st.z, W = it.w - 2 * pad, H = it.h - 2 * pad;
+    let dw = W, dh = H;
+    if (im.mode === 1 || !im.mode) { const k = Math.min(W / img.naturalWidth, H / img.naturalHeight); dw = img.naturalWidth * k; dh = img.naturalHeight * k; }
+    else if (im.mode === 3) { dw = img.naturalWidth * st.z; dh = img.naturalHeight * st.z; }
+    else if (im.mode === 4) { dw = (im.w || img.naturalWidth) * st.z; dh = (im.h || img.naturalHeight) * st.z; }
+    ctx.save();
+    ctx.beginPath(); ctx.rect(it.x + 1, it.y + 1, it.w - 2, it.h - 2); ctx.clip();
+    ctx.drawImage(img, it.x + pad + (W - dw) / 2, it.y + pad + (H - dh) / 2, dw, dh);
+    ctx.restore();
   }
 
   function drawOverlays(sh, rg) {

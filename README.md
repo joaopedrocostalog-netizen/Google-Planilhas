@@ -27,7 +27,7 @@ python3 -m http.server 8080
 - Menus de contexto na célula, nos cabeçalhos e nas abas.
 
 **Fórmulas**
-- 182 funções, com nomes em português e em inglês (SOMA/SUM, PROCV/VLOOKUP, PROCX/XLOOKUP, SE/IF, SOMASES, CONT.SES, ÍNDICE, CORRESP, FILTER, CLASSIFICAR, ÚNICO, SEQUÊNCIA, TEXTO, DATADIF, PGTO, REGEXEXTRACT…).
+- 184 funções, com nomes em português e em inglês (SOMA/SUM, PROCV/VLOOKUP, PROCX/XLOOKUP, SE/IF, SOMASES, CONT.SES, ÍNDICE, CORRESP, FILTER, CLASSIFICAR, ÚNICO, SEQUÊNCIA, TEXTO, DATADIF, PGTO, REGEXEXTRACT…).
 - Matrizes que transbordam para as células vizinhas (FILTER, ÚNICO, SEQUÊNCIA, ARRAYFORMULA, `={1\2;3\4}`), com `#REF!` quando há dados no caminho.
 - Referências entre páginas (`Página2!A1`, `'Minha página'!A1:B5`), colunas e linhas inteiras (`A:A`, `2:2`), intervalos abertos (`A2:B`) e intervalos nomeados.
 - Referências coloridas no editor, modo apontar (clique, arraste ou use as setas para inserir referências, inclusive de outras páginas), autocompletar de funções, ajuda de argumentos e F4 para `$`.
@@ -56,6 +56,7 @@ python3 -m http.server 8080
 **Gráficos**
 - Colunas, colunas empilhadas, barras, linhas, área, pizza, rosca e dispersão.
 - Gráficos flutuantes: mover, redimensionar, editar no painel lateral e baixar como PNG ou SVG.
+- Minigráficos na célula com SPARKLINE (linha, colunas, barra, ganho/perda), imagens na célula com IMAGEM(url) e imagens sobre as células (Inserir › Imagem).
 
 **Arquivos**
 - Várias planilhas salvas no navegador (Arquivo › Abrir), fazer uma cópia, nova planilha.
@@ -109,7 +110,7 @@ tests/              testes do motor (node tests/engine.test.js)
 
 - Sem colaboração em tempo real nem contas: cada pessoa edita a própria cópia, salva no navegador.
 - O `.xlsx` exportado leva valores, fórmulas, formatos de número, mesclagens, larguras e notas, mas não cores e fontes (limite da biblioteca SheetJS gratuita).
-- Não há Apps Script, macros, imagens dentro de células, minigráficos (SPARKLINE), GOOGLEFINANCE, IMPORTRANGE nem QUERY.
+- Não há Apps Script, macros, GOOGLEFINANCE, IMPORTRANGE nem QUERY.
 
 ## Logo e cores
 

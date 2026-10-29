@@ -199,7 +199,9 @@
       el.style.width = W + 'px';
       el.style.height = H + 'px';
       el.classList.toggle('selected', App.selectedChart === ch.id);
-      if (full || el._size !== W + 'x' + H) { el.querySelector('.chart-svg').innerHTML = render(ch, Math.round(W), Math.round(H), doc.active); el._size = W + 'x' + H; }
+      if (ch.type === 'image') {
+        if (el._src !== ch.src) { el.querySelector('.chart-svg').innerHTML = `<img src="${ch.src}" alt="" draggable="false">`; el._src = ch.src; el.classList.add('image-obj'); }
+      } else if (full || el._size !== W + 'x' + H) { el.querySelector('.chart-svg').innerHTML = render(ch, Math.round(W), Math.round(H), doc.active); el._size = W + 'x' + H; }
     }
   }
   function findChart(id) { return App.sheet().charts.find((c) => c.id === id); }
@@ -240,11 +242,19 @@
       window.addEventListener('mousemove', move);
       window.addEventListener('mouseup', up);
     });
-    el.addEventListener('dblclick', () => openEditor(el.dataset.id));
+    el.addEventListener('dblclick', () => { const ch = findChart(el.dataset.id); if (ch && ch.type !== 'image') openEditor(el.dataset.id); });
     el.querySelector('.chart-menu').addEventListener('click', (e) => {
       e.stopPropagation();
       const id = el.dataset.id;
       App.selectedChart = id; sync(false);
+      const ch = findChart(id);
+      if (ch && ch.type === 'image') {
+        App.ui.menuPopup(e.currentTarget, [
+          { label: 'Restaurar proporção original', action: () => { const im = new Image(); im.onload = () => App.change('Imagem', () => { ch.h = Math.round(ch.w * im.naturalHeight / im.naturalWidth); }); im.src = ch.src; } },
+          { label: 'Excluir imagem', action: () => deleteChart(id) },
+        ]);
+        return;
+      }
       App.ui.menuPopup(e.currentTarget, [
         { label: 'Editar gráfico', action: () => openEditor(id) },
         { label: 'Excluir gráfico', action: () => deleteChart(id) }, '-',
@@ -293,6 +303,41 @@
     App.selectedChart = ch.id;
     openEditor(ch.id);
   }
+  // Imagem sobre as células: reduz para no máximo 1000 px para caber no armazenamento do navegador
+  function insertImage() {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'image/*';
+    inp.onchange = () => {
+      const f = inp.files[0];
+      if (!f) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const img = new Image();
+        img.onload = () => {
+          const k = Math.min(1, 1000 / Math.max(img.naturalWidth, img.naturalHeight));
+          const c = document.createElement('canvas');
+          c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+          c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+          const png = f.type === 'image/png' || f.type === 'image/gif' || f.type === 'image/svg+xml';
+          const src = c.toDataURL(png ? 'image/png' : 'image/jpeg', 0.85);
+          const sh = App.sheet();
+          let x = 0, y = 0;
+          for (let cc = 1; cc < App.sel.ac; cc++) if (!App.isColHidden(sh, cc)) x += sh.colW[cc] || App.DEF_W;
+          for (let r = 1; r < App.sel.ar; r++) if (!App.isRowHidden(sh, r)) y += sh.rowH[r] || App.DEF_H;
+          const w = Math.min(400, c.width), h = Math.round(w * c.height / c.width);
+          const ch = { id: App.uid(), type: 'image', src, x, y, w, h, range: '' };
+          App.change('Inserir imagem', () => sh.charts.push(ch));
+          App.selectedChart = ch.id;
+          sync(true);
+        };
+        img.onerror = () => notify('Não foi possível ler esta imagem.');
+        img.src = reader.result;
+      };
+      reader.readAsDataURL(f);
+    };
+    inp.click();
+  }
+
   function openEditor(id) {
     const sh = App.sheet();
     const ch = findChart(id);
@@ -365,6 +410,15 @@
       if (e.key === 'Escape') { App.selectedChart = null; sync(false); }
     }, true);
     App.commands.def('insertChart', 'Gráfico', insertChart, 'Ctrl+Alt+R');
+    App.commands.def('insertImage', 'Inserir imagem sobre as células', insertImage);
+    App.commands.def('insertCellImage', 'Inserir imagem na célula', () => {
+      App.ui.prompt('Imagem na célula', 'Endereço da imagem (https://…)', '', (url) => {
+        url = url.trim();
+        if (!/^https?:\/\//i.test(url)) return notify('Use um endereço que comece com http:// ou https://.');
+        const sh = App.sheet(), s = App.sel;
+        App.change('Imagem na célula', () => App.setRaw(sh, s.ar, s.ac, `=IMAGEM("${url.replace(/"/g, '""')}")`));
+      });
+    });
     sync(true);
   }
   App.charts = { init, sync, render, insertChart, openEditor };

@@ -363,6 +363,27 @@
     return raw;
   }, I);
 
+  // ---------- Minigráficos e imagens na célula ----------
+  class Sparkline { constructor(values, opts) { this.values = values; this.opts = opts; } toString() { return ''; } }
+  class CellImage { constructor(url, mode, w, h) { this.url = url; this.mode = mode; this.w = w; this.h = h; } toString() { return ''; } }
+  E.Sparkline = Sparkline;
+  E.CellImage = CellImage;
+  def('SPARKLINE', 'SPARKLINE', 'dados; [opções]', 'Cria um minigráfico dentro da célula. Opções: {"charttype"\\"bar"}; tipos: line, column, bar, winloss.', (a, c) => {
+    const m = toMatrix(ev(a[0], c));
+    const values = (m.length === 1 ? m[0] : m.map((r) => r[0])).map((v) => (typeof v === 'number' ? v : null));
+    const opts = {};
+    if (has(a, 1)) {
+      const om = toMatrix(ev(a[1], c));
+      for (const row of om) if (row.length >= 2 && row[0] !== null) opts[String(row[0]).toLowerCase()] = row[1];
+    }
+    return new Sparkline(values, opts);
+  }, 'Outras');
+  def('IMAGE', 'IMAGEM', 'url; [modo]; [altura]; [largura]', 'Insere uma imagem dentro da célula (modo 1: ajustar, 2: esticar, 3: tamanho original, 4: personalizado).', (a, c) => {
+    const url = str(a, 0, c, '');
+    if (!/^(https?:|data:image\/)/i.test(url)) throw mkErr('#VALUE!', 'IMAGEM precisa de um endereço que comece com http:// ou https://.');
+    return new CellImage(url, num(a, 1, c, 1), num(a, 2, c, 0), num(a, 3, c, 0));
+  }, 'Outras');
+
   // ---------- Finanças ----------
   const FN = 'Finanças';
   def('PMT', 'PGTO', 'taxa; nper; vp; [vf]; [tipo]', 'Pagamento periódico de um investimento ou empréstimo.', (a, c) => {

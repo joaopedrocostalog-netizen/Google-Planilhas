@@ -253,7 +253,8 @@
       { label: 'Colunas', sub: () => [{ label: `Inserir ${plural(nCols(), 'coluna', 'colunas')} à esquerda`, cmd: 'insertColsLeft' }, { label: `Inserir ${plural(nCols(), 'coluna', 'colunas')} à direita`, cmd: 'insertColsRight' }] },
       { label: 'Página', cmd: 'newSheet' }, '-',
       { label: 'Gráfico', icon: 'chart', cmd: 'insertChart' },
-      { label: 'Tabela dinâmica', cmd: 'pivotTable' }, '-',
+      { label: 'Tabela dinâmica', cmd: 'pivotTable' },
+      { label: 'Imagem', sub: [{ label: 'Inserir imagem sobre as células', cmd: 'insertImage' }, { label: 'Inserir imagem na célula', cmd: 'insertCellImage' }] }, '-',
       { label: 'Função', icon: 'sigma', sub: () => [
         { label: 'SOMA', action: () => run('autoSum', 'SOMA') }, { label: 'MÉDIA', action: () => run('autoSum', 'MÉDIA') },
         { label: 'CONT.NÚM', action: () => run('autoSum', 'CONT.NÚM') }, { label: 'MÁXIMO', action: () => run('autoSum', 'MÁXIMO') },
