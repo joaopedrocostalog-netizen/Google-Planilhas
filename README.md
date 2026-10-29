@@ -1,75 +1,116 @@
 # Google-Planilhas
 
-Editor de planilhas que roda no navegador, sem instalação e sem servidor, no estilo do Google Planilhas.
-Interface em preto, branco e vermelho.
+Editor de planilhas que roda inteiro no navegador, no estilo do Google Planilhas, com interface em preto, branco e vermelho.
+Não tem servidor nem etapa de build: são arquivos estáticos (HTML, CSS e JavaScript), prontos para o GitHub Pages.
 
-## Como abrir
+## Como publicar no GitHub Pages
 
-Não precisa de build. Basta abrir `index.html` em um navegador moderno (Chrome, Edge, Firefox ou Safari).
+1. No repositório, abra **Settings → Pages**.
+2. Em *Build and deployment*, escolha **Deploy from a branch**, selecione a branch (`main` ou `planilhas-web`) e a pasta **/ (root)**.
+3. Clique em **Save**. O site fica em `https://<usuário>.github.io/Google-Planilhas/`.
 
-Para testar com um servidor local (recomendado, para evitar restrições de `file://`):
+Para testar localmente:
 
 ```sh
 python3 -m http.server 8080
-# depois abra http://localhost:8080
-```
-
-Os dados são salvos automaticamente no navegador (localStorage). Use **Arquivo → Baixar backup (.json)** para guardar uma cópia.
-
-## Estrutura
-
-```
-index.html        página principal (menus, barra de ferramentas, grade, abas, diálogos)
-src/styles.css    estilos; cores da marca em :root (--red, --black, --white)
-src/engine.js     motor de cálculo: referências, operadores, funções e erros (#DIV/0!, #REF!, #CIRC!...)
-src/app.js        estado do documento, grade virtualizada, seleção, edição, desfazer/refazer
-src/io.js         arquivos (CSV/JSON), localizar, ordenação, gráficos, planilhas (abas), impressão
-src/features.js   menus, barra de ferramentas, formatação, copiar/recortar/colar, alça de preenchimento, atalhos
-assets/favicon.svg
+# abra http://localhost:8080
 ```
 
 ## Recursos
 
-- **Grade:** 52 colunas (A a AZ) × 1.000 linhas, com rolagem virtualizada; redimensionar colunas e linhas arrastando o cabeçalho; zoom de 75% a 150%; mostrar/ocultar linhas de grade.
-- **Seleção:** clique, arrastar, Shift+clique, Shift+setas, Ctrl+setas (salta até o limite dos dados), seleção de linha e coluna pelos cabeçalhos, Ctrl+A.
-- **Edição:** digitar direto na célula, F2, barra de fórmulas, caixa de nome (ex.: `B2` ou `A1:C9`), Enter/Tab com retorno à coluna de origem, Esc para cancelar.
-- **Fórmulas:** operadores `+ - * / ^ & % = <> < > <= >=`; referências relativas e absolutas; intervalos; ~50 funções com nomes em português e inglês (SOMA, MÉDIA, MÁXIMO, MÍNIMO, CONT.NÚM, CONT.SE, SOMASE, SE, SEERRO, PROCV, PROCH, ARRED, CONCATENAR, ESQUERDA, DIREITA, MAIUSC, HOJE, DATA, E, OU, NÃO...).
-  - Em pt-BR, use `;` para separar argumentos e `,` como separador decimal (ex.: `=ARRED(2,345;2)`).
-- **Formatação:** negrito, itálico, sublinhado, tachado, fonte, tamanho, cor do texto, cor de preenchimento, alinhamento, quebra de texto, bordas, formatos de número, moeda (R$), porcentagem, data, casas decimais.
-- **Edição em massa:** copiar/recortar/colar (com ajuste automático das referências), alça de preenchimento (repete valores ou continua séries numéricas), Delete para limpar.
-- **Dados:** ordenar intervalo A→Z e Z→A; soma automática (Σ); barra de status com soma, média e contagem da seleção.
-- **Localizar:** Ctrl+F, com destaque dos resultados e navegação entre eles.
-- **Gráficos:** colunas, linhas e pizza a partir de um intervalo (desenhados em SVG).
-- **Planilhas (abas):** adicionar, renomear (duplo clique), duplicar, excluir.
-- **Arquivos:** abrir/baixar `.json` (backup completo) e `.csv`; imprimir (Ctrl+P).
-- **Histórico:** desfazer (Ctrl+Z) e refazer (Ctrl+Y).
+**Interface no estilo do Google Planilhas**
+- Barra de menus completa (Arquivo, Editar, Ver, Inserir, Formatar, Dados, Ferramentas, Extensões, Ajuda), com submenus e atalhos.
+- Barra de ferramentas na mesma ordem do Sheets, busca nos menus (Alt+/), barra de fórmulas com caixa de nome.
+- Grade desenhada em canvas: linhas e colunas congeladas, texto que transborda para células vazias, mesclagem, bordas, rotação, quebra de texto com ajuste automático de altura.
+- Abas de página: adicionar, renomear (duplo clique), arrastar para reordenar, cores, ocultar, duplicar.
+- Resumo da seleção no rodapé (soma, média, mínimo, máximo, contagem).
+- Menus de contexto na célula, nos cabeçalhos e nas abas.
 
-## Atalhos
+**Fórmulas**
+- 182 funções, com nomes em português e em inglês (SOMA/SUM, PROCV/VLOOKUP, PROCX/XLOOKUP, SE/IF, SOMASES, CONT.SES, ÍNDICE, CORRESP, FILTER, CLASSIFICAR, ÚNICO, SEQUÊNCIA, TEXTO, DATADIF, PGTO, REGEXEXTRACT…).
+- Matrizes que transbordam para as células vizinhas (FILTER, ÚNICO, SEQUÊNCIA, ARRAYFORMULA, `={1\2;3\4}`), com `#REF!` quando há dados no caminho.
+- Referências entre páginas (`Página2!A1`, `'Minha página'!A1:B5`), colunas e linhas inteiras (`A:A`, `2:2`), intervalos abertos (`A2:B`) e intervalos nomeados.
+- Referências coloridas no editor, modo apontar (clique, arraste ou use as setas para inserir referências, inclusive de outras páginas), autocompletar de funções, ajuda de argumentos e F4 para `$`.
+- Erros com explicação ao passar o mouse (`#DIV/0!`, `#N/A`, `#REF!`, `#NAME?`, dependência circular).
+- Em pt-BR: argumentos separados por `;` e vírgula decimal (`=ARRED(2,345;2)`).
+
+**Formatação**
+- Negrito, itálico, sublinhado, tachado, fonte, tamanho, cores, alinhamento horizontal e vertical, quebra de texto, rotação, recuo, bordas (estilos e cores).
+- Formatos: automático, número, porcentagem, científico, contábil, financeiro, moeda (R$), data, hora, duração e formatos personalizados (`#,##0.00`, `dd/mm/aaaa`, `[h]:mm:ss`…).
+- Formatos automáticos ao digitar (datas, %, R$) e herança de formato em fórmulas (como `=HOJE()` ou `=SOMA()` de valores em reais).
+- Pintar formatação, formatação condicional (cor única e escala de cores), cores alternadas.
+
+**Dados**
+- Filtros por valores e por condição, classificação de página e de intervalo (inclusive com várias colunas e cabeçalho).
+- Validação de dados: lista suspensa com chips coloridos, lista de um intervalo, caixas de seleção, número, texto e data.
+- Tabela dinâmica (com fórmulas que se atualizam sozinhas), estatísticas da coluna, remover cópias, cortar espaços, dividir texto em colunas.
+- Inserir, excluir, ocultar e redimensionar linhas e colunas, com ajuste automático das fórmulas.
+
+**Edição**
+- Copiar, recortar e colar (inclusive de/para Excel e Google Planilhas), colar especial (valores, formatação, fórmulas, transposto).
+- Alça de preenchimento com séries (números, datas, meses, dias da semana, "Item 1, Item 2…"), Ctrl+D e Ctrl+R.
+- Localizar (Ctrl+F) e localizar e substituir (Ctrl+H) com expressões regulares.
+- Notas, comentários, links (inclusive para outras páginas).
+- Desfazer e refazer ilimitados na sessão, histórico de versões no navegador.
+
+**Gráficos**
+- Colunas, colunas empilhadas, barras, linhas, área, pizza, rosca e dispersão.
+- Gráficos flutuantes: mover, redimensionar, editar no painel lateral e baixar como PNG ou SVG.
+
+**Arquivos**
+- Várias planilhas salvas no navegador (Arquivo › Abrir), fazer uma cópia, nova planilha.
+- Importar e baixar `.xlsx`, `.csv`, `.tsv`, `.json`; abrir também `.xls` e `.ods`; baixar como página da web; imprimir/PDF.
+- Arrastar um arquivo para a janela abre como nova planilha.
+- Compartilhar por link: os dados vão compactados no endereço e quem abre recebe uma cópia.
+
+## Atalhos principais
 
 | Atalho | Ação |
 |---|---|
-| Enter / Shift+Enter | Confirmar e descer / subir |
-| Tab / Shift+Tab | Confirmar e ir para a direita / esquerda |
-| F2 | Editar célula |
-| Delete / Backspace | Limpar conteúdo |
-| Ctrl+C, Ctrl+X, Ctrl+V | Copiar, recortar, colar |
 | Ctrl+Z / Ctrl+Y | Desfazer / refazer |
-| Ctrl+B, Ctrl+I, Ctrl+U | Negrito, itálico, sublinhado |
-| Ctrl+S | Salvar no navegador |
-| Ctrl+F | Localizar |
-| Ctrl+P | Imprimir |
-| Ctrl+A | Selecionar tudo |
+| Ctrl+C / Ctrl+X / Ctrl+V | Copiar / recortar / colar |
+| Ctrl+Shift+V | Colar somente valores |
+| Ctrl+B / I / U | Negrito / itálico / sublinhado |
+| Ctrl+Shift+1…6 | Número, hora, data, moeda, porcentagem, científico |
+| Ctrl+F / Ctrl+H | Localizar / substituir |
+| Ctrl+K | Inserir link |
+| Shift+F2 / Ctrl+Alt+M | Nota / comentário |
+| Ctrl+; | Inserir data |
+| Ctrl+D / Ctrl+R | Preencher para baixo / direita |
+| Ctrl+Alt+= / Ctrl+Alt+- | Inserir / excluir linhas ou colunas |
+| Alt+Enter | Nova linha dentro da célula |
+| F4 | Alternar referência absoluta |
+| Alt+/ | Pesquisar nos menus |
+| Ctrl+/ | Todos os atalhos |
 
-## Limitações conhecidas
+## Estrutura
 
-- Não há colaboração em tempo real nem contas de usuário: os dados ficam no navegador de quem editou.
-- Gráficos são exibidos em janela; ainda não são objetos flutuantes dentro da planilha.
-- Não há congelar painéis, filtros, validação de dados, formatação condicional, tabelas dinâmicas, comentários, imagens e macros.
-- Não há inserir/excluir linhas e colunas no meio da planilha.
-- Importação e exportação `.xlsx` não estão implementadas (use CSV ou JSON).
-- A quantidade de linhas e colunas é fixa (1.000 × 52).
-- Ordenar intervalos não reajusta referências de fórmulas que apontam para linhas movidas.
+```
+index.html          estrutura da página
+src/styles.css      tema (cores da marca em :root: --red, --black, --white)
+src/engine.js       tokenizador, parser, avaliador, pasta de trabalho, reescrita de fórmulas
+src/functions.js    funções: matemática, estatística, lógica, busca, matrizes
+src/functions2.js   funções: texto, data, informações, finanças; formatador de números
+src/model.js        documento, histórico, persistência, operações estruturais, filtros, validação
+src/grid.js         grade em canvas, seleção, mouse, rolagem
+src/editor.js       editor de célula e barra de fórmulas
+src/commands.js     comandos, atalhos de teclado, área de transferência
+src/chrome.js       menus, barra de ferramentas, paleta, caixa de nome, busca nos menus
+src/chrome2.js      abas, avisos, diálogos, dicas, menus de contexto, filtro
+src/panels.js       painéis laterais (formatação condicional, validação, tabela dinâmica…)
+src/dialogs.js      localizar e substituir, link, nota, comentário, lista de funções…
+src/charts.js       gráficos
+src/io.js           arquivos, impressão e compartilhamento
+src/app.js          inicialização
+tests/              testes do motor (node tests/engine.test.js)
+```
+
+## Limitações
+
+- Sem colaboração em tempo real nem contas: cada pessoa edita a própria cópia, salva no navegador.
+- O `.xlsx` exportado leva valores, fórmulas, formatos de número, mesclagens, larguras e notas, mas não cores e fontes (limite da biblioteca SheetJS gratuita).
+- Não há Apps Script, macros, imagens dentro de células, minigráficos (SPARKLINE), GOOGLEFINANCE, IMPORTRANGE nem QUERY.
 
 ## Logo e cores
 
-A cor de destaque está em `src/styles.css` (`--red`, `--red-dark`, `--black`). O logotipo do topo está em `index.html` (símbolo `#i-logo`) e em `assets/favicon.svg`. Para usar a logo oficial da empresa, substitua o SVG por ela.
+As cores ficam em `src/styles.css` (`--red`, `--red-dark`, `--black`). O logotipo está em `index.html` (dentro de `.app-logo`) e em `assets/favicon.svg`. Para usar a logo oficial da empresa, troque esses SVGs.

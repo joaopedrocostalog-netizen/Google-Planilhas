@@ -1,416 +1,473 @@
-// Entrada e saída de dados, localizar, gráficos, ordenação e planilhas (abas).
-(function () {
+// Arquivos: abrir, importar (.xlsx, .ods, .csv, .tsv, .json), baixar, copiar, imprimir e compartilhar por link.
+(function (App) {
   'use strict';
-  const A = window.App;
-  const E = window.GridEngine;
+  const E = App.E;
+  const doc = App.doc;
   const $ = (id) => document.getElementById(id);
-
-  // ---------- Utilidades ----------
-  const notify = (m) => window.Features && window.Features.notify(m);
+  const esc = App.esc;
+  const icon = (n, s) => App.icon(n, s);
+  const notify = (m) => App.emit('notify', m);
+  const def = (id, label, fn, sc) => App.commands.def(id, label, fn, sc);
   const safeName = (s) => (s || 'planilha').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'planilha';
-  function download(name, content, type) {
-    const blob = new Blob([content], { type });
+
+  function downloadBlob(blob, name) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1500);
   }
-  // Intervalo usado (maior linha/coluna com conteúdo)
-  function usedRange(sh) {
-    let maxR = 0, maxC = 0;
-    for (const a in sh.cells) {
-      const c = sh.cells[a];
-      if (!c || c.v === '' || c.v === undefined) continue;
-      const p = E.parseAddr(a);
-      if (!p) continue;
-      maxR = Math.max(maxR, p.row);
-      maxC = Math.max(maxC, p.col);
+
+  // ---------- SheetJS sob demanda ----------
+  let xlsxPromise = null;
+  function loadXLSX() {
+    if (window.XLSX) return Promise.resolve(window.XLSX);
+    if (!xlsxPromise) {
+      xlsxPromise = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+        s.onload = () => resolve(window.XLSX);
+        s.onerror = () => { xlsxPromise = null; reject(new Error('Não foi possível carregar o leitor de Excel. Verifique a conexão.')); };
+        document.head.appendChild(s);
+      });
     }
-    return { maxR: maxR || 1, maxC: maxC || 1 };
-  }
-  function displayAt(sh, r, c) {
-    const a = E.addrToStr(r, c);
-    const cell = sh.cells[a];
-    const v = cell && cell.v !== '' ? sh.eng.value(a) : null;
-    return A.fmt(v, (cell && cell.s) || {});
+    return xlsxPromise;
   }
 
-  // ---------- Documento ----------
-  function newDocument() {
-    if (!confirm('Criar uma nova planilha? O conteúdo atual será substituído (use Desfazer para voltar).')) return;
-    A.pushUndo();
-    A.doc.sheets = [A.newSheet('Planilha1')];
-    A.doc.active = 0;
-    A.doc.title = 'Planilha sem título';
-    A.rebuildEngine(A.doc.sheets[0]);
-    A.el.title.value = A.doc.title;
-    A.S.ar = A.S.er = A.S.ac = A.S.ec = 1;
-    A.layout();
-    A.updateTabs();
-    A.refresh();
-    A.markDirty();
-  }
-
-  function exportJSON() {
-    const payload = {
-      app: 'Planilhas', version: 1, title: A.doc.title, zoom: A.doc.zoom, active: A.doc.active,
-      sheets: A.doc.sheets.map((s) => ({ name: s.name, cells: s.cells, colW: s.colW, rowH: s.rowH, gridlines: s.gridlines })),
-    };
-    download(safeName(A.doc.title) + '.json', JSON.stringify(payload, null, 2), 'application/json');
-    notify('Backup baixado');
-  }
-
-  function exportCSV() {
-    const sh = A.sheet();
-    const { maxR, maxC } = usedRange(sh);
-    const lines = [];
-    for (let r = 1; r <= maxR; r++) {
-      const row = [];
-      for (let c = 1; c <= maxC; c++) {
-        const t = displayAt(sh, r, c);
-        row.push(/[",;\n\r]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t);
-      }
-      lines.push(row.join(','));
+  // ---------- Conversão de sintaxe de fórmulas (inglês <-> pt-BR) ----------
+  // Inglês: separador "," e decimal "."; pt-BR: separador ";" e decimal ",". Matrizes: {1,2;3,4} <-> {1\2;3\4}
+  function enToPt(f) {
+    let out = '', q = false, brace = 0;
+    for (let i = 0; i < f.length; i++) {
+      const ch = f[i];
+      if (ch === '"') { q = !q; out += ch; continue; }
+      if (q) { out += ch; continue; }
+      if (ch === "'" ) { const j = f.indexOf("'", i + 1); if (j > i) { out += f.slice(i, j + 1); i = j; continue; } }
+      if (ch === '{') brace++;
+      if (ch === '}') brace--;
+      if (ch === ',') { out += brace ? '\\' : ';'; continue; }
+      if (ch === '.' && /\d/.test(f[i - 1] || '') && /\d/.test(f[i + 1] || '') && !/[A-Za-z_]/.test(prevWordChar(f, i))) { out += ','; continue; }
+      out += ch;
     }
-    download(safeName(sh.name) + '.csv', '﻿' + lines.join('\r\n'), 'text/csv;charset=utf-8');
-    notify('CSV baixado');
+    return out;
   }
+  function prevWordChar(f, i) { let j = i - 1; while (j >= 0 && /\d/.test(f[j])) j--; return j >= 0 ? f[j] : ''; }
+  function ptToEn(formula) {
+    let body = formula.replace(/^=/, '');
+    // nomes de função em inglês
+    try {
+      const toks = E.tokenize(body);
+      let out = '', last = 0;
+      for (const t of toks) if (t.t === 'func') { out += body.slice(last, t.s) + (E.ALIASES[t.v] || t.v) + '('; last = t.e; }
+      body = out + body.slice(last);
+    } catch (e) { /* mantém */ }
+    let out = '', q = false, brace = 0;
+    for (let i = 0; i < body.length; i++) {
+      const ch = body[i];
+      if (ch === '"') { q = !q; out += ch; continue; }
+      if (q) { out += ch; continue; }
+      if (ch === "'") { const j = body.indexOf("'", i + 1); if (j > i) { out += body.slice(i, j + 1); i = j; continue; } }
+      if (ch === '{') brace++;
+      if (ch === '}') brace--;
+      if (ch === ',' && /\d/.test(body[i - 1] || '') && /\d/.test(body[i + 1] || '')) { out += '.'; continue; }
+      if (ch === ';') { out += brace ? ';' : ','; continue; }
+      if (ch === '\\' && brace) { out += ','; continue; }
+      out += ch;
+    }
+    return out;
+  }
+  App.formulaToEnglish = ptToEn;
 
-  // CSV simples com aspas. Detecta ';' ou ',' como separador.
-  function parseCSV(text) {
-    const first = text.split(/\r?\n/)[0] || '';
-    const sep = (first.match(/;/g) || []).length > (first.match(/,/g) || []).length ? ';' : ',';
+  // ---------- Leitura de arquivos ----------
+  function parseDelimited(text, sep) {
+    text = text.replace(/^﻿/, '');
+    if (!sep) {
+      const first = text.split(/\r?\n/).slice(0, 5).join('\n');
+      const counts = [[',', (first.match(/,/g) || []).length], [';', (first.match(/;/g) || []).length], ['\t', (first.match(/\t/g) || []).length]];
+      sep = counts.sort((a, b) => b[1] - a[1])[0][1] ? counts[0][0] : ',';
+    }
     const rows = [];
     let row = [], field = '', q = false;
     for (let i = 0; i < text.length; i++) {
       const ch = text[i];
-      if (q) {
-        if (ch === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else q = false; }
-        else field += ch;
-      } else if (ch === '"') q = true;
+      if (q) { if (ch === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else q = false; } else field += ch; }
+      else if (ch === '"' && field === '') q = true;
       else if (ch === sep) { row.push(field); field = ''; }
-      else if (ch === '\n' || ch === '\r') {
-        if (ch === '\r' && text[i + 1] === '\n') i++;
-        row.push(field); rows.push(row); row = []; field = '';
-      } else field += ch;
+      else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(field); rows.push(row); row = []; field = ''; }
+      else field += ch;
     }
     if (field !== '' || row.length) { row.push(field); rows.push(row); }
     return rows;
   }
-
-  function openFile(f) {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const text = String(reader.result || '');
-      try {
-        if (/\.json$/i.test(f.name)) {
-          const d = JSON.parse(text);
-          if (!d || !Array.isArray(d.sheets) || !d.sheets.length) throw new Error('formato');
-          A.pushUndo();
-          A.doc.title = d.title || f.name.replace(/\.json$/i, '');
-          A.doc.zoom = d.zoom || 100;
-          A.doc.sheets = d.sheets.map((s) => Object.assign(A.newSheet(s.name), s));
-          A.doc.sheets.forEach(A.rebuildEngine);
-          A.doc.active = Math.min(d.active || 0, A.doc.sheets.length - 1);
-          A.el.title.value = A.doc.title;
-          A.el.zoom.value = String(A.doc.zoom);
-        } else {
-          const rows = parseCSV(text);
-          const sh = A.newSheet(f.name.replace(/\.csv$/i, '').slice(0, 31) || 'Importado');
-          rows.forEach((row, r) => row.forEach((v, c) => {
-            if (v === '') return;
-            const a = E.addrToStr(r + 1, c + 1);
-            sh.cells[a] = { v };
-          }));
-          A.rebuildEngine(sh);
-          A.pushUndo();
-          A.doc.sheets.push(sh);
-          A.doc.active = A.doc.sheets.length - 1;
+  function sheetFromRows(name, rows) {
+    const sh = App.newSheet(name);
+    let maxC = 0;
+    rows.forEach((row, r) => row.forEach((v, c) => {
+      if (v === '') return;
+      const cell = { v };
+      const f = App.autoFormatFor(v);
+      if (f) cell.s = { nf: f };
+      sh.cells[E.addrToStr(r + 1, c + 1)] = cell;
+      maxC = Math.max(maxC, c + 1);
+    }));
+    sh.rows = Math.max(1000, rows.length + 100);
+    sh.cols = Math.max(26, maxC);
+    return sh;
+  }
+  const argb = (c) => (c && c.rgb && /^[0-9A-F]{6,8}$/i.test(c.rgb) ? '#' + c.rgb.slice(-6).toLowerCase() : null);
+  function sheetFromXLSX(XLSX, ws, name) {
+    const sh = App.newSheet(name);
+    const ref = ws['!ref'];
+    if (!ref) return sh;
+    const range = XLSX.utils.decode_range(ref);
+    for (let r = range.s.r; r <= range.e.r; r++) {
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const x = ws[XLSX.utils.encode_cell({ r, c })];
+        if (!x) continue;
+        const cell = {};
+        if (x.f) cell.v = '=' + enToPt(x.f);
+        else if (x.t === 'b') cell.v = x.v ? 'TRUE' : 'FALSE';
+        else if (x.t === 'e') cell.v = x.w || '#N/A';
+        else if (x.t === 'n') cell.v = String(x.v);
+        else if (x.t === 'd') cell.v = String((x.v.getTime() - E.EPOCH) / 86400000);
+        else if (x.v !== undefined && x.v !== null) { const s = String(x.v); cell.v = /^[=']/.test(s) || typeof E.parseLiteral(s).v === 'number' ? "'" + s : s; }
+        const s = {};
+        if (x.z && x.z !== 'General' && (x.t === 'n' || x.t === 'd' || x.f)) s.nf = x.z;
+        if (x.s) {
+          if (x.s.fgColor && argb(x.s.fgColor) && x.s.patternType !== 'none') s.bg = argb(x.s.fgColor);
+          if (x.s.font) { if (x.s.font.bold) s.b = true; if (x.s.font.italic) s.i = true; if (argb(x.s.font.color)) s.color = argb(x.s.font.color); }
         }
-        A.S.ar = A.S.er = A.S.ac = A.S.ec = 1;
-        A.layout(); A.updateTabs(); A.refresh(); A.markDirty();
-        notify('Arquivo aberto');
-      } catch (e) {
-        notify('Não foi possível abrir este arquivo');
+        if (Object.keys(s).length) cell.s = s;
+        if (x.l && x.l.Target) cell.link = x.l.Target;
+        if (x.c && x.c.length) cell.note = x.c.map((cm) => cm.t).join('\n');
+        if (cell.v !== undefined || cell.s || cell.note) sh.cells[E.addrToStr(r + 1, c + 1)] = Object.assign({ v: '' }, cell);
       }
-    };
-    reader.readAsText(f, 'utf-8');
+    }
+    for (const m of ws['!merges'] || []) sh.merges.push({ r1: m.s.r + 1, c1: m.s.c + 1, r2: m.e.r + 1, c2: m.e.c + 1 });
+    (ws['!cols'] || []).forEach((col, i) => { if (!col) return; const px = col.wpx || (col.wch ? col.wch * 7 + 5 : null); if (px) sh.colW[i + 1] = Math.round(px); if (col.hidden) sh.hiddenCols[i + 1] = true; });
+    (ws['!rows'] || []).forEach((row, i) => { if (!row) return; if (row.hpx) sh.rowH[i + 1] = Math.round(row.hpx); if (row.hidden) sh.hiddenRows[i + 1] = true; });
+    sh.rows = Math.max(1000, range.e.r + 101);
+    sh.cols = Math.max(26, range.e.c + 1);
+    return sh;
+  }
+  // Lê um arquivo e retorna { title, sheets }
+  function readFile(file) {
+    const name = file.name.replace(/\.[^.]+$/, '');
+    const ext = (/\.([^.]+)$/.exec(file.name) || [, ''])[1].toLowerCase();
+    if (ext === 'json') {
+      return file.text().then((t) => {
+        const d = JSON.parse(t);
+        if (!d || !Array.isArray(d.sheets)) throw new Error('Este arquivo .json não é um backup do Planilhas.');
+        return { title: d.title || name, sheets: d.sheets.map(App.normalizeSheet), names: d.names || {}, data: d };
+      });
+    }
+    if (ext === 'csv' || ext === 'tsv' || ext === 'txt') {
+      return file.text().then((t) => ({ title: name, sheets: [sheetFromRows(name.slice(0, 90) || 'Página1', parseDelimited(t, ext === 'tsv' ? '\t' : null))] }));
+    }
+    return loadXLSX().then((XLSX) => file.arrayBuffer().then((buf) => {
+      const wb = XLSX.read(buf, { type: 'array', cellFormula: true, cellStyles: true, cellNF: true, cellDates: false });
+      const sheets = wb.SheetNames.map((n) => sheetFromXLSX(XLSX, wb.Sheets[n], n));
+      return { title: name, sheets: sheets.length ? sheets : [App.newSheet('Página1')] };
+    }));
+  }
+
+  // ---------- Abrir / importar ----------
+  function pickFile(accept, cb) {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = accept || '.xlsx,.xls,.ods,.csv,.tsv,.txt,.json';
+    inp.onchange = () => { if (inp.files[0]) cb(inp.files[0]); };
+    inp.click();
+  }
+  function openAsNewDoc(file) {
+    notify('Abrindo ' + file.name + '…');
+    readFile(file).then((res) => {
+      App.newDocument(res.data || { title: res.title, sheets: res.sheets, names: res.names || {} });
+      notify(`"${res.title}" aberto.`);
+    }).catch((e) => notify(e.message || 'Não foi possível abrir este arquivo.'));
+  }
+  function openDialog() {
+    const list = App.readIndex();
+    const fmt = (t) => new Date(t).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+    const m = App.ui.modal({
+      title: 'Abrir um arquivo', width: '720px', cls: 'modal-tall',
+      body: `<div class="sp-tabs open-tabs"><button class="on" data-t="recent">Neste navegador</button><button data-t="upload">Fazer upload</button></div>
+        <div data-pane="recent"><input class="input" id="od-q" placeholder="Pesquisar planilhas"><div class="od-list" id="od-list"></div></div>
+        <div data-pane="upload" hidden><div class="drop-zone" id="od-drop">${icon('cloud', 40)}<p>Arraste um arquivo para cá</p><p class="sp-hint">.xlsx, .xls, .ods, .csv, .tsv ou backup .json</p><button class="btn btn-primary" id="od-pick">Procurar no dispositivo</button></div></div>`,
+      onOpen: (d) => {
+        const render = () => {
+          const q = d.querySelector('#od-q').value.toLowerCase();
+          const items = App.readIndex().filter((x) => (x.title || '').toLowerCase().includes(q));
+          d.querySelector('#od-list').innerHTML = items.length ? items.map((x) => `<div class="od-item${x.id === App.docId ? ' cur' : ''}" data-id="${x.id}">${icon('sheetIcon', 26)}<div><b>${esc(x.title || 'Sem título')}</b><small>Modificado em ${fmt(x.updated)}${x.id === App.docId ? ' · aberto agora' : ''}</small></div>${x.id !== App.docId ? `<button class="icon-btn od-del" title="Excluir do navegador">${icon('close', 16)}</button>` : ''}</div>`).join('') : '<p class="sp-hint">Nenhuma planilha encontrada.</p>';
+        };
+        render();
+        d.querySelector('#od-q').addEventListener('input', render);
+        d.querySelector('#od-list').addEventListener('click', (e) => {
+          const it = e.target.closest('.od-item');
+          if (!it) return;
+          if (e.target.closest('.od-del')) {
+            const entry = list.find((x) => x.id === it.dataset.id) || App.readIndex().find((x) => x.id === it.dataset.id);
+            App.ui.confirm('Excluir planilha?', `"${entry ? entry.title : ''}" será removida deste navegador. Essa ação não pode ser desfeita.`, 'Excluir', () => { App.deleteDoc(it.dataset.id); openDialog(); });
+            m.close();
+            return;
+          }
+          m.close();
+          if (it.dataset.id !== App.docId) { App.openDoc(it.dataset.id); notify('Planilha aberta.'); }
+        });
+        d.querySelectorAll('.open-tabs button').forEach((b) => b.onclick = () => {
+          d.querySelectorAll('.open-tabs button').forEach((x) => x.classList.toggle('on', x === b));
+          d.querySelectorAll('[data-pane]').forEach((p) => { p.hidden = p.dataset.pane !== b.dataset.t; });
+        });
+        const drop = d.querySelector('#od-drop');
+        d.querySelector('#od-pick').onclick = () => pickFile(null, (f) => { m.close(); openAsNewDoc(f); });
+        drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+        drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+        drop.addEventListener('drop', (e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) { m.close(); openAsNewDoc(f); } });
+      },
+    });
+  }
+  function importDialog() {
+    pickFile(null, (file) => {
+      App.ui.modal({
+        title: 'Importar arquivo', width: '460px',
+        body: `<p class="sp-hint">Arquivo: <b>${esc(file.name)}</b></p>
+          <label class="check"><input type="radio" name="imp" value="new" checked> Criar nova planilha</label>
+          <label class="check"><input type="radio" name="imp" value="insert"> Inserir novas páginas</label>
+          <label class="check"><input type="radio" name="imp" value="replaceSheet"> Substituir a página atual</label>
+          <label class="check"><input type="radio" name="imp" value="replaceAll"> Substituir a planilha inteira</label>`,
+        buttons: [{ label: 'Cancelar' }, { label: 'Importar dados', primary: true, action: (d) => {
+          const mode = d.querySelector('input[name=imp]:checked').value;
+          if (mode === 'new') { openAsNewDoc(file); return; }
+          readFile(file).then((res) => {
+            App.change('Importar', () => {
+              if (mode === 'insert') {
+                for (const sh of res.sheets) { sh.name = App.uniqueSheetName(sh.name); doc.sheets.push(sh); }
+                doc.active = doc.sheets.length - res.sheets.length;
+              } else if (mode === 'replaceSheet') {
+                const keepName = App.sheet().name;
+                doc.sheets[doc.active] = Object.assign(res.sheets[0], { name: keepName });
+              } else {
+                doc.sheets = res.sheets; doc.active = 0;
+                if (res.names) doc.names = res.names;
+              }
+            });
+            App.emit('sheet');
+            notify('Dados importados.');
+          }).catch((e) => notify(e.message || 'Não foi possível importar este arquivo.'));
+        } }],
+      });
+    });
+  }
+
+  // ---------- Download ----------
+  function sheetMatrix(sh, si, display) {
+    const used = App.usedRange(sh);
+    const rows = [];
+    for (let r = 1; r <= used.maxR; r++) {
+      const row = [];
+      for (let c = 1; c <= used.maxC; c++) {
+        const v = App.value(si, r, c);
+        row.push(display ? App.fmtValue(v, App.style(sh, r, c).nf || (typeof App.raw(sh, r, c) === 'string' && App.raw(sh, r, c)[0] === '=' ? App.inferFormat(si, App.raw(sh, r, c)) : null)) : v);
+      }
+      rows.push(row);
+    }
+    return rows;
+  }
+  function download(kind) {
+    const sh = App.sheet(), si = doc.active;
+    const base = safeName(doc.title);
+    if (kind === 'json') { downloadBlob(new Blob([App.serialize()], { type: 'application/json' }), base + '.json'); return; }
+    if (kind === 'csv' || kind === 'tsv') {
+      const sep = kind === 'csv' ? ',' : '\t';
+      const text = sheetMatrix(sh, si, true).map((row) => row.map((t) => (/[",\n\r\t]/.test(t) || (sep === ',' && t.includes(',')) ? '"' + t.replace(/"/g, '""') + '"' : t)).join(sep)).join('\r\n');
+      downloadBlob(new Blob(['﻿' + text], { type: kind === 'csv' ? 'text/csv;charset=utf-8' : 'text/tab-separated-values;charset=utf-8' }), `${base} - ${safeName(sh.name)}.${kind}`);
+      return;
+    }
+    if (kind === 'html') {
+      const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${esc(doc.title)}</title><style>body{font-family:Arial,sans-serif;margin:24px}table{border-collapse:collapse}td{border:1px solid #d0d0d0;padding:3px 6px;font-size:13px}h2{font-size:16px}</style></head><body>` +
+        doc.sheets.map((s, i) => `<h2>${esc(s.name)}</h2>${tableHtml(s, i)}`).join('') + '</body></html>';
+      downloadBlob(new Blob([html], { type: 'text/html' }), base + '.html');
+      return;
+    }
+    if (kind === 'xlsx') {
+      notify('Gerando arquivo .xlsx…');
+      loadXLSX().then((XLSX) => {
+        const wb = XLSX.utils.book_new();
+        doc.sheets.forEach((s, i) => {
+          const ws = {};
+          const used = App.usedRange(s);
+          for (const a in s.cells) {
+            const x = s.cells[a];
+            const p = E.parseAddr(a);
+            if (!p) continue;
+            const key = XLSX.utils.encode_cell({ r: p.row - 1, c: p.col - 1 });
+            const v = App.value(i, p.row, p.col);
+            const raw = x.v;
+            let cell;
+            if (typeof raw === 'string' && raw[0] === '=') {
+              cell = { f: ptToEn(raw) };
+              if (typeof v === 'number') { cell.t = 'n'; cell.v = v; } else if (typeof v === 'boolean') { cell.t = 'b'; cell.v = v; } else if (E.isErr(v)) { cell.t = 'e'; cell.v = 0x2a; } else { cell.t = 's'; cell.v = v === null ? '' : String(v); }
+            } else if (v === null || v === '') { if (!x.s) continue; cell = { t: 's', v: '' }; }
+            else if (typeof v === 'number') cell = { t: 'n', v };
+            else if (typeof v === 'boolean') cell = { t: 'b', v };
+            else cell = { t: 's', v: String(v) };
+            const nf = (x.s && x.s.nf) || (typeof raw === 'string' && raw[0] === '=' ? App.inferFormat(i, raw) : null);
+            if (nf && nf !== '@') cell.z = nf;
+            if (x.link) cell.l = { Target: x.link };
+            if (x.note) cell.c = [{ a: 'Planilhas', t: x.note }];
+            ws[key] = cell;
+          }
+          ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: Math.max(0, used.maxR - 1), c: Math.max(0, used.maxC - 1) } });
+          if (s.merges.length) ws['!merges'] = s.merges.map((g) => ({ s: { r: g.r1 - 1, c: g.c1 - 1 }, e: { r: g.r2 - 1, c: g.c2 - 1 } }));
+          const cols = [];
+          for (let c = 1; c <= Math.max(used.maxC, 1); c++) cols.push(Object.assign({ wpx: s.colW[c] || App.DEF_W }, s.hiddenCols[c] ? { hidden: true } : {}));
+          ws['!cols'] = cols;
+          const rows = [];
+          for (let r = 1; r <= Math.max(used.maxR, 1); r++) rows.push(s.rowH[r] || s.hiddenRows[r] ? Object.assign({}, s.rowH[r] ? { hpx: s.rowH[r] } : {}, s.hiddenRows[r] ? { hidden: true } : {}) : null);
+          ws['!rows'] = rows;
+          XLSX.utils.book_append_sheet(wb, ws, s.name.slice(0, 31).replace(/[[\]*?/\\:]/g, '_'));
+        });
+        XLSX.writeFile(wb, base + '.xlsx');
+      }).catch((e) => notify(e.message));
+    }
+  }
+  function tableHtml(sh, si, R) {
+    const used = App.usedRange(sh);
+    R = R || { r1: 1, c1: 1, r2: Math.max(1, used.maxR), c2: Math.max(1, used.maxC) };
+    const skip = new Set();
+    let html = '<table>';
+    for (let r = R.r1; r <= R.r2; r++) {
+      if (App.isRowHidden(sh, r)) continue;
+      html += `<tr style="height:${sh.rowH[r] || App.DEF_H}px">`;
+      for (let c = R.c1; c <= R.c2; c++) {
+        if (App.isColHidden(sh, c) || skip.has(r + ':' + c)) continue;
+        const info = App.cellInfo ? cellInfoFor(sh, si, r, c) : null;
+        const s = info.s;
+        const g = App.mergeAt(sh, r, c);
+        let span = '';
+        if (g && g.r1 === r && g.c1 === c) {
+          span = ` rowspan="${g.r2 - g.r1 + 1}" colspan="${g.c2 - g.c1 + 1}"`;
+          for (let rr = g.r1; rr <= g.r2; rr++) for (let cc = g.c1; cc <= g.c2; cc++) if (rr !== r || cc !== c) skip.add(rr + ':' + cc);
+        }
+        const bd = (b) => (b ? `${b.style === 'thick' ? 3 : b.style === 'medium' ? 2 : 1}px ${b.style === 'dashed' || b.style === 'dotted' || b.style === 'double' ? b.style : 'solid'} ${b.color || '#000'}` : '');
+        const css = [`width:${sh.colW[c] || App.DEF_W}px`, s.bg ? 'background:' + s.bg : '', s.color ? 'color:' + s.color : '', s.b ? 'font-weight:bold' : '', s.i ? 'font-style:italic' : '',
+          s.u || s.st ? 'text-decoration:' + [s.u ? 'underline' : '', s.st ? 'line-through' : ''].join(' ') : '', `text-align:${{ l: 'left', c: 'center', r: 'right' }[info.align]}`,
+          s.fs ? `font-size:${s.fs}pt` : '', s.ff ? `font-family:${s.ff}` : '', s.wrap === 'wrap' ? 'white-space:pre-wrap' : 'white-space:nowrap',
+          s.va === 't' ? 'vertical-align:top' : s.va === 'm' ? 'vertical-align:middle' : 'vertical-align:bottom',
+          s.bd && s.bd.t ? 'border-top:' + bd(s.bd.t) : '', s.bd && s.bd.b ? 'border-bottom:' + bd(s.bd.b) : '', s.bd && s.bd.l ? 'border-left:' + bd(s.bd.l) : '', s.bd && s.bd.r ? 'border-right:' + bd(s.bd.r) : ''].filter(Boolean).join(';');
+        html += `<td${span} style="${css}">${info.link ? `<a href="${esc(info.link)}">${esc(info.text)}</a>` : esc(info.text)}</td>`;
+      }
+      html += '</tr>';
+    }
+    return html + '</table>';
+  }
+  function cellInfoFor(sh, si, r, c) {
+    if (si === doc.active) return App.cellInfo(r, c);
+    const prev = doc.active;
+    doc.active = si;
+    const info = App.cellInfo(r, c);
+    doc.active = prev;
+    return info;
   }
 
   // ---------- Impressão ----------
   function print() {
-    const sh = A.sheet();
-    const { maxR, maxC } = usedRange(sh);
-    let html = `<h2>${A.esc(A.doc.title)} · ${A.esc(sh.name)}</h2><table><tbody>`;
-    for (let r = 1; r <= maxR; r++) {
-      html += '<tr>';
-      for (let c = 1; c <= maxC; c++) html += `<td>${A.esc(displayAt(sh, r, c))}</td>`;
-      html += '</tr>';
-    }
-    html += '</tbody></table>';
-    $('print-area').innerHTML = html;
-    window.print();
+    const sh = App.sheet(), si = doc.active;
+    const sel = App.selRect();
+    const useSel = !App.selIsCell() && !(sel.r1 === 1 && sel.r2 >= sh.rows);
+    App.ui.modal({
+      title: 'Configurações de impressão', width: '420px',
+      body: `<label class="field"><span>Imprimir</span><select class="input" id="pr-what"><option value="sheet">Página atual</option>${useSel ? '<option value="sel">Células selecionadas</option>' : ''}<option value="all">Planilha inteira</option></select></label>
+        <label class="field"><span>Orientação</span><select class="input" id="pr-orient"><option value="portrait">Retrato</option><option value="landscape">Paisagem</option></select></label>
+        <label class="check"><input type="checkbox" id="pr-grid" checked> Mostrar linhas de grade</label>`,
+      buttons: [{ label: 'Cancelar' }, { label: 'Imprimir', primary: true, action: (d) => {
+        const what = d.querySelector('#pr-what').value;
+        const grid = d.querySelector('#pr-grid').checked;
+        const area = $('print-area');
+        const parts = what === 'all' ? doc.sheets.map((s, i) => [s, i, null]).filter(([s]) => !s.hidden) : [[sh, si, what === 'sel' ? sel : null]];
+        area.className = 'print-area' + (grid ? ' grid' : '');
+        area.innerHTML = parts.map(([s, i, R]) => `<section><h2>${esc(doc.title)} · ${esc(s.name)}</h2>${tableHtml(s, i, R)}</section>`).join('');
+        let st = document.getElementById('print-page-style');
+        if (!st) { st = document.createElement('style'); st.id = 'print-page-style'; document.head.appendChild(st); }
+        st.textContent = `@page { size: A4 ${d.querySelector('#pr-orient').value}; margin: 12mm; }`;
+        setTimeout(() => window.print(), 50);
+      } }],
+    });
   }
 
-  // ---------- Localizar ----------
-  const find = { query: '', list: [], idx: -1 };
-  function openFind() {
-    $('findbar').hidden = false;
-    const inp = $('find-input');
-    inp.focus();
-    inp.select();
-    if (find.query) runFind(inp.value, true);
+  // ---------- Compartilhar por link (os dados vão no endereço) ----------
+  const b64url = (bytes) => { let s = ''; bytes.forEach((b) => { s += String.fromCharCode(b); }); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
+  const fromB64url = (s) => { const bin = atob(s.replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(bin, (c) => c.charCodeAt(0)); };
+  async function compress(text) {
+    if (!window.CompressionStream) return 'u' + b64url(new TextEncoder().encode(text));
+    const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+    return 'z' + b64url(new Uint8Array(await new Response(stream).arrayBuffer()));
   }
-  function closeFind() {
-    $('findbar').hidden = true;
-    A.S.found = null;
-    find.list = []; find.idx = -1;
-    A.renderCells();
-    A.el.viewport.focus({ preventScroll: true });
+  async function decompress(s) {
+    const bytes = fromB64url(s.slice(1));
+    if (s[0] === 'u') return new TextDecoder().decode(bytes);
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    return new Response(stream).text();
   }
-  function runFind(query, keepIdx) {
-    find.query = query;
-    const q = query.toLowerCase();
-    const sh = A.sheet();
-    const { maxR, maxC } = usedRange(sh);
-    find.list = [];
-    if (q) {
-      for (let r = 1; r <= maxR; r++) for (let c = 1; c <= maxC; c++) {
-        if (displayAt(sh, r, c).toLowerCase().includes(q)) find.list.push(E.addrToStr(r, c));
-      }
-    }
-    if (!keepIdx) find.idx = -1;
-    if (find.idx >= find.list.length) find.idx = -1;
-    updateFoundState();
-    if (find.list.length && find.idx < 0) gotoFind(0);
-    else updateFindCount();
-  }
-  function gotoFind(i) {
-    if (!find.list.length) return;
-    find.idx = ((i % find.list.length) + find.list.length) % find.list.length;
-    const a = E.parseAddr(find.list[find.idx]);
-    A.S.found = { has: (x) => find.list.includes(x), cur: find.list[find.idx] };
-    A.select(a.row, a.col, false);
-    updateFindCount();
-  }
-  function updateFoundState() {
-    const set = new Set(find.list);
-    A.S.found = find.query ? { has: (x) => set.has(x), cur: find.list[find.idx] || null } : null;
-    A.renderCells();
-  }
-  function updateFindCount() {
-    const n = find.list.length;
-    $('find-count').textContent = !find.query ? '' : n ? `${find.idx + 1} de ${n}` : 'Nenhum resultado';
-  }
-  function wireFind() {
-    const inp = $('find-input');
-    inp.addEventListener('input', () => runFind(inp.value, false));
-    inp.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); if (find.list.length) gotoFind(find.idx + (e.shiftKey ? -1 : 1)); }
-      else if (e.key === 'Escape') { e.preventDefault(); closeFind(); }
+  function share() {
+    App.ui.modal({
+      title: `Compartilhar "${doc.title}"`, width: '520px',
+      body: `<p class="modal-text">Este site não usa servidor: as planilhas ficam salvas no seu navegador. Para enviar uma cópia a outra pessoa, use uma das opções abaixo.</p>
+        <div class="share-opts">
+          <button class="share-opt" data-a="link">${icon('link', 22)}<div><b>Copiar link com os dados</b><small>Quem abrir o link recebe uma cópia desta planilha.</small></div></button>
+          <button class="share-opt" data-a="xlsx">${icon('sheetIcon', 22)}<div><b>Baixar como Excel (.xlsx)</b><small>Abre no Excel, no Google Planilhas e no LibreOffice.</small></div></button>
+          <button class="share-opt" data-a="json">${icon('cloud', 22)}<div><b>Baixar backup (.json)</b><small>Guarda tudo: formatação, gráficos, regras e notas.</small></div></button>
+        </div><input class="input share-link" id="share-link" readonly hidden>`,
+      buttons: [{ label: 'Concluído', primary: true }],
+      onOpen: (d) => {
+        d.querySelectorAll('.share-opt').forEach((b) => b.onclick = async () => {
+          if (b.dataset.a === 'xlsx') return download('xlsx');
+          if (b.dataset.a === 'json') return download('json');
+          const code = await compress(App.serialize());
+          const url = location.origin + location.pathname + '#importar=' + code;
+          const inp = d.querySelector('#share-link');
+          inp.hidden = false; inp.value = url; inp.select();
+          if (url.length > 60000) notify('A planilha é grande; o link pode não funcionar em todos os aplicativos. Prefira enviar o arquivo .xlsx.');
+          navigator.clipboard.writeText(url).then(() => notify('Link copiado.'), () => notify('Selecione e copie o link exibido.'));
+        });
+      },
     });
-    $('find-next').addEventListener('click', () => { if (find.list.length) gotoFind(find.idx + 1); });
-    $('find-close').addEventListener('click', closeFind);
   }
-
-  // ---------- Ordenação ----------
-  function rankOf(v) {
-    if (v === null || v === undefined || v === '') return 3;
-    if (typeof v === 'number') return 0;
-    if (typeof v === 'boolean') return 2;
-    return 1;
-  }
-  function sortRange(desc) {
-    const R = A.rect();
-    if (R.r1 === R.r2) { notify('Selecione pelo menos duas linhas para ordenar'); return; }
-    const keyCol = Math.min(R.c2, Math.max(R.c1, A.S.ac));
-    const sh = A.sheet();
-    const rows = [];
-    for (let r = R.r1; r <= R.r2; r++) {
-      const cells = [];
-      for (let c = R.c1; c <= R.c2; c++) cells.push(A.cellAt(r, c) ? JSON.parse(JSON.stringify(A.cellAt(r, c))) : null);
-      rows.push({ key: A.valueOf(r, keyCol), cells });
-    }
-    rows.sort((x, y) => {
-      const rx = rankOf(x.key), ry = rankOf(y.key);
-      if (rx === 3 || ry === 3) return rx - ry; // vazios sempre no fim
-      let cmp;
-      if (rx !== ry) cmp = rx - ry;
-      else if (rx === 0 || rx === 2) cmp = Number(x.key) - Number(y.key);
-      else cmp = String(x.key).localeCompare(String(y.key), 'pt-BR', { sensitivity: 'base', numeric: true });
-      return desc ? -cmp : cmp;
-    });
-    A.pushUndo();
-    rows.forEach((row, i) => {
-      const r = R.r1 + i;
-      row.cells.forEach((obj, j) => {
-        const c = R.c1 + j;
-        const a = E.addrToStr(r, c);
-        if (!obj || (obj.v === '' && !obj.s)) delete sh.cells[a];
-        else sh.cells[a] = obj;
+  async function checkImportHash() {
+    const m = /#importar=([\w-]+)/.exec(location.hash);
+    if (!m) return;
+    try {
+      const d = JSON.parse(await decompress(m[1]));
+      App.ui.modal({
+        title: 'Abrir planilha compartilhada', width: '440px',
+        body: `<p class="modal-text">O link contém a planilha <b>${esc(d.title || 'Sem título')}</b>. Deseja abrir uma cópia neste navegador?</p>`,
+        buttons: [{ label: 'Cancelar', action: () => { history.replaceState(null, '', '#doc=' + App.docId); } }, { label: 'Abrir cópia', primary: true, action: () => { App.newDocument(d); notify('Planilha compartilhada aberta.'); } }],
       });
-    });
-    A.rebuildEngine(sh);
-    A.refresh();
-    A.markDirty();
-    notify(desc ? 'Ordenado de Z a A' : 'Ordenado de A a Z');
+    } catch (e) { notify('O link de compartilhamento está incompleto ou corrompido.'); }
   }
 
-  // ---------- Gráficos (desenhados em SVG a partir de um intervalo) ----------
-  const PALETTE = ['#e30613', '#1a1a1a', '#8c8c8c', '#f48b93', '#4d4d4d', '#b8000c', '#c9c9c9'];
-  function openChart() {
-    const R = A.rect();
-    $('chart-range').value = `${E.addrToStr(R.r1, R.c1)}:${E.addrToStr(R.r2, R.c2)}`;
-    $('chart-dialog').showModal();
-    drawChart();
-  }
-  function parseRange(text) {
-    const m = /^\s*\$?([A-Za-z]{1,3})\$?(\d+)(?::\$?([A-Za-z]{1,3})\$?(\d+))?\s*$/.exec(text || '');
-    if (!m) return null;
-    const a = E.parseAddr(m[1] + m[2]);
-    const b = m[3] ? E.parseAddr(m[3] + m[4]) : a;
-    if (!a || !b) return null;
-    return { r1: Math.min(a.row, b.row), r2: Math.max(a.row, b.row), c1: Math.min(a.col, b.col), c2: Math.max(a.col, b.col) };
-  }
-  function drawChart() {
-    const out = $('chart-output');
-    const R = parseRange($('chart-range').value);
-    if (!R) { out.innerHTML = '<p>Intervalo inválido. Use algo como A1:B10.</p>'; return; }
-    const type = $('chart-type').value;
-    const sh = A.sheet();
-    const val = (r, c) => A.valueOf(r, c);
-    // Cabeçalho: se a primeira linha tiver texto nas colunas de dados, ela vira nomes de série
-    const dataCols = [];
-    for (let c = R.c1 + 1; c <= R.c2; c++) dataCols.push(c);
-    let startRow = R.r1;
-    let names = dataCols.map((c) => String(val(R.r1, c) ?? ''));
-    if (R.r2 > R.r1 && dataCols.some((c) => typeof val(R.r1, c) === 'string') &&
-        dataCols.every((c) => typeof val(R.r1 + 1, c) === 'number')) {
-      startRow = R.r1 + 1;
-    } else {
-      names = dataCols.map((c) => 'Série ' + (c - R.c1));
-    }
-    if (dataCols.length === 0) { // uma coluna só: valores com índice
-      dataCols.push(R.c1);
-      names = ['Valores'];
-    }
-    const labels = [];
-    const series = dataCols.map(() => []);
-    for (let r = startRow; r <= R.r2; r++) {
-      const lbl = R.c2 > R.c1 || dataCols[0] !== R.c1 ? displayAt(sh, r, R.c1) : String(r - startRow + 1);
-      labels.push(lbl);
-      dataCols.forEach((c, i) => { const v = val(r, c); series[i].push(typeof v === 'number' ? v : 0); });
-    }
-    if (!labels.length) { out.innerHTML = '<p>Nenhum dado no intervalo.</p>'; return; }
-    out.innerHTML = type === 'pie' ? pieSvg(labels, series[0]) : barLineSvg(type, labels, series, names);
-  }
-  function barLineSvg(type, labels, series, names) {
-    const W = 720, H = 320, pad = { l: 56, r: 16, t: 16, b: 56 };
-    const innerW = W - pad.l - pad.r, innerH = H - pad.t - pad.b;
-    const all = series.flat();
-    let max = Math.max(0, ...all), min = Math.min(0, ...all);
-    if (max === min) max = min + 1;
-    const y = (v) => pad.t + innerH - ((v - min) / (max - min)) * innerH;
-    const n = labels.length;
-    const x = (i) => pad.l + (innerW * (i + 0.5)) / n;
-    let g = '';
-    for (let k = 0; k <= 4; k++) {
-      const v = min + ((max - min) * k) / 4;
-      g += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y(v)}" y2="${y(v)}" stroke="#e6e6e6"/>`;
-      g += `<text x="${pad.l - 6}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="#6b6b6b">${Number(v.toPrecision(3)).toLocaleString('pt-BR')}</text>`;
-    }
-    if (type === 'bar') {
-      const gw = innerW / n, bw = Math.max(4, (gw * 0.7) / series.length);
-      series.forEach((s, si) => s.forEach((v, i) => {
-        const x0 = pad.l + gw * i + gw * 0.15 + bw * si;
-        const top = y(Math.max(v, 0)), bottom = y(Math.min(v, 0));
-        g += `<rect x="${x0}" y="${top}" width="${bw - 2}" height="${Math.max(1, bottom - top)}" fill="${PALETTE[si % PALETTE.length]}"/>`;
-      }));
-    } else {
-      series.forEach((s, si) => {
-        const pts = s.map((v, i) => `${x(i)},${y(v)}`).join(' ');
-        g += `<polyline points="${pts}" fill="none" stroke="${PALETTE[si % PALETTE.length]}" stroke-width="2.5"/>`;
-        s.forEach((v, i) => { g += `<circle cx="${x(i)}" cy="${y(v)}" r="3.5" fill="${PALETTE[si % PALETTE.length]}"/>`; });
-      });
-    }
-    labels.forEach((lb, i) => {
-      g += `<text x="${x(i)}" y="${H - pad.b + 18}" text-anchor="middle" font-size="11" fill="#1a1a1a">${A.esc(lb).slice(0, 14)}</text>`;
+  // Arrastar um arquivo para a janela abre como nova planilha
+  function initDrop() {
+    window.addEventListener('dragover', (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { e.preventDefault(); document.body.classList.add('dragging-file'); } });
+    window.addEventListener('dragleave', (e) => { if (e.target === document.documentElement || !e.relatedTarget) document.body.classList.remove('dragging-file'); });
+    window.addEventListener('drop', (e) => {
+      document.body.classList.remove('dragging-file');
+      if (!e.dataTransfer || !e.dataTransfer.files.length || document.querySelector('dialog[open]')) return;
+      e.preventDefault();
+      openAsNewDoc(e.dataTransfer.files[0]);
     });
-    let legend = '';
-    names.forEach((nm, si) => {
-      legend += `<rect x="${pad.l + si * 130}" y="${H - 14}" width="12" height="12" fill="${PALETTE[si % PALETTE.length]}"/>`;
-      legend += `<text x="${pad.l + si * 130 + 18}" y="${H - 4}" font-size="12" fill="#1a1a1a">${A.esc(nm)}</text>`;
-    });
-    return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img">${g}${legend}</svg>`;
-  }
-  function pieSvg(labels, values) {
-    const W = 720, H = 320, cx = 200, cy = 160, rad = 130;
-    const total = values.reduce((a, b) => a + Math.max(0, b), 0) || 1;
-    let angle = -Math.PI / 2, paths = '', legend = '';
-    values.forEach((v, i) => {
-      const frac = Math.max(0, v) / total;
-      const a2 = angle + frac * Math.PI * 2;
-      const large = frac > 0.5 ? 1 : 0;
-      const x1 = cx + rad * Math.cos(angle), y1 = cy + rad * Math.sin(angle);
-      const x2 = cx + rad * Math.cos(a2), y2 = cy + rad * Math.sin(a2);
-      const col = PALETTE[i % PALETTE.length];
-      if (frac > 0) paths += `<path d="M${cx},${cy} L${x1},${y1} A${rad},${rad} 0 ${large} 1 ${x2},${y2} Z" fill="${col}" stroke="#fff"/>`;
-      legend += `<rect x="430" y="${40 + i * 24}" width="12" height="12" fill="${col}"/>`;
-      legend += `<text x="450" y="${51 + i * 24}" font-size="12" fill="#1a1a1a">${A.esc(labels[i] || '')} · ${(frac * 100).toFixed(1).replace('.', ',')}%</text>`;
-      angle = a2;
-    });
-    return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img">${paths}${legend}</svg>`;
-  }
-  function wireChart() {
-    $('chart-draw').addEventListener('click', drawChart);
-    $('chart-type').addEventListener('change', drawChart);
-    $('chart-range').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); drawChart(); } });
   }
 
-  // ---------- Planilhas (abas) ----------
-  function addSheet() {
-    A.pushUndo();
-    let n = A.doc.sheets.length + 1;
-    const names = new Set(A.doc.sheets.map((s) => s.name));
-    while (names.has('Planilha' + n)) n++;
-    A.doc.sheets.push(A.newSheet('Planilha' + n));
-    A.rebuildEngine(A.doc.sheets[A.doc.sheets.length - 1]);
-    A.doc.active = A.doc.sheets.length - 1;
-    A.layout(); A.updateTabs(); A.refresh(); A.markDirty();
-  }
-  function duplicateSheet() {
-    A.pushUndo();
-    const src = A.sheet();
-    const copy = JSON.parse(JSON.stringify({ name: src.name + ' (cópia)', cells: src.cells, colW: src.colW, rowH: src.rowH, gridlines: src.gridlines }));
-    const sh = Object.assign(A.newSheet(copy.name), copy);
-    A.rebuildEngine(sh);
-    A.doc.sheets.splice(A.doc.active + 1, 0, sh);
-    A.doc.active += 1;
-    A.layout(); A.updateTabs(); A.refresh(); A.markDirty();
-  }
-  function renameSheet() {
-    const sh = A.sheet();
-    const name = prompt('Novo nome da planilha:', sh.name);
-    if (!name || !name.trim()) return;
-    A.pushUndo();
-    sh.name = name.trim().slice(0, 60);
-    A.updateTabs(); A.markDirty();
-  }
-  function deleteSheet() {
-    if (A.doc.sheets.length <= 1) { notify('A pasta precisa ter ao menos uma planilha'); return; }
-    if (!confirm(`Excluir a planilha "${A.sheet().name}"?`)) return;
-    A.pushUndo();
-    A.doc.sheets.splice(A.doc.active, 1);
-    A.doc.active = Math.min(A.doc.active, A.doc.sheets.length - 1);
-    A.layout(); A.updateTabs(); A.refresh(); A.markDirty();
-  }
-
-  window.IO = {
-    newDocument, exportJSON, exportCSV, openFile, print, openFind, wireFind, openChart,
-    sortRange, addSheet, duplicateSheet, renameSheet, deleteSheet, parseCSV,
-  };
-  wireChart();
-})();
+  def('newDoc', 'Nova planilha', () => { App.newDocument(); notify('Nova planilha criada. Use Arquivo › Abrir para voltar às anteriores.'); });
+  def('open', 'Abrir', openDialog, 'Ctrl+O');
+  def('importFile', 'Importar', importDialog);
+  def('makeCopy', 'Fazer uma cópia', () => {
+    const data = JSON.parse(App.serialize());
+    data.title = 'Cópia de ' + doc.title;
+    App.newDocument(data);
+    notify('Cópia criada.');
+  });
+  def('download', 'Fazer download', download);
+  def('print', 'Imprimir', print, 'Ctrl+P');
+  def('share', 'Compartilhar', share);
+  App.io = { init: () => { initDrop(); checkImportHash(); }, downloadBlob, readFile, enToPt, ptToEn, download, tableHtml };
+})(window.App);

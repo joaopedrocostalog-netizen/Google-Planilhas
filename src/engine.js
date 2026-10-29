@@ -1,227 +1,257 @@
-// Motor de cálculo da planilha: referências, fórmulas e funções.
-// Sem dependências. Carregado antes de app.js.
+// Motor de cálculo: tokenizador, parser, avaliador e pasta de trabalho (várias planilhas).
+// As funções de planilha ficam em functions.js, que se registra via GridEngine.def().
 (function (global) {
   'use strict';
 
-  // ---------- Erros de célula ----------
+  // ---------- Erros ----------
   class CellError {
-    constructor(code) { this.code = code; }
+    constructor(code, msg) { this.code = code; this.msg = msg || ''; }
     toString() { return this.code; }
   }
   const ERR = {
-    DIV0: new CellError('#DIV/0!'),
-    VALUE: new CellError('#VALUE!'),
-    REF: new CellError('#REF!'),
-    NAME: new CellError('#NAME?'),
-    NA: new CellError('#N/A'),
-    NUM: new CellError('#NUM!'),
-    CIRC: new CellError('#CIRC!'),
-    ERROR: new CellError('#ERROR!'),
+    DIV0: new CellError('#DIV/0!', 'O divisor é zero.'),
+    VALUE: new CellError('#VALUE!', 'Valor de tipo incorreto em um argumento.'),
+    REF: new CellError('#REF!', 'Referência inválida.'),
+    NAME: new CellError('#NAME?', 'Nome desconhecido.'),
+    NA: new CellError('#N/A', 'Valor não encontrado.'),
+    NUM: new CellError('#NUM!', 'Número inválido.'),
+    NULL: new CellError('#NULL!', 'Intervalo vazio.'),
+    ERROR: new CellError('#ERROR!', 'Erro de análise da fórmula.'),
   };
+  const mkErr = (code, msg) => new CellError(code, msg);
+  const isErr = (v) => v instanceof CellError;
 
-  // ---------- Utilidades de endereço ----------
+  // ---------- Matrizes e referências ----------
+  class Matrix {
+    constructor(rows) { this.rows = rows; }
+    get h() { return this.rows.length; }
+    get w() { return this.rows.length ? this.rows[0].length : 0; }
+  }
+  class RangeRef {
+    constructor(wb, si, r1, c1, r2, c2) {
+      this.wb = wb; this.si = si;
+      this.r1 = Math.min(r1, r2); this.r2 = Math.max(r1, r2);
+      this.c1 = Math.min(c1, c2); this.c2 = Math.max(c1, c2);
+    }
+    get h() { return this.r2 - this.r1 + 1; }
+    get w() { return this.c2 - this.c1 + 1; }
+    get(i, j) { return this.wb.value(this.si, this.r1 + i, this.c1 + j); }
+  }
+  const MAX_CELLS = 200000; // proteção contra intervalos gigantes
+
+  // ---------- Endereços ----------
   function colToNum(col) {
     let n = 0;
     for (let i = 0; i < col.length; i++) n = n * 26 + (col.charCodeAt(i) - 64);
-    return n; // A=1
+    return n;
   }
   function numToCol(n) {
     let s = '';
-    while (n > 0) {
-      const m = (n - 1) % 26;
-      s = String.fromCharCode(65 + m) + s;
-      n = Math.floor((n - 1) / 26);
-    }
+    while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
     return s;
   }
-  // "B3" -> {row:3, col:2}
   function parseAddr(addr) {
-    const m = /^\$?([A-Za-z]{1,3})\$?(\d+)$/.exec(addr);
+    const m = /^\$?([A-Za-z]{1,3})\$?(\d+)$/.exec(String(addr).trim());
     if (!m) return null;
     return { row: parseInt(m[2], 10), col: colToNum(m[1].toUpperCase()) };
   }
-  function addrToStr(row, col) { return numToCol(col) + row; }
+  const addrToStr = (row, col) => numToCol(col) + row;
+  function quoteSheet(name) {
+    return /^[\p{L}_][\p{L}\p{N}_]*$/u.test(name) && !/^[A-Za-z]{1,3}\d+$/.test(name) ? name : "'" + name.replace(/'/g, "''") + "'";
+  }
 
-  // ---------- Tokenizer ----------
-  // Tipos: num, str, bool, ref (com ':' para intervalos), func, op, lparen, rparen, comma, eof
+  // ---------- Tokenizador (com posições, para reescrever fórmulas) ----------
+  const NOT_ID = '(?![\\p{L}\\p{N}_(.])';
+  const RE_CELLRANGE = new RegExp('^(\\$?)([A-Za-z]{1,3})(\\$?)(\\d+)(?::(\\$?)([A-Za-z]{1,3})(\\$?)(\\d*))?' + NOT_ID, 'u');
+  const RE_COLS = new RegExp('^(\\$?)([A-Za-z]{1,3}):(\\$?)([A-Za-z]{1,3})' + NOT_ID, 'u');
+  const RE_ROWS = /^(\$?)(\d+):(\$?)(\d+)(?![\p{L}\p{N}_(.,])/u;
+  const RE_ERR = /^#(NULL!|DIV\/0!|VALUE!|REF!|NAME\?|NUM!|N\/A|ERROR!)/;
+
+  function matchRef(s) {
+    let m = RE_CELLRANGE.exec(s);
+    if (m) {
+      const ref = { kind: 'cell', ac1: !!m[1], c1: colToNum(m[2].toUpperCase()), ar1: !!m[3], r1: +m[4] };
+      if (m[6]) {
+        ref.kind = 'range';
+        ref.ac2 = !!m[5]; ref.c2 = colToNum(m[6].toUpperCase()); ref.ar2 = !!m[7];
+        ref.r2 = m[8] ? +m[8] : null; // A2:B (aberto até o fim)
+      }
+      return { ref, len: m[0].length };
+    }
+    m = RE_COLS.exec(s);
+    if (m) return { ref: { kind: 'cols', ac1: !!m[1], c1: colToNum(m[2].toUpperCase()), ac2: !!m[3], c2: colToNum(m[4].toUpperCase()) }, len: m[0].length };
+    m = RE_ROWS.exec(s);
+    if (m) return { ref: { kind: 'rows', ar1: !!m[1], r1: +m[2], ar2: !!m[3], r2: +m[4] }, len: m[0].length };
+    return null;
+  }
+
   function tokenize(src) {
-    const tokens = [];
+    const toks = [];
     let i = 0;
     const n = src.length;
+    const push = (t, v, s, e, extra) => toks.push(Object.assign({ t, v, s, e }, extra));
     while (i < n) {
       const ch = src[i];
-      if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') { i++; continue; }
+      if (/\s/.test(ch)) { i++; continue; }
+      const rest = src.slice(i);
       if (ch === '"') {
         let j = i + 1, out = '';
-        while (j < n) {
-          if (src[j] === '"') {
-            if (src[j + 1] === '"') { out += '"'; j += 2; continue; }
-            break;
-          }
+        for (;;) {
+          if (j >= n) throw new Error('Texto sem aspas de fechamento');
+          if (src[j] === '"') { if (src[j + 1] === '"') { out += '"'; j += 2; continue; } break; }
           out += src[j++];
         }
-        if (j >= n) throw new Error('Texto sem aspas de fechamento');
-        tokens.push({ t: 'str', v: out });
+        push('str', out, i, j + 1);
         i = j + 1; continue;
       }
-      // Número: vírgula decimal (pt-BR) ou ponto decimal; separador de argumentos é ';' (ou ',' fora de números)
-      const numM = /^(\d+(?:[.,]\d+)?|[.,]\d+)([eE][+-]?\d+)?/.exec(src.slice(i));
-      if (numM && !/[A-Za-z_]/.test(src[i])) {
-        tokens.push({ t: 'num', v: parseFloat(numM[0].replace(',', '.')) });
-        i += numM[0].length; continue;
+      // prefixo de planilha: Planilha2!A1 ou 'Minha planilha'!A1
+      let sheet = null, m;
+      const start = i;
+      if (ch === "'") {
+        m = /^'((?:[^']|'')+)'!/.exec(rest);
+        if (!m) throw new Error('Nome de planilha inválido');
+        sheet = m[1].replace(/''/g, "'");
+      } else if ((m = /^([\p{L}_][\p{L}\p{N}_.]*)!/u.exec(rest))) {
+        sheet = m[1];
       }
-      const refM = /^\$?[A-Za-z]{1,3}\$?\d+(:\$?[A-Za-z]{1,3}\$?\d+)?(?![A-Za-z0-9_(])/.exec(src.slice(i));
-      if (refM) {
-        tokens.push({ t: 'ref', v: refM[0].replace(/\$/g, '').toUpperCase() });
-        i += refM[0].length; continue;
+      if (sheet !== null) {
+        const r = matchRef(src.slice(i + m[0].length));
+        if (!r) throw new Error('Referência inválida após o nome da planilha');
+        i += m[0].length + r.len;
+        push('ref', src.slice(start, i), start, i, { sheet, ref: r.ref });
+        continue;
       }
-      const idM = /^[\p{L}_][\p{L}\p{N}_.]*/u.exec(src.slice(i));
-      if (idM) {
-        const word = idM[0];
-        const after = src[i + word.length];
-        if (after === '(') {
-          tokens.push({ t: 'func', v: word.toUpperCase() });
-          i += word.length + 1; // consome o '(' junto com o nome
-          continue;
-        }
+      const r = matchRef(rest);
+      if (r) { push('ref', rest.slice(0, r.len), i, i + r.len, { sheet: null, ref: r.ref }); i += r.len; continue; }
+      if ((m = RE_ERR.exec(rest))) { push('err', m[0], i, i + m[0].length); i += m[0].length; continue; }
+      // número: vírgula decimal só entre dígitos (pt-BR); ponto decimal também aceito
+      if ((m = /^(\d+(?:[.,]\d+)?|\.\d+)(?:[eE][+-]?\d+)?/.exec(rest))) {
+        push('num', parseFloat(m[0].replace(',', '.')), i, i + m[0].length);
+        i += m[0].length; continue;
+      }
+      if ((m = /^[\p{L}_][\p{L}\p{N}_.]*/u.exec(rest))) {
+        const word = m[0];
         const up = word.toUpperCase();
-        if (up === 'TRUE' || up === 'VERDADEIRO' || up === 'FALSE' || up === 'FALSO') { tokens.push({ t: 'bool', v: up === 'TRUE' || up === 'VERDADEIRO' }); i += word.length; continue; }
-        tokens.push({ t: 'name', v: up });
+        let j = i + word.length;
+        while (j < n && src[j] === ' ') j++;
+        if (src[j] === '(') { push('func', up, i, j + 1); i = j + 1; continue; }
+        if (up === 'TRUE' || up === 'VERDADEIRO' || up === 'FALSE' || up === 'FALSO') {
+          push('bool', up === 'TRUE' || up === 'VERDADEIRO', i, i + word.length); i += word.length; continue;
+        }
+        push('name', up, i, i + word.length);
         i += word.length; continue;
       }
       const two = src.substr(i, 2);
-      if (['<=', '>=', '<>'].includes(two)) { tokens.push({ t: 'op', v: two }); i += 2; continue; }
-      if ('+-*/^&=<>%'.includes(ch)) { tokens.push({ t: 'op', v: ch }); i++; continue; }
-      if (ch === '(') { tokens.push({ t: 'lparen' }); i++; continue; }
-      if (ch === ')') { tokens.push({ t: 'rparen' }); i++; continue; }
-      if (ch === ',' || ch === ';') { tokens.push({ t: 'comma' }); i++; continue; }
+      if (two === '<=' || two === '>=' || two === '<>') { push('op', two, i, i + 2); i += 2; continue; }
+      if ('+-*/^&=<>%'.includes(ch)) { push('op', ch, i, i + 1); i++; continue; }
+      if (ch === '(') { push('lparen', ch, i, i + 1); i++; continue; }
+      if (ch === ')') { push('rparen', ch, i, i + 1); i++; continue; }
+      if (ch === '{') { push('lbrace', ch, i, i + 1); i++; continue; }
+      if (ch === '}') { push('rbrace', ch, i, i + 1); i++; continue; }
+      if (ch === ',' || ch === ';' || ch === '\\') { push('sep', ch, i, i + 1); i++; continue; }
       throw new Error('Caractere inesperado: ' + ch);
     }
-    tokens.push({ t: 'eof' });
-    return tokens;
+    toks.push({ t: 'eof', s: n, e: n });
+    return toks;
   }
 
-  // Nomes de funções em português (como no Google Planilhas em pt-BR) -> implementação
-  const ALIASES = {
-    'SOMA': 'SUM', 'PRODUTO': 'PRODUCT', 'MÉDIA': 'AVERAGE', 'MEDIA': 'AVERAGE',
-    'MÁXIMO': 'MAX', 'MAXIMO': 'MAX', 'MÍNIMO': 'MIN', 'MINIMO': 'MIN', 'MED': 'MEDIAN',
-    'CONT.NÚM': 'COUNT', 'CONT.NUM': 'COUNT', 'CONT.VALORES': 'COUNTA', 'CONTAR.VAZIO': 'COUNTBLANK',
-    'CONT.SE': 'COUNTIF', 'SOMASE': 'SUMIF', 'MÉDIASE': 'AVERAGEIF', 'MEDIASE': 'AVERAGEIF',
-    'SE': 'IF', 'SEERRO': 'IFERROR', 'E': 'AND', 'OU': 'OR', 'NÃO': 'NOT', 'NAO': 'NOT', 'XOU': 'XOR',
-    'RAIZ': 'SQRT', 'POTÊNCIA': 'POWER', 'POTENCIA': 'POWER', 'ARRED': 'ROUND', 'ARREDONDAR': 'ROUND',
-    'ARREDONDAR.PARA.CIMA': 'ROUNDUP', 'ARREDONDAR.PARA.BAIXO': 'ROUNDDOWN',
-    'CONCATENAR': 'CONCATENATE', 'UNIRTEXTO': 'TEXTJOIN', 'NÚM.CARACT': 'LEN', 'NUM.CARACT': 'LEN',
-    'MAIUSC': 'UPPER', 'MINUSC': 'LOWER', 'PRI.MAIÚSCULA': 'PROPER', 'ARRUMAR': 'TRIM',
-    'ESQUERDA': 'LEFT', 'DIREITA': 'RIGHT', 'EXT.TEXTO': 'MID', 'SUBSTITUIR': 'SUBSTITUTE',
-    'LOCALIZAR': 'FIND', 'PROCV': 'VLOOKUP', 'PROCH': 'HLOOKUP', 'HOJE': 'TODAY', 'AGORA': 'NOW',
-    'DATA': 'DATE', 'ANO': 'YEAR', 'MÊS': 'MONTH', 'MES': 'MONTH', 'DIA': 'DAY',
-    'É.CÉL.VAZIA': 'ISBLANK', 'ÉNÚM': 'ISNUMBER', 'ÉNUM': 'ISNUMBER', 'ÉTEXTO': 'ISTEXT',
-    'ÉERRO': 'ISERROR', 'ÉERROS': 'ISERROR',
-  };
-
-  // ---------- Parser (precedência de operadores do Excel) ----------
-  // Ordem (menor -> maior): comparação, concatenação (&), soma/subtração, multiplicação/divisão, potência, %, unário
-  const BIN_PREC = {
-    '=': 1, '<>': 1, '<': 1, '>': 1, '<=': 1, '>=': 1,
-    '&': 2,
-    '+': 3, '-': 3,
-    '*': 4, '/': 4,
-    '^': 5,
-  };
+  // ---------- Parser ----------
+  const BIN_PREC = { '=': 1, '<>': 1, '<': 1, '>': 1, '<=': 1, '>=': 1, '&': 2, '+': 3, '-': 3, '*': 4, '/': 4, '^': 5 };
+  const ALIASES = {}; // nome em português -> nome canônico (preenchido por functions.js)
 
   function parseFormula(src) {
-    const tokens = tokenize(src);
+    const toks = tokenize(src);
     let p = 0;
-    const peek = () => tokens[p];
-    const next = () => tokens[p++];
-    const expect = (t) => {
+    const peek = () => toks[p];
+    const next = () => toks[p++];
+    const expect = (t, what) => {
       const tok = next();
-      if (tok.t !== t) throw new Error('Esperado ' + t + ', encontrado ' + tok.t);
+      if (tok.t !== t) throw new Error('Esperado ' + what);
       return tok;
     };
 
-    function parsePrimary() {
+    function primary() {
       const tok = next();
       switch (tok.t) {
-        case 'num': return { k: 'lit', v: tok.v };
-        case 'str': return { k: 'lit', v: tok.v };
-        case 'bool': return { k: 'lit', v: tok.v };
-        case 'ref': {
-          if (tok.v.includes(':')) {
-            const [a, b] = tok.v.split(':');
-            return { k: 'range', a: parseAddr(a), b: parseAddr(b) };
-          }
-          return { k: 'ref', a: parseAddr(tok.v) };
-        }
-        case 'name': throw new Error('Nome desconhecido: ' + tok.v);
+        case 'num': return { k: 'num', v: tok.v };
+        case 'str': return { k: 'str', v: tok.v };
+        case 'bool': return { k: 'bool', v: tok.v };
+        case 'err': return { k: 'err', v: tok.v };
+        case 'ref': return { k: 'ref', sheet: tok.sheet, ref: tok.ref };
+        case 'name': return { k: 'name', v: tok.v };
         case 'func': {
           const args = [];
           if (peek().t !== 'rparen') {
-            args.push(parseExpr(0));
-            while (peek().t === 'comma') { next(); args.push(parseExpr(0)); }
+            for (;;) {
+              // argumento vazio: SE(A1;;2)
+              if (peek().t === 'sep' || peek().t === 'rparen') args.push({ k: 'empty' });
+              else args.push(expr(0));
+              if (peek().t === 'sep') { next(); continue; }
+              break;
+            }
           }
-          expect('rparen');
-          return { k: 'call', name: ALIASES[tok.v] || tok.v, args };
+          expect('rparen', ')');
+          return { k: 'call', name: ALIASES[tok.v] || tok.v, raw: tok.v, args };
         }
-        case 'lparen': {
-          const e = parseExpr(0);
-          expect('rparen');
-          return e;
+        case 'lparen': { const e = expr(0); expect('rparen', ')'); return e; }
+        case 'lbrace': {
+          const rows = [[]];
+          if (peek().t !== 'rbrace') {
+            for (;;) {
+              rows[rows.length - 1].push(expr(0));
+              const s = peek();
+              if (s.t === 'sep') { next(); if (s.v === ';') rows.push([]); continue; }
+              break;
+            }
+          }
+          expect('rbrace', '}');
+          const w = rows[0].length;
+          if (rows.some((r) => r.length !== w)) throw new Error('Matriz com linhas de tamanhos diferentes');
+          return { k: 'arr', rows };
         }
         case 'op':
-          if (tok.v === '-') return { k: 'neg', e: parseExpr(6) };
-          if (tok.v === '+') return parseExpr(6);
+          if (tok.v === '-' || tok.v === '+') return { k: 'un', op: tok.v, e: expr(6) };
           throw new Error('Operador inesperado: ' + tok.v);
         default: throw new Error('Fim inesperado da fórmula');
       }
     }
-
-    function parseExpr(minPrec) {
-      let left = parsePrimary();
+    function expr(minPrec) {
+      let left = primary();
       for (;;) {
         const tok = peek();
-        if (tok.t === 'op' && tok.v === '%') {
-          next(); left = { k: 'pct', e: left }; continue;
-        }
+        if (tok.t === 'op' && tok.v === '%') { next(); left = { k: 'un', op: '%', e: left }; continue; }
         if (tok.t !== 'op' || !(tok.v in BIN_PREC)) break;
         const prec = BIN_PREC[tok.v];
         if (prec < minPrec) break;
         next();
-        // potência é associativa à esquerda no Excel
-        const right = parseExpr(prec + 1);
-        left = { k: 'bin', op: tok.v, a: left, b: right };
+        left = { k: 'bin', op: tok.v, a: left, b: expr(prec + 1) };
       }
       return left;
     }
-
-    const ast = parseExpr(0);
+    const ast = expr(0);
     if (peek().t !== 'eof') throw new Error('Texto extra após a fórmula');
     return ast;
   }
 
-  // ---------- Coerção de valores ----------
-  function isErr(v) { return v instanceof CellError; }
+  // ---------- Coerção ----------
+  const EPOCH = Date.UTC(1899, 11, 30); // série 0 = 30/12/1899 (padrão de planilhas)
+  const serialToDate = (s) => new Date(EPOCH + Math.round(s * 86400000));
+  const dateToSerial = (d) => (d.getTime() - EPOCH) / 86400000;
+
   function toNumber(v) {
     if (isErr(v)) throw v;
     if (v === null || v === undefined || v === '') return 0;
     if (typeof v === 'number') return v;
     if (typeof v === 'boolean') return v ? 1 : 0;
-    const s = String(v).trim().replace(/\s/g, '');
-    if (s === '') return 0;
-    // aceita formato pt-BR (1.234,56) e en (1,234.56)
-    let t = s;
-    if (/,\d{1,2}$/.test(t) && !/\./.test(t.slice(t.lastIndexOf(',')))) t = t.replace(/\./g, '').replace(',', '.');
-    else t = t.replace(/,/g, '');
-    if (t.endsWith('%')) { const x = parseFloat(t.slice(0, -1)); if (!isNaN(x)) return x / 100; }
-    const x = Number(t);
-    if (isNaN(x)) throw ERR.VALUE;
-    return x;
+    const lit = parseLiteral(String(v));
+    if (typeof lit.v === 'number') return lit.v;
+    throw mkErr('#VALUE!', `O texto "${String(v).slice(0, 40)}" não pode ser convertido em número.`);
   }
   function toStr(v) {
     if (isErr(v)) throw v;
     if (v === null || v === undefined) return '';
     if (typeof v === 'boolean') return v ? 'VERDADEIRO' : 'FALSO';
-    if (typeof v === 'number') return String(+v.toPrecision(15));
+    if (typeof v === 'number') return Number.isInteger(v) ? String(v) : String(+v.toPrecision(15)).replace('.', ',');
     return String(v);
   }
   function toBool(v) {
@@ -232,22 +262,19 @@
     const s = String(v).toUpperCase();
     if (s === 'TRUE' || s === 'VERDADEIRO') return true;
     if (s === 'FALSE' || s === 'FALSO') return false;
-    throw ERR.VALUE;
+    throw mkErr('#VALUE!', `"${v}" não é um valor lógico.`);
   }
+  // Ordem de planilha: número < texto < booleano; vazio vale 0 ou ""
   function compare(a, b, op) {
     if (isErr(a)) throw a;
     if (isErr(b)) throw b;
-    const numA = typeof a === 'number' || typeof a === 'boolean';
-    const numB = typeof b === 'number' || typeof b === 'boolean';
-    let x, y;
-    if (numA && numB) { x = +a; y = +b; }
-    else if (a === null || a === undefined) { x = numB ? 0 : ''; y = b; }
-    else if (b === null || b === undefined) { y = numA ? 0 : ''; x = a; }
-    else if (numA !== numB) {
-      // número < texto < booleano no Excel
-      const rank = (v) => (typeof v === 'number' ? 0 : typeof v === 'boolean' ? 2 : 1);
-      x = rank(a); y = rank(b);
-    } else { x = String(a).toLowerCase(); y = String(b).toLowerCase(); }
+    if (a === null || a === undefined) a = typeof b === 'string' ? '' : typeof b === 'boolean' ? false : 0;
+    if (b === null || b === undefined) b = typeof a === 'string' ? '' : typeof a === 'boolean' ? false : 0;
+    const rank = (v) => (typeof v === 'number' ? 0 : typeof v === 'string' ? 1 : 2);
+    let x = a, y = b;
+    if (rank(a) !== rank(b)) { x = rank(a); y = rank(b); }
+    else if (typeof a === 'string') { x = a.toLowerCase(); y = b.toLowerCase(); }
+    else if (typeof a === 'boolean') { x = +a; y = +b; }
     switch (op) {
       case '=': return x === y;
       case '<>': return x !== y;
@@ -259,355 +286,424 @@
     return false;
   }
 
-  // ---------- Avaliador ----------
-  // ctx: { getCell(row,col) -> valor calculado, sheet }
+  // Interpreta o que o usuário digitou numa célula (sem "="): número, %, R$, data, hora, booleano ou texto.
+  // fmt indica o formato que a planilha aplica automaticamente.
+  function parseLiteral(text) {
+    const t = String(text).trim();
+    if (t === '') return { v: null };
+    if (/^(TRUE|VERDADEIRO)$/i.test(t)) return { v: true };
+    if (/^(FALSE|FALSO)$/i.test(t)) return { v: false };
+    let m;
+    const num = (s) => {
+      s = s.replace(/\s/g, '');
+      if (/^[-+]?\d{1,3}(\.\d{3})+(,\d+)?$/.test(s) || /^[-+]?\d+,\d+$/.test(s)) return Number(s.replace(/\./g, '').replace(',', '.'));
+      if (/^[-+]?\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) return Number(s.replace(/,/g, ''));
+      if (/^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/.test(s)) return Number(s);
+      return null;
+    };
+    let n = num(t);
+    if (n !== null) return { v: n };
+    if ((m = /^([-+]?[\d.,\s]+)%$/.exec(t)) && (n = num(m[1])) !== null) return { v: n / 100, fmt: 'percent' };
+    if ((m = /^(-?)\s*R\$\s*([\d.,]+)$/.exec(t)) && (n = num(m[2])) !== null) return { v: m[1] ? -n : n, fmt: 'currency' };
+    // data dd/mm/aaaa (pt-BR) ou aaaa-mm-dd, com hora opcional
+    if ((m = /^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(t))) {
+      const d = +m[1], mo = +m[2];
+      let y = m[3] ? +m[3] : new Date().getFullYear();
+      if (y < 100) y += y < 50 ? 2000 : 1900;
+      if (d >= 1 && d <= 31 && mo >= 1 && mo <= 12) {
+        let s = (Date.UTC(y, mo - 1, d) - EPOCH) / 86400000;
+        if (m[4]) s += (+m[4] * 3600 + +m[5] * 60 + (+m[6] || 0)) / 86400;
+        return { v: s, fmt: m[4] ? 'datetime' : 'date' };
+      }
+    }
+    if ((m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t))) {
+      return { v: (Date.UTC(+m[1], +m[2] - 1, +m[3]) - EPOCH) / 86400000, fmt: 'date' };
+    }
+    if ((m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(t)) && +m[1] < 24 && +m[2] < 60) {
+      return { v: (+m[1] * 3600 + +m[2] * 60 + (+m[3] || 0)) / 86400, fmt: 'time' };
+    }
+    return { v: String(text) };
+  }
+
+  // ---------- Avaliação ----------
+  // ctx: { wb, si (planilha da fórmula), row, col, vars }
+  function resolveRef(node, ctx) {
+    const wb = ctx.wb;
+    let si = ctx.si;
+    if (node.sheet !== null) {
+      si = wb.sheetIndex(node.sheet);
+      if (si < 0) throw mkErr('#REF!', `A planilha "${node.sheet}" não existe.`);
+    }
+    const ref = node.ref;
+    const used = wb.usedRange(si);
+    let r1, c1, r2, c2;
+    switch (ref.kind) {
+      case 'cell': r1 = r2 = ref.r1; c1 = c2 = ref.c1; break;
+      case 'range': r1 = ref.r1; c1 = ref.c1; c2 = ref.c2; r2 = ref.r2 === null ? Math.max(ref.r1, used.maxR) : ref.r2; break;
+      case 'cols': c1 = ref.c1; c2 = ref.c2; r1 = 1; r2 = Math.max(1, used.maxR); break;
+      case 'rows': r1 = ref.r1; r2 = ref.r2; c1 = 1; c2 = Math.max(1, used.maxC); break;
+    }
+    const rr = new RangeRef(wb, si, r1, c1, r2, c2);
+    if (rr.h * rr.w > MAX_CELLS) throw mkErr('#NUM!', 'Intervalo grande demais.');
+    return rr;
+  }
+
   function evaluate(node, ctx) {
     switch (node.k) {
-      case 'lit': return node.v;
-      case 'ref': {
-        if (!node.a) return ERR.REF;
-        return ctx.getCell(node.a.row, node.a.col);
-      }
-      case 'range': return { range: true, r1: node.a, r2: node.b };
-      case 'neg': return -toNumber(scalar(evaluate(node.e, ctx)));
-      case 'pct': return toNumber(scalar(evaluate(node.e, ctx))) / 100;
-      case 'bin': {
-        const a = scalar(evaluate(node.a, ctx));
-        const b = scalar(evaluate(node.b, ctx));
-        switch (node.op) {
-          case '+': return toNumber(a) + toNumber(b);
-          case '-': return toNumber(a) - toNumber(b);
-          case '*': return toNumber(a) * toNumber(b);
-          case '/': {
-            const d = toNumber(b);
-            if (d === 0) throw ERR.DIV0;
-            return toNumber(a) / d;
-          }
-          case '^': return Math.pow(toNumber(a), toNumber(b));
-          case '&': return toStr(a) + toStr(b);
-          default: return compare(a, b, node.op);
+      case 'num': case 'str': case 'bool': return node.v;
+      case 'empty': return null;
+      case 'err': return Object.values(ERR).find((e) => e.code === node.v) || mkErr(node.v);
+      case 'ref': return resolveRef(node, ctx);
+      case 'name': {
+        for (let v = ctx.vars; v; v = v.parent) if (v.map.has(node.v)) return v.map.get(node.v);
+        // intervalos nomeados (Dados > Intervalos nomeados)
+        const named = ctx.wb.p.namedRange && ctx.wb.p.namedRange(node.v);
+        if (named) {
+          let toks;
+          try { toks = tokenize(named); } catch (e) { throw mkErr('#REF!', `O intervalo nomeado ${node.v} é inválido.`); }
+          if (toks[0] && toks[0].t === 'ref') return resolveRef({ sheet: toks[0].sheet, ref: toks[0].ref }, ctx);
         }
+        throw mkErr('#NAME?', `Nome desconhecido: ${node.v}`);
       }
+      case 'arr': return new Matrix(node.rows.map((row) => row.map((e) => scalarOf(evaluate(e, ctx)))));
       case 'call': {
         const fn = FUNCTIONS[node.name];
-        if (!fn) throw ERR.NAME;
-        return fn(node.args, ctx);
+        if (!fn) throw mkErr('#NAME?', `Função desconhecida: ${node.raw}`);
+        return fn.impl(node.args, ctx);
+      }
+      case 'un': {
+        const v = evaluate(node.e, ctx);
+        if (node.op === '-') return lift1(v, (x) => -toNumber(x));
+        if (node.op === '%') return lift1(v, (x) => toNumber(x) / 100);
+        return lift1(v, (x) => toNumber(x));
+      }
+      case 'bin': {
+        const a = evaluate(node.a, ctx), b = evaluate(node.b, ctx);
+        return lift2(a, b, BIN_FN[node.op]);
       }
     }
     throw ERR.ERROR;
   }
-  // Converte resultado (possível intervalo) em valor único (canto superior esquerdo)
-  function scalar(v) {
-    if (v && v.range) {
-      return ERR.VALUE;
-    }
-    return v;
+  const BIN_FN = {
+    '+': (a, b) => toNumber(a) + toNumber(b),
+    '-': (a, b) => toNumber(a) - toNumber(b),
+    '*': (a, b) => toNumber(a) * toNumber(b),
+    '/': (a, b) => { const d = toNumber(b); if (d === 0) throw ERR.DIV0; return toNumber(a) / d; },
+    '^': (a, b) => { const r = Math.pow(toNumber(a), toNumber(b)); if (!isFinite(r)) throw ERR.NUM; return r; },
+    '&': (a, b) => toStr(a) + toStr(b),
+    '=': (a, b) => compare(a, b, '='), '<>': (a, b) => compare(a, b, '<>'),
+    '<': (a, b) => compare(a, b, '<'), '>': (a, b) => compare(a, b, '>'),
+    '<=': (a, b) => compare(a, b, '<='), '>=': (a, b) => compare(a, b, '>='),
+  };
+
+  const isArr = (v) => v instanceof Matrix || (v instanceof RangeRef && (v.h > 1 || v.w > 1));
+  // Valor único: referência 1x1 é lida; matriz usa o canto superior esquerdo
+  function scalarOf(v) {
+    if (v instanceof RangeRef) return v.get(0, 0);
+    if (v instanceof Matrix) return v.h && v.w ? v.rows[0][0] : null;
+    return v === undefined ? null : v;
   }
-  // Expande argumento em lista plana de valores (aceita intervalos)
-  function flatten(args, ctx) {
+  function toMatrix(v) {
+    if (v instanceof Matrix) return v.rows;
+    if (v instanceof RangeRef) {
+      const out = new Array(v.h);
+      for (let i = 0; i < v.h; i++) { const row = new Array(v.w); for (let j = 0; j < v.w; j++) row[j] = v.get(i, j); out[i] = row; }
+      return out;
+    }
+    return [[v === undefined ? null : v]];
+  }
+  const safe = (f) => { try { return f(); } catch (e) { if (isErr(e)) return e; throw e; } };
+  function lift1(v, f) {
+    if (!isArr(v)) return f(scalarOf(v));
+    return new Matrix(toMatrix(v).map((row) => row.map((x) => safe(() => f(x)))));
+  }
+  // Operação elemento a elemento com expansão de linhas/colunas de tamanho 1
+  function lift2(a, b, f) {
+    if (!isArr(a) && !isArr(b)) return f(scalarOf(a), scalarOf(b));
+    const A = toMatrix(a), B = toMatrix(b);
+    const h = Math.max(A.length, B.length), w = Math.max(A[0].length, B[0].length);
+    const pick = (M, i, j) => {
+      const ii = M.length === 1 ? 0 : i, jj = M[0].length === 1 ? 0 : j;
+      return ii < M.length && jj < M[0].length ? M[ii][jj] : ERR.NA;
+    };
+    const out = [];
+    for (let i = 0; i < h; i++) {
+      const row = [];
+      for (let j = 0; j < w; j++) row.push(safe(() => f(pick(A, i, j), pick(B, i, j))));
+      out.push(row);
+    }
+    return new Matrix(out);
+  }
+
+  // Expande argumentos em lista de valores; fromRange=true para valores vindos de intervalos/matrizes
+  function flat(args, ctx) {
     const out = [];
     for (const a of args) {
+      if (a.k === 'empty') continue;
       const v = evaluate(a, ctx);
-      if (v && v.range) {
-        const r1 = v.r1, r2 = v.r2;
-        const top = Math.min(r1.row, r2.row), bot = Math.max(r1.row, r2.row);
-        const lft = Math.min(r1.col, r2.col), rgt = Math.max(r1.col, r2.col);
-        for (let r = top; r <= bot; r++)
-          for (let c = lft; c <= rgt; c++) out.push({ v: ctx.getCell(r, c), fromRange: true });
+      if (v instanceof RangeRef || v instanceof Matrix) {
+        for (const row of toMatrix(v)) for (const x of row) out.push({ v: x, fromRange: true });
       } else out.push({ v, fromRange: false });
     }
     return out;
   }
-  function numbersFrom(args, ctx) {
-    const nums = [];
-    for (const item of flatten(args, ctx)) {
-      const v = item.v;
-      if (isErr(v)) throw v;
-      if (item.fromRange) { if (typeof v === 'number') nums.push(v); }
-      else nums.push(toNumber(v));
+
+  // ---------- Pasta de trabalho ----------
+  // provider: { count(), name(i), raw(i,r,c) -> string, formulas(i) -> [{r,c}], used(i) -> {maxR,maxC} }
+  const PARSE_CACHE = new Map();
+  function getAst(text) {
+    let ast = PARSE_CACHE.get(text);
+    if (ast === undefined) {
+      try { ast = parseFormula(text.slice(1)); } catch (e) { ast = { k: 'parseError', msg: e.message }; }
+      if (PARSE_CACHE.size > 300000) PARSE_CACHE.clear();
+      PARSE_CACHE.set(text, ast);
     }
-    return nums;
+    return ast;
   }
-  // Monta matriz 2D a partir de um intervalo
-  function rangeMatrix(arg, ctx) {
-    const v = arg.k === 'range' ? evaluate(arg, ctx) : null;
-    if (!v || !v.range) throw ERR.VALUE;
-    const top = Math.min(v.r1.row, v.r2.row), bot = Math.max(v.r1.row, v.r2.row);
-    const lft = Math.min(v.r1.col, v.r2.col), rgt = Math.max(v.r1.col, v.r2.col);
-    const m = [];
-    for (let r = top; r <= bot; r++) {
-      const row = [];
-      for (let c = lft; c <= rgt; c++) row.push(ctx.getCell(r, c));
-      m.push(row);
+  // Diz se uma fórmula pode resultar em matriz. Funções que agregam (SOMA, CONT.SE…) sempre dão um valor único.
+  const ARRAY_FUNCS = new Set(['FILTER', 'SORT', 'SORTN', 'UNIQUE', 'SEQUENCE', 'TRANSPOSE', 'ARRAYFORMULA', 'FLATTEN', 'SPLIT', 'RANDARRAY',
+    'ARRAY_CONSTRAIN', 'CHOOSECOLS', 'CHOOSEROWS', 'INDEX', 'OFFSET', 'INDIRECT', 'XLOOKUP', 'ROW', 'COLUMN']);
+  const SCALAR_FUNCS = new Set(['SUM', 'AVERAGE', 'AVERAGEA', 'COUNT', 'COUNTA', 'COUNTBLANK', 'COUNTIF', 'COUNTIFS', 'SUMIF', 'SUMIFS', 'AVERAGEIF',
+    'AVERAGEIFS', 'MIN', 'MAX', 'MINIFS', 'MAXIFS', 'MEDIAN', 'MODE', 'PRODUCT', 'SUMSQ', 'SUMPRODUCT', 'AND', 'OR', 'XOR', 'VLOOKUP', 'HLOOKUP',
+    'LOOKUP', 'MATCH', 'XMATCH', 'CONCATENATE', 'CONCAT', 'TEXTJOIN', 'JOIN', 'ROWS', 'COLUMNS', 'LARGE', 'SMALL', 'RANK', 'STDEV', 'STDEVP',
+    'VAR', 'VARP', 'PERCENTILE', 'QUARTILE', 'CORREL', 'COUNTUNIQUE', 'NPV', 'IRR', 'GCD', 'LCM', 'NETWORKDAYS', 'WORKDAY', 'ISFORMULA', 'FORMULATEXT', 'TYPE']);
+  function mayArray(node) {
+    if (!node) return false;
+    switch (node.k) {
+      case 'ref': return node.ref.kind !== 'cell';
+      case 'arr': return true;
+      case 'name': return true;
+      case 'un': return mayArray(node.e);
+      case 'bin': return mayArray(node.a) || mayArray(node.b);
+      case 'call':
+        if (ARRAY_FUNCS.has(node.name)) return true;
+        if (SCALAR_FUNCS.has(node.name)) return false;
+        return node.args.some(mayArray);
     }
-    return m;
-  }
-  // Critério estilo COUNTIF: ">5", "<=3", "<>x", "texto", número
-  function matchCriterion(val, crit) {
-    if (isErr(val)) return false;
-    let op = '=', rhs = crit;
-    const m = /^(<=|>=|<>|<|>|=)(.*)$/.exec(String(crit));
-    if (m) { op = m[1]; rhs = m[2]; }
-    const rhsNum = rhs.trim() !== '' && !isNaN(Number(rhs)) ? Number(rhs) : null;
-    if (rhsNum !== null && typeof val === 'number') return compare(val, rhsNum, op);
-    if (op === '=' || op === '<>') {
-      const eq = String(val ?? '').toLowerCase() === rhs.toLowerCase();
-      return op === '=' ? eq : !eq;
-    }
-    return compare(String(val ?? ''), rhs, op);
+    return false;
   }
 
-  const FUNCTIONS = {
-    SUM: (args, ctx) => numbersFrom(args, ctx).reduce((s, x) => s + x, 0),
-    PRODUCT: (args, ctx) => numbersFrom(args, ctx).reduce((s, x) => s * x, 1),
-    AVERAGE: (args, ctx) => {
-      const n = numbersFrom(args, ctx);
-      if (!n.length) throw ERR.DIV0;
-      return n.reduce((s, x) => s + x, 0) / n.length;
-    },
-    MIN: (args, ctx) => { const n = numbersFrom(args, ctx); return n.length ? Math.min(...n) : 0; },
-    MAX: (args, ctx) => { const n = numbersFrom(args, ctx); return n.length ? Math.max(...n) : 0; },
-    MEDIAN: (args, ctx) => {
-      const n = numbersFrom(args, ctx).sort((a, b) => a - b);
-      if (!n.length) throw ERR.NUM;
-      const mid = Math.floor(n.length / 2);
-      return n.length % 2 ? n[mid] : (n[mid - 1] + n[mid]) / 2;
-    },
-    COUNT: (args, ctx) => flatten(args, ctx).filter((i) => typeof i.v === 'number').length,
-    COUNTA: (args, ctx) => flatten(args, ctx).filter((i) => i.v !== null && i.v !== undefined && i.v !== '').length,
-    COUNTBLANK: (args, ctx) => flatten(args, ctx).filter((i) => i.v === null || i.v === undefined || i.v === '').length,
-    COUNTIF: (args, ctx) => {
-      const m = rangeMatrix(args[0], ctx);
-      const crit = scalar(evaluate(args[1], ctx));
-      let c = 0;
-      m.forEach((row) => row.forEach((v) => { if (matchCriterion(v, toStr(crit))) c++; }));
-      return c;
-    },
-    SUMIF: (args, ctx) => {
-      const m = rangeMatrix(args[0], ctx);
-      const crit = toStr(scalar(evaluate(args[1], ctx)));
-      const sumM = args[2] ? rangeMatrix(args[2], ctx) : m;
-      let s = 0;
-      m.forEach((row, r) => row.forEach((v, c) => {
-        if (matchCriterion(v, crit)) {
-          const sv = sumM[r] && sumM[r][c];
-          if (typeof sv === 'number') s += sv;
-        }
-      }));
-      return s;
-    },
-    AVERAGEIF: (args, ctx) => {
-      const m = rangeMatrix(args[0], ctx);
-      const crit = toStr(scalar(evaluate(args[1], ctx)));
-      const avgM = args[2] ? rangeMatrix(args[2], ctx) : m;
-      let s = 0, c = 0;
-      m.forEach((row, r) => row.forEach((v, col) => {
-        if (matchCriterion(v, crit)) {
-          const av = avgM[r] && avgM[r][col];
-          if (typeof av === 'number') { s += av; c++; }
-        }
-      }));
-      if (!c) throw ERR.DIV0;
-      return s / c;
-    },
-    IF: (args, ctx) => {
-      const cond = toBool(scalar(evaluate(args[0], ctx)));
-      if (cond) return args[1] ? scalar(evaluate(args[1], ctx)) : true;
-      return args[2] ? scalar(evaluate(args[2], ctx)) : false;
-    },
-    IFERROR: (args, ctx) => {
-      try {
-        const v = scalar(evaluate(args[0], ctx));
-        if (isErr(v)) return scalar(evaluate(args[1], ctx));
-        return v;
-      } catch (e) {
-        if (isErr(e)) return scalar(evaluate(args[1], ctx));
-        throw e;
-      }
-    },
-    AND: (args, ctx) => flatten(args, ctx).every((i) => toBool(i.v)),
-    OR: (args, ctx) => flatten(args, ctx).some((i) => toBool(i.v)),
-    NOT: (args, ctx) => !toBool(scalar(evaluate(args[0], ctx))),
-    XOR: (args, ctx) => flatten(args, ctx).filter((i) => toBool(i.v)).length % 2 === 1,
-    TRUE: () => true,
-    FALSE: () => false,
-    ABS: (args, ctx) => Math.abs(toNumber(scalar(evaluate(args[0], ctx)))),
-    SQRT: (args, ctx) => {
-      const x = toNumber(scalar(evaluate(args[0], ctx)));
-      if (x < 0) throw ERR.NUM;
-      return Math.sqrt(x);
-    },
-    POWER: (args, ctx) => Math.pow(toNumber(scalar(evaluate(args[0], ctx))), toNumber(scalar(evaluate(args[1], ctx)))),
-    MOD: (args, ctx) => {
-      const a = toNumber(scalar(evaluate(args[0], ctx)));
-      const b = toNumber(scalar(evaluate(args[1], ctx)));
-      if (b === 0) throw ERR.DIV0;
-      return a - b * Math.floor(a / b);
-    },
-    INT: (args, ctx) => Math.floor(toNumber(scalar(evaluate(args[0], ctx)))),
-    ROUND: (args, ctx) => {
-      const x = toNumber(scalar(evaluate(args[0], ctx)));
-      const d = args[1] ? toNumber(scalar(evaluate(args[1], ctx))) : 0;
-      const f = Math.pow(10, d);
-      return Math.round((x + Number.EPSILON * Math.sign(x)) * f) / f;
-    },
-    ROUNDUP: (args, ctx) => {
-      const x = toNumber(scalar(evaluate(args[0], ctx)));
-      const f = Math.pow(10, args[1] ? toNumber(scalar(evaluate(args[1], ctx))) : 0);
-      return (x < 0 ? -Math.ceil(-x * f) : Math.ceil(x * f)) / f;
-    },
-    ROUNDDOWN: (args, ctx) => {
-      const x = toNumber(scalar(evaluate(args[0], ctx)));
-      const f = Math.pow(10, args[1] ? toNumber(scalar(evaluate(args[1], ctx))) : 0);
-      return (x < 0 ? -Math.floor(-x * f) : Math.floor(x * f)) / f;
-    },
-    CONCATENATE: (args, ctx) => flatten(args, ctx).map((i) => toStr(i.v)).join(''),
-    CONCAT: (args, ctx) => flatten(args, ctx).map((i) => toStr(i.v)).join(''),
-    TEXTJOIN: (args, ctx) => {
-      const delim = toStr(scalar(evaluate(args[0], ctx)));
-      const ignoreEmpty = toBool(scalar(evaluate(args[1], ctx)));
-      const vals = flatten(args.slice(2), ctx).map((i) => i.v)
-        .filter((v) => !ignoreEmpty || (v !== null && v !== undefined && v !== ''));
-      return vals.map(toStr).join(delim);
-    },
-    LEN: (args, ctx) => toStr(scalar(evaluate(args[0], ctx))).length,
-    UPPER: (args, ctx) => toStr(scalar(evaluate(args[0], ctx))).toUpperCase(),
-    LOWER: (args, ctx) => toStr(scalar(evaluate(args[0], ctx))).toLowerCase(),
-    PROPER: (args, ctx) => toStr(scalar(evaluate(args[0], ctx))).toLowerCase().replace(/(^|\s)(\p{L})/gu, (m, a, b) => a + b.toUpperCase()),
-    TRIM: (args, ctx) => toStr(scalar(evaluate(args[0], ctx))).trim().replace(/\s+/g, ' '),
-    LEFT: (args, ctx) => toStr(scalar(evaluate(args[0], ctx))).slice(0, args[1] ? toNumber(scalar(evaluate(args[1], ctx))) : 1),
-    RIGHT: (args, ctx) => {
-      const s = toStr(scalar(evaluate(args[0], ctx)));
-      const k = args[1] ? toNumber(scalar(evaluate(args[1], ctx))) : 1;
-      return k <= 0 ? '' : s.slice(-k);
-    },
-    MID: (args, ctx) => {
-      const s = toStr(scalar(evaluate(args[0], ctx)));
-      const st = toNumber(scalar(evaluate(args[1], ctx)));
-      const len = toNumber(scalar(evaluate(args[2], ctx)));
-      if (st < 1 || len < 0) throw ERR.VALUE;
-      return s.substr(st - 1, len);
-    },
-    SUBSTITUTE: (args, ctx) => {
-      const s = toStr(scalar(evaluate(args[0], ctx)));
-      const oldT = toStr(scalar(evaluate(args[1], ctx)));
-      const newT = toStr(scalar(evaluate(args[2], ctx)));
-      return oldT === '' ? s : s.split(oldT).join(newT);
-    },
-    REPT: (args, ctx) => {
-      const n = toNumber(scalar(evaluate(args[1], ctx)));
-      if (n < 0 || n > 10000) throw ERR.VALUE;
-      return toStr(scalar(evaluate(args[0], ctx))).repeat(n);
-    },
-    FIND: (args, ctx) => {
-      const i = toStr(scalar(evaluate(args[0], ctx)));
-      const s = toStr(scalar(evaluate(args[1], ctx)));
-      const start = args[2] ? toNumber(scalar(evaluate(args[2], ctx))) : 1;
-      const idx = s.indexOf(i, start - 1);
-      if (idx < 0) throw ERR.VALUE;
-      return idx + 1;
-    },
-    VLOOKUP: (args, ctx) => {
-      const key = scalar(evaluate(args[0], ctx));
-      const m = rangeMatrix(args[1], ctx);
-      const col = toNumber(scalar(evaluate(args[2], ctx)));
-      const exact = args[3] ? !toBool(scalar(evaluate(args[3], ctx))) : false;
-      if (col < 1 || !m.length || col > m[0].length) throw ERR.REF;
-      for (const row of m) {
-        const v = row[0];
-        if (exact ? compare(v, key, '=') : compare(v, key, '<=')) {
-          if (exact || (typeof v === typeof key)) return row[col - 1];
-        }
-      }
-      throw ERR.NA;
-    },
-    HLOOKUP: (args, ctx) => {
-      const key = scalar(evaluate(args[0], ctx));
-      const m = rangeMatrix(args[1], ctx);
-      const row = toNumber(scalar(evaluate(args[2], ctx)));
-      const exact = args[3] ? !toBool(scalar(evaluate(args[3], ctx))) : false;
-      if (row < 1 || !m.length || row > m.length) throw ERR.REF;
-      for (let c = 0; c < m[0].length; c++) {
-        if (exact ? compare(m[0][c], key, '=') : compare(m[0][c], key, '<=')) return m[row - 1][c];
-      }
-      throw ERR.NA;
-    },
-    TODAY: () => { const d = new Date(); return Math.floor(d.getTime() / 86400000) + 25569 - (d.getTimezoneOffset() / 1440); },
-    NOW: () => Date.now() / 86400000 + 25569,
-    DATE: (args, ctx) => {
-      const y = toNumber(scalar(evaluate(args[0], ctx)));
-      const m = toNumber(scalar(evaluate(args[1], ctx)));
-      const d = toNumber(scalar(evaluate(args[2], ctx)));
-      const ms = Date.UTC(y, m - 1, d);
-      return ms / 86400000 + 25569;
-    },
-    YEAR: (args, ctx) => new Date((toNumber(scalar(evaluate(args[0], ctx))) - 25569) * 86400000).getUTCFullYear(),
-    MONTH: (args, ctx) => new Date((toNumber(scalar(evaluate(args[0], ctx))) - 25569) * 86400000).getUTCMonth() + 1,
-    DAY: (args, ctx) => new Date((toNumber(scalar(evaluate(args[0], ctx))) - 25569) * 86400000).getUTCDate(),
-    ISBLANK: (args, ctx) => { const v = scalar(evaluate(args[0], ctx)); return v === null || v === undefined || v === ''; },
-    ISNUMBER: (args, ctx) => typeof scalar(evaluate(args[0], ctx)) === 'number',
-    ISTEXT: (args, ctx) => typeof scalar(evaluate(args[0], ctx)) === 'string',
-    ISERROR: (args, ctx) => { try { return isErr(scalar(evaluate(args[0], ctx))); } catch (e) { return isErr(e); } },
-  };
-
-  // ---------- Cálculo de planilha ----------
-  // Guarda células como texto bruto; calcula com memoização e detecção de ciclos.
-  class Sheet {
-    constructor(data) {
-      this.raw = new Map(); // "A1" -> string bruta
+  class Workbook {
+    constructor(provider) { this.p = provider; this.invalidate(); }
+    invalidate() {
       this.cache = new Map();
-      this.parsed = new Map();
+      this.full = new Map();     // resultado completo (matrizes) por célula-âncora
       this.stack = new Set();
-      if (data) for (const k in data) this.raw.set(k, data[k]);
+      this.spill = new Map();    // "si:r:c" -> valor transbordado
+      this.spillFrom = new Map();// "si:r:c" -> chave da âncora
+      this.pending = new Map();  // si -> Set de chaves de fórmulas ainda não calculadas
+      this.used = new Map();
     }
-    setRaw(addr, text) {
-      if (text === '' || text === null || text === undefined) this.raw.delete(addr);
-      else this.raw.set(addr, String(text));
-      this.parsed.delete(addr);
-      this.cache.clear();
+    sheetIndex(name) {
+      const up = String(name).toUpperCase();
+      for (let i = 0; i < this.p.count(); i++) if (this.p.name(i).toUpperCase() === up) return i;
+      return -1;
     }
-    getRaw(addr) { return this.raw.get(addr) ?? ''; }
-    isFormula(addr) { return (this.getRaw(addr) || '').startsWith('='); }
-
-    // Valor calculado de uma célula
-    value(addr) {
-      if (this.cache.has(addr)) return this.cache.get(addr);
-      const text = this.getRaw(addr);
-      let result;
-      if (text === '') result = null;
-      else if (text.startsWith('=')) {
-        if (this.stack.has(addr)) return ERR.CIRC;
-        this.stack.add(addr);
-        try {
-          let ast = this.parsed.get(addr);
-          if (!ast) { ast = parseFormula(text.slice(1)); this.parsed.set(addr, ast); }
-          const ctx = { getCell: (r, c) => this.value(addrToStr(r, c)) };
-          result = scalar(evaluate(ast, ctx));
-          if (result === undefined) result = null;
-        } catch (e) {
-          if (isErr(e)) result = e;
-          else result = ERR.ERROR;
-        } finally {
-          this.stack.delete(addr);
+    usedRange(si) {
+      let u = this.used.get(si);
+      if (!u) { u = this.p.used(si); this.used.set(si, u); }
+      return u;
+    }
+    // Fórmulas ainda não calculadas que podem gerar matrizes (e transbordar para células vizinhas)
+    pendingOf(si) {
+      let set = this.pending.get(si);
+      if (!set) {
+        set = new Set();
+        for (const f of this.p.formulas(si)) {
+          const key = si + ':' + f.r + ':' + f.c;
+          if (this.cache.has(key)) continue;
+          if (mayArray(getAst(this.p.raw(si, f.r, f.c)))) set.add(f.r + ':' + f.c);
         }
-      } else {
-        const t = text.trim();
-        const n = Number(t);
-        // pt-BR: vírgula decimal e ponto de milhar (ex.: 2,5 ou 1.234,56)
-        const ptBR = /^[-+]?\d{1,3}(\.\d{3})+(,\d+)?$|^[-+]?\d+,\d+$/.test(t);
-        if (ptBR) result = Number(t.replace(/\./g, '').replace(',', '.'));
-        else if (t !== '' && !isNaN(n) && /^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/.test(t)) result = n;
-        else if (/^(TRUE|VERDADEIRO)$/i.test(text)) result = true;
-        else if (/^(FALSE|FALSO)$/i.test(text)) result = false;
-        else result = text;
+        this.pending.set(si, set);
       }
-      this.cache.set(addr, result);
-      return result;
+      return set;
     }
+    // Valor exibido de uma célula (inclui resultados transbordados de fórmulas matriciais)
+    value(si, r, c) {
+      const key = si + ':' + r + ':' + c;
+      if (this.cache.has(key)) return this.cache.get(key);
+      const text = this.p.raw(si, r, c);
+      let v;
+      if (text === '' || text === null || text === undefined) {
+        v = this.spillValue(si, r, c);
+      } else if (text[0] === '=' && text.length > 1) {
+        if (this.stack.has(key)) return mkErr('#REF!', 'Dependência circular detectada.');
+        this.stack.add(key);
+        try {
+          v = this.compute(si, r, c, text, key);
+        } finally {
+          this.stack.delete(key);
+          this.pendingOf(si).delete(r + ':' + c);
+        }
+      } else if (text[0] === "'") {
+        v = text.slice(1);
+      } else {
+        v = parseLiteral(text).v;
+      }
+      this.cache.set(key, v);
+      return v;
+    }
+    compute(si, r, c, text, key) {
+      const ast = getAst(text);
+      if (ast.k === 'parseError') return mkErr('#ERROR!', 'Erro de análise da fórmula: ' + ast.msg);
+      let res;
+      try {
+        res = evaluate(ast, { wb: this, si, row: r, col: c, vars: null });
+      } catch (e) {
+        if (isErr(e)) return e;
+        return mkErr('#ERROR!', String(e && e.message || e));
+      }
+      if (isArr(res)) {
+        const M = toMatrix(res);
+        this.full.set(key, M);
+        // verifica se o transbordo cabe sem sobrescrever dados
+        for (let i = 0; i < M.length; i++) {
+          for (let j = 0; j < M[i].length; j++) {
+            if (i === 0 && j === 0) continue;
+            const raw = this.p.raw(si, r + i, c + j);
+            if (raw !== '' && raw !== null && raw !== undefined) {
+              return mkErr('#REF!', `O resultado da matriz não foi expandido porque substituiria dados em ${addrToStr(r + i, c + j)}.`);
+            }
+          }
+        }
+        for (let i = 0; i < M.length; i++) {
+          for (let j = 0; j < M[i].length; j++) {
+            if (i === 0 && j === 0) continue;
+            const k = si + ':' + (r + i) + ':' + (c + j);
+            this.spill.set(k, M[i][j] === undefined ? null : M[i][j]);
+            this.spillFrom.set(k, key);
+          }
+        }
+        res = M[0][0];
+      } else if (res instanceof RangeRef) {
+        res = res.get(0, 0);
+      }
+      return res === undefined ? null : res;
+    }
+    spillValue(si, r, c) {
+      const key = si + ':' + r + ':' + c;
+      if (this.spill.has(key)) return this.spill.get(key);
+      // calcula fórmulas acima/à esquerda que ainda não rodaram (podem transbordar até aqui)
+      const pend = this.pendingOf(si);
+      if (pend.size) {
+        for (const fk of Array.from(pend)) {
+          const [fr, fc] = fk.split(':').map(Number);
+          if (fr <= r && fc <= c && !this.stack.has(si + ':' + fr + ':' + fc)) this.value(si, fr, fc);
+        }
+        if (this.spill.has(key)) return this.spill.get(key);
+      }
+      return null;
+    }
+    // Célula âncora de onde vem um valor transbordado (para a interface)
+    spillAnchor(si, r, c) { return this.spillFrom.get(si + ':' + r + ':' + c) || null; }
   }
+
+  // ---------- Reescrita de fórmulas ----------
+  function fmtRefParts(ref) {
+    const col = (abs, c) => (abs ? '$' : '') + numToCol(c);
+    const row = (abs, r) => (abs ? '$' : '') + r;
+    switch (ref.kind) {
+      case 'cell': return col(ref.ac1, ref.c1) + row(ref.ar1, ref.r1);
+      case 'range': return col(ref.ac1, ref.c1) + row(ref.ar1, ref.r1) + ':' + col(ref.ac2, ref.c2) + (ref.r2 === null ? '' : row(ref.ar2, ref.r2));
+      case 'cols': return col(ref.ac1, ref.c1) + ':' + col(ref.ac2, ref.c2);
+      case 'rows': return row(ref.ar1, ref.r1) + ':' + row(ref.ar2, ref.r2);
+    }
+    return '#REF!';
+  }
+  // mapper(tok) -> novo texto da referência, ou null para manter
+  function rewriteRefs(formula, mapper) {
+    if (!formula || formula[0] !== '=') return formula;
+    let toks;
+    try { toks = tokenize(formula.slice(1)); } catch (e) { return formula; }
+    let out = '', last = 0;
+    const body = formula.slice(1);
+    for (const t of toks) {
+      if (t.t !== 'ref') continue;
+      const rep = mapper(t);
+      if (rep === null || rep === undefined) continue;
+      out += body.slice(last, t.s) + rep;
+      last = t.e;
+    }
+    return '=' + out + body.slice(last);
+  }
+  const sheetPrefix = (t) => (t.sheet !== null ? quoteSheet(t.sheet) + '!' : '');
+
+  // Copiar/colar e arrastar: desloca partes relativas
+  function shiftFormula(formula, dr, dc) {
+    return rewriteRefs(formula, (t) => {
+      const ref = Object.assign({}, t.ref);
+      if (ref.r1 !== undefined && !ref.ar1) ref.r1 += dr;
+      if (ref.r2 !== undefined && ref.r2 !== null && !ref.ar2) ref.r2 += dr;
+      if (ref.c1 !== undefined && !ref.ac1) ref.c1 += dc;
+      if (ref.c2 !== undefined && !ref.ac2) ref.c2 += dc;
+      const bad = [ref.r1, ref.r2, ref.c1, ref.c2].some((x) => x !== undefined && x !== null && x < 1);
+      return bad ? '#REF!' : sheetPrefix(t) + fmtRefParts(ref);
+    });
+  }
+
+  // Inserir/excluir linhas ou colunas. axis: 'row' | 'col'; count > 0 insere, < 0 exclui.
+  // formulaSheet: nome da planilha onde está a fórmula; targetSheet: planilha alterada.
+  function structuralShift(formula, formulaSheet, targetSheet, axis, at, count) {
+    const T = targetSheet.toUpperCase();
+    return rewriteRefs(formula, (t) => {
+      const sheetName = (t.sheet !== null ? t.sheet : formulaSheet).toUpperCase();
+      if (sheetName !== T) return null;
+      const ref = Object.assign({}, t.ref);
+      const k1 = axis === 'row' ? 'r1' : 'c1', k2 = axis === 'row' ? 'r2' : 'c2';
+      if (ref[k1] === undefined) return null; // eixo não se aplica (ex.: A:A ao inserir linha)
+      let a = ref[k1];
+      let b = ref.kind === 'cell' ? a : ref[k2];
+      const open = b === null;
+      if (count > 0) {
+        if (a >= at) a += count;
+        if (!open && b >= at) b += count;
+      } else {
+        const del1 = at, del2 = at - count - 1, n = -count;
+        if (open) { if (a > del2) a -= n; else if (a >= del1) a = del1; }
+        else {
+          if (a >= del1 && b <= del2) return sheetPrefix(t) + '#REF!';
+          if (a > del2) a -= n; else if (a >= del1) a = del1;
+          if (b > del2) b -= n; else if (b >= del1) b = del1 - 1;
+        }
+      }
+      ref[k1] = a;
+      if (ref.kind !== 'cell' && !open) ref[k2] = b;
+      return sheetPrefix(t) + fmtRefParts(ref);
+    });
+  }
+  function renameSheetRefs(formula, oldName, newName) {
+    const O = oldName.toUpperCase();
+    return rewriteRefs(formula, (t) => (t.sheet !== null && t.sheet.toUpperCase() === O ? quoteSheet(newName) + '!' + fmtRefParts(t.ref) : null));
+  }
+  // Referências de uma fórmula (para colorir no editor)
+  function refsInFormula(formula) {
+    if (!formula || formula[0] !== '=') return [];
+    let toks;
+    try { toks = tokenize(formula.slice(1)); } catch (e) { return []; }
+    return toks.filter((t) => t.t === 'ref').map((t) => ({ sheet: t.sheet, ref: t.ref, s: t.s + 1, e: t.e + 1, text: formula.slice(t.s + 1, t.e + 1) }));
+  }
+
+  // ---------- Registro de funções ----------
+  const FUNCTIONS = {}; // canônico -> { impl, pt, args, desc, cat }
+  const INFO = [];      // lista para autocompletar
+  function def(name, pt, args, desc, impl, cat) {
+    FUNCTIONS[name] = { impl, pt: pt || name, args, desc, cat: cat || '' };
+    if (pt && pt !== name) ALIASES[pt.toUpperCase()] = name;
+    INFO.push({ name, pt: pt || name, args, desc, cat: cat || '' });
+  }
+  function alias(ptName, name) { ALIASES[ptName.toUpperCase()] = name; }
 
   global.GridEngine = {
-    Sheet, CellError, ERR, colToNum, numToCol, parseAddr, addrToStr, parseFormula, tokenize, toStr, toNumber,
-    FUNCTION_NAMES: Object.keys(FUNCTIONS).sort(),
+    // tipos e erros
+    CellError, ERR, mkErr, isErr, Matrix, RangeRef, Workbook,
+    // endereços
+    colToNum, numToCol, parseAddr, addrToStr, quoteSheet,
+    // análise e avaliação
+    tokenize, parseFormula, evaluate, scalarOf, toMatrix, isArr, lift1, lift2, flat, safe,
+    toNumber, toStr, toBool, compare, parseLiteral, serialToDate, dateToSerial, EPOCH,
+    // reescrita
+    shiftFormula, structuralShift, renameSheetRefs, refsInFormula, fmtRefParts,
+    // funções
+    FUNCTIONS, ALIASES, INFO, def, alias,
   };
 })(window);
