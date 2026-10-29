@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Planilhas</title>
+  <meta name="description" content="Editor de planilhas online, no estilo do Google Planilhas, que roda inteiro no navegador.">
+  <meta name="theme-color" content="#0d0d0d">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&family=Inconsolata&family=Lato:wght@400;700&family=Lora&family=Merriweather&family=Montserrat:wght@400;700&family=Open+Sans:wght@400;700&family=Oswald&display=swap">
+  <link rel="stylesheet" href="src/styles.css">
+</head>
+<body>
+  <header class="appbar">
+    <div class="appbar-left">
+      <a class="app-logo" href="./" title="Planilhas" aria-label="Planilhas">
+        <svg width="34" height="34" viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="2" width="26" height="28" rx="4" fill="#e30613"/><path d="M8 10h16M8 16h16M8 22h16M14 10v12" stroke="#fff" stroke-width="2.2" fill="none"/></svg>
+      </a>
+      <div class="title-block">
+        <div class="title-row">
+          <input id="doc-title" class="doc-title" spellcheck="false" aria-label="Nome da planilha">
+          <button id="btn-star" class="icon-btn star" title="Marcar com estrela" aria-label="Marcar com estrela"><svg width="18" height="18" viewBox="0 0 24 24"><path d="m12 4 2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16.4l-4.8 2.5.9-5.4-3.9-3.8 5.4-.8z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></button>
+          <span id="save-status" class="save-status"></span>
+        </div>
+        <nav id="menubar" class="menubar" aria-label="Menus"></nav>
+      </div>
+    </div>
+    <div class="appbar-right">
+      <button id="btn-history" class="icon-btn hdr-btn" title="Histórico de versões" aria-label="Histórico de versões"><svg width="22" height="22" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.6M4 4v4h4M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <button id="btn-share" class="btn-share"><svg width="18" height="18" viewBox="0 0 24 24"><path d="M7 11V8a5 5 0 0 1 10 0v3M5.5 11h13v9.5h-13z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg><span>Compartilhar</span></button>
+    </div>
+  </header>
+
+  <div class="toolbar-wrap"><div id="toolbar" class="toolbar" role="toolbar" aria-label="Barra de ferramentas"></div></div>
+
+  <div class="formula-bar">
+    <div class="name-box-wrap">
+      <input id="name-box" class="name-box" spellcheck="false" aria-label="Caixa de nome">
+      <button id="name-box-dd" class="nb-dd" aria-label="Intervalos nomeados"><svg width="14" height="14" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5" fill="none" stroke="currentColor" stroke-width="2"/></svg></button>
+    </div>
+    <span class="fx" aria-hidden="true">fx</span>
+    <div class="formula-wrap">
+      <div id="formula-mirror" class="formula-mirror" aria-hidden="true"></div>
+      <textarea id="formula-input" class="formula-input" rows="1" spellcheck="false" aria-label="Barra de fórmulas"></textarea>
+    </div>
+  </div>
+
+  <div class="main">
+    <div id="grid-wrap" class="grid-wrap">
+      <canvas id="grid-canvas"></canvas>
+      <div id="grid-scroll" class="grid-scroll"><div id="grid-spacer"></div></div>
+      <div id="charts-layer" class="charts-layer"></div>
+      <div id="cell-editor-box" class="cell-editor-box" hidden>
+        <div id="cell-editor-mirror" class="cell-editor-mirror" aria-hidden="true"></div>
+        <textarea id="cell-editor" class="cell-editor" spellcheck="false" aria-label="Editar célula"></textarea>
+      </div>
+      <div id="add-rows" class="add-rows" hidden>Adicionar <input id="add-rows-n" value="1000" aria-label="Quantidade de linhas"> linhas na parte inferior <button class="btn" id="add-rows-btn">Adicionar</button></div>
+      <div id="find-bar" class="find-bar" hidden>
+        <input placeholder="Localizar na página" aria-label="Localizar">
+        <span class="fb-count"></span>
+        <button class="icon-btn fb-up" title="Anterior" aria-label="Anterior"><svg width="18" height="18" viewBox="0 0 24 24"><path d="m7 14 5-5 5 5" fill="none" stroke="currentColor" stroke-width="2"/></svg></button>
+        <button class="icon-btn fb-down" title="Próximo" aria-label="Próximo"><svg width="18" height="18" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5" fill="none" stroke="currentColor" stroke-width="2"/></svg></button>
+        <button class="icon-btn fb-more" title="Localizar e substituir" aria-label="Mais opções"><svg width="18" height="18" viewBox="0 0 24 24"><circle cx="12" cy="5.5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18.5" r="1.6"/></svg></button>
+        <button class="icon-btn fb-x" title="Fechar" aria-label="Fechar"><svg width="18" height="18" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2"/></svg></button>
+      </div>
+      <button id="pivot-chip" class="pivot-chip" hidden>Editar tabela dinâmica</button>
+      <textarea id="grid-focus" class="grid-focus" aria-label="Planilha" autocomplete="off" spellcheck="false"></textarea>
+    </div>
+    <aside id="side-panel" class="side-panel" hidden></aside>
+  </div>
+
+  <footer class="tabsbar">
+    <button id="tab-add" class="icon-btn tab-btn" title="Adicionar página" aria-label="Adicionar página"><svg width="20" height="20" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+    <button id="tab-list" class="icon-btn tab-btn" title="Todas as páginas" aria-label="Todas as páginas"><svg width="20" height="20" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+    <div id="tabs" class="tabs"></div>
+    <button id="summary" class="summary" hidden></button>
+  </footer>
+
+  <div id="autocomplete" class="autocomplete" hidden></div>
+  <div id="fn-help" class="fn-help" hidden></div>
+  <div id="cell-tip" class="cell-tip" hidden></div>
+  <div id="link-card" class="link-card" hidden></div>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <div id="print-area" class="print-area"></div>
+  <div class="drop-overlay">Solte o arquivo para abrir como nova planilha</div>
+
+  <script src="src/engine.js"></script>
+  <script src="src/functions.js"></script>
+  <script src="src/functions2.js"></script>
+  <script src="src/model.js"></script>
+  <script src="src/grid.js"></script>
+  <script src="src/editor.js"></script>
+  <script src="src/commands.js"></script>
+  <script src="src/chrome.js"></script>
+  <script src="src/chrome2.js"></script>
+  <script src="src/panels.js"></script>
+  <script src="src/dialogs.js"></script>
+  <script src="src/charts.js"></script>
+  <script src="src/io.js"></script>
+  <script src="src/app.js"></script>
+</body>
+</html>
