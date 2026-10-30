@@ -106,9 +106,24 @@ src/app.js          inicialização
 tests/              testes do motor (node tests/engine.test.js)
 ```
 
+## Planilhas compartilhadas (tempo real)
+
+O servidor (`server/`, Node.js + Postgres) guarda as planilhas na nuvem e sincroniza as edições ao vivo.
+
+- **Conta:** cada pessoa entra com e-mail e senha. Quem salva uma planilha na nuvem (Arquivo › Salvar na nuvem) é o dono e administrador dela.
+- **Compartilhar:** o administrador adiciona pessoas (administrador, editor ou leitor), cria setores e define, por setor ou por pessoa, o que cada um pode fazer em cada página e em cada coluna: oculta, somente ver ou editar. A regra da pessoa tem prioridade sobre a do setor.
+- **Colunas por setor:** em Compartilhar › Colunas por setor, um quadro mostra todas as colunas da página × todos os setores; o administrador escolhe em cada cruzamento: padrão, oculta, ver ou editar.
+- **Estrutura das colunas:** só administradores inserem, excluem, ocultam ou redimensionam colunas (A, B, C…).
+- **Permissões da coluna:** clique com o botão direito no cabeçalho de uma coluna (ou Dados › Permissões por coluna). Colunas ocultas não aparecem para a pessoa e os dados delas nem chegam ao navegador dela; fórmulas visíveis que dependem delas mostram `#OCULTO!`. Colunas somente leitura têm um cadeado no cabeçalho.
+- **Histórico de edições:** clique com o botão direito numa célula › Mostrar histórico de edições (quem alterou, quando, valor anterior e novo).
+- **Intervalos protegidos:** Dados › Proteger páginas e intervalos.
+
+Variáveis do servidor: `DATABASE_URL` (Postgres), `PGSCHEMA` (opcional, schema próprio), `ALLOWED_ORIGINS` (sites que podem usar a API). Sem `DATABASE_URL`, os dados ficam em memória (apenas para testes). Testes: `npm test`.
+
 ## Limitações
 
-- Sem colaboração em tempo real nem contas: cada pessoa edita a própria cópia, salva no navegador.
+- O histórico de edições registra alterações de valor; inserir ou excluir linhas e colunas não desloca o histórico das células.
+- Quem tem colunas ocultas não pode ordenar a página nem inserir/excluir linhas que mexeriam nelas; em páginas com permissões por coluna, só administradores inserem ou excluem colunas.
 - O `.xlsx` exportado leva valores, fórmulas, formatos de número, mesclagens, larguras e notas, mas não cores e fontes (limite da biblioteca SheetJS gratuita).
 - Não há Apps Script, macros, GOOGLEFINANCE, IMPORTRANGE nem QUERY.
 

@@ -42,7 +42,7 @@
     let maxR = 0, maxC = 0;
     for (const a in sh.cells) {
       const c = sh.cells[a];
-      if (!c || c.v === '' || c.v === undefined || c.v === null) continue;
+      if (!c || ((c.v === '' || c.v === undefined || c.v === null) && !c._h)) continue;
       const p = E.parseAddr(a);
       if (!p) continue;
       if (p.row > maxR) maxR = p.row;
@@ -71,6 +71,8 @@
       return out;
     },
     used: (i) => usedRange(doc.sheets[i]),
+    // células de colunas ocultas por permissão (planilhas compartilhadas)
+    blocked: (i, r, c) => { const sh = doc.sheets[i]; const x = sh && sh.cells[addr(r, c)]; return !!(x && x._h); },
     namedRange: (name) => {
       const key = Object.keys(doc.names).find((k) => k.toUpperCase() === name);
       return key ? doc.names[key] : null;
@@ -463,7 +465,7 @@
     return set;
   };
   App.isRowHidden = (sh, r) => !!sh.hiddenRows[r] || App.filterHidden(sh).has(r);
-  App.isColHidden = (sh, c) => !!sh.hiddenCols[c];
+  App.isColHidden = (sh, c) => !!sh.hiddenCols[c] || !!(App.colBlocked && App.colBlocked(sh, c));
 
   // Condições usadas por filtros, formatação condicional e validação
   App.CONDITIONS = [
@@ -654,9 +656,11 @@
     } else {
       sh.colW = shiftMap(sh.colW, at, count);
       sh.hiddenCols = shiftMap(sh.hiddenCols, at, count);
+      if (sh.access) { const acc = {}; for (const k in sh.access) acc[k] = shiftMap(sh.access[k], at, count); sh.access = acc; }
       sh.cols = Math.max(1, sh.cols + count);
       if (sh.freeze.cols >= at) sh.freeze.cols = Math.max(0, count > 0 ? sh.freeze.cols + count : Math.max(at - 1, sh.freeze.cols + count));
     }
+    if (sh.protected && sh.protected.length) sh.protected = sh.protected.map((x) => { const R = shiftRect(x.range, axis, at, count); return R ? Object.assign({}, x, { range: R }) : null; }).filter(Boolean);
     sh.merges = sh.merges.map((g) => shiftRect(g, axis, at, count)).filter((g) => g && (g.r1 !== g.r2 || g.c1 !== g.c2));
     sh.cf = sh.cf.map((x) => { const R = shiftRect(x.range, axis, at, count); return R ? Object.assign(x, { range: R }) : null; }).filter(Boolean);
     sh.dv = sh.dv.map((x) => { const R = shiftRect(x.range, axis, at, count); return R ? Object.assign(x, { range: R }) : null; }).filter(Boolean);

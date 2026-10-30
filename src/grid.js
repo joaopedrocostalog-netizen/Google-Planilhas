@@ -668,6 +668,7 @@
       for (let c = c0; c <= c1; c++) {
         const w = colW(c), x = hw + st.left[c] - sx;
         if (!w) {
+          if (!sh.hiddenCols[c]) continue; // oculta por permissão: sem marcador
           // marcador de coluna oculta
           ctx.fillStyle = '#7a7a7a';
           ctx.beginPath(); ctx.moveTo(x - 6 * z, hh / 2 - 4 * z); ctx.lineTo(x - 2 * z, hh / 2); ctx.lineTo(x - 6 * z, hh / 2 + 4 * z); ctx.fill();
@@ -679,6 +680,13 @@
         ctx.fillStyle = inSel ? (fullCols ? C.hdrFullText : C.hdrSelText) : C.hdrText;
         ctx.font = `${inSel ? 'bold ' : ''}${(11 * z).toFixed(1)}px Arial, sans-serif`;
         ctx.fillText(E.numToCol(c), x + w / 2, hh / 2 + 0.5);
+        if (App.colReadonly && w > 34 * z && App.colReadonly(sh, c)) {
+          // cadeado: coluna somente para visualizar
+          const lx = x + w - 13 * z, ly = hh / 2 - 1 * z;
+          ctx.fillStyle = '#8a8a8a'; ctx.strokeStyle = '#8a8a8a'; ctx.lineWidth = 1.2 * z;
+          ctx.fillRect(lx - 3.5 * z, ly, 7 * z, 5.5 * z);
+          ctx.beginPath(); ctx.arc(lx, ly, 2.4 * z, Math.PI, 0); ctx.stroke();
+        }
         ctx.fillStyle = C.hdrLine; ctx.fillRect(Math.round(x + w) - 1, 0, 1, hh);
       }
       ctx.restore();
@@ -742,12 +750,14 @@
     }
     if (y < st.hdrH) {
       const c = colAtScreen(x);
+      // planilha compartilhada: só administradores mexem na estrutura das colunas
+      if (App.colsLocked && App.colsLocked()) return { area: 'colHdr', c };
       const right = colX(c) + colW(c);
       if (Math.abs(x - right) <= 4) return { area: 'colEdge', c };
       const left = colX(c);
       if (Math.abs(x - left) <= 4 && c > 1) {
         let p = c - 1; while (p > 1 && !colW(p)) p--;
-        if (!colW(c - 1)) return { area: 'unhideCols', c };
+        if (!colW(c - 1) && App.sheet().hiddenCols[c - 1]) return { area: 'unhideCols', c };
         return { area: 'colEdge', c: p };
       }
       return { area: 'colHdr', c };

@@ -11,6 +11,8 @@
   const API = String(window.PLANILHAS_API || location.origin).replace(/\/$/, '');
   const TOKEN_KEY = 'planilhas:token';
   const LEVELS = [['none', 'Sem acesso'], ['view', 'Ver'], ['edit', 'Editar']];
+  const COL_LEVELS = [['none', 'Oculta'], ['view', 'Somente ver'], ['edit', 'Editar']];
+  const levelLabel = (l) => ({ none: 'sem acesso', view: 'ver', edit: 'editar' }[l] || l);
   const ROLES = [['admin', 'Administrador'], ['editor', 'Editor'], ['viewer', 'Leitor']];
 
   const cloud = (App.cloud = { token: null, user: null, ws: null, id: null, perms: null, me: null, peers: new Map(), pending: new Map(), seq: 0, connected: false, closing: false, retry: 0, initialized: false });
@@ -195,7 +197,8 @@
     if (!cloud.id && !App.cloudMode) return;
     disconnect();
     cloud.id = null; cloud.perms = null; cloud.initialized = false; cloud.pending.clear();
-    App.cloudMode = false; App.validatePatch = null; App.editGuard = null;
+    App.cloudMode = false; App.validatePatch = null; App.editGuard = null; App.colBlocked = null; App.colReadonly = null; App.colsLocked = null;
+    closeHistory();
     renderChip();
   }
   function handle(m) {
@@ -240,10 +243,17 @@
       send({ type: 'patch', id, patch: p });
     }
     cloud.peers = new Map((m.peers || []).map((p) => [p.cid, p]));
-    App.validatePatch = (p) => Perms.validate(p, cloud.perms, doc);
+    App.validatePatch = (p) => { const err = Perms.validate(p, cloud.perms, doc); if (err) cloud.remask = true; return err; };
+    // colunas ocultas por permissão somem da grade; as somente leitura ganham um cadeado no cabeçalho
+    App.colBlocked = cloud.perms.admin ? null : (sh, c) => Perms.colLevel(cloud.perms, sh.id, c) === 'none';
+    App.colReadonly = cloud.perms.admin ? null : (sh, c) => Perms.hasColRules(cloud.perms, sh.id) && Perms.colLevel(cloud.perms, sh.id, c) === 'view';
+    App.colsLocked = () => !!(App.cloudMode && cloud.perms && !cloud.perms.admin);
     App.editGuard = (sh, r, c) => {
-      const lv = Perms.levelOf(cloud.perms, sh.id);
-      if (lv !== 'edit') return lv === 'view' ? `Você só pode visualizar a página "${sh.name}".` : 'Você não tem acesso a esta página.';
+      const lv = Perms.colLevel(cloud.perms, sh.id, c);
+      if (lv !== 'edit') {
+        if (lv === 'none') return 'Você não tem acesso a esta coluna.';
+        return Perms.hasColRules(cloud.perms, sh.id) ? `Você só pode visualizar a coluna ${Perms.colName(c)} da página "${sh.name}".` : `Você só pode visualizar a página "${sh.name}".`;
+      }
       const pr = Perms.blockingProtection(cloud.perms, sh, App.E.addrToStr(r, c));
       return pr ? `Esta célula está protegida${pr.desc ? ' (' + pr.desc + ')' : ''}. Peça acesso a um administrador.` : null;
     };
@@ -279,6 +289,19 @@
     if (cloud.connected) { send({ type: 'patch', id, patch: p }); setStatus('saving'); } else setStatus('offline');
   });
   App.on('localDoc', leaveCloud);
+  App.on('change', () => {
+    if (!cloud.remask) return;
+    cloud.remask = false;
+    if (!App.colBlocked) return;
+    let n = 0;
+    for (const sh of doc.sheets) {
+      for (const a in sh.cells) {
+        const x = sh.cells[a];
+        if (x && !x._h && !Object.keys(x).length && App.colBlocked(sh, Perms.colOf(a))) { x._h = 1; n++; }
+      }
+    }
+    if (n) { App.invalidate(); App.grid.draw(); }
+  });
   setInterval(() => { if (cloud.connected) send({ type: 'ping' }); }, 20000);
   window.addEventListener('beforeunload', (e) => {
     if (App.cloudMode && cloud.pending.size) { e.preventDefault(); e.returnValue = 'Algumas alterações ainda não foram enviadas.'; }
@@ -317,11 +340,18 @@
     const chip = $('cloud-chip');
     if (!chip) return;
     if (!App.cloudMode || !cloud.perms) { chip.hidden = true; return; }
-    const lv = Perms.levelOf(cloud.perms, App.sheet().id);
+    const P = cloud.perms, id = App.sheet().id;
+    const best = Perms.bestLevel(P, id), page = Perms.levelOf(P, id), partial = Perms.hasColRules(P, id);
     chip.hidden = false;
-    chip.className = 'cloud-chip' + (lv !== 'edit' ? ' readonly' : '');
-    chip.textContent = lv !== 'edit' ? 'Somente visualização' : cloud.perms.sectorName ? 'Setor ' + cloud.perms.sectorName : roleLabel(cloud.perms.role)[0].toUpperCase() + roleLabel(cloud.perms.role).slice(1);
-    chip.title = cloud.perms.admin ? 'Você é administrador desta planilha.' : `Seu acesso: ${roleLabel(cloud.perms.role)}${cloud.perms.sectorName ? ', setor ' + cloud.perms.sectorName : ''}.`;
+    chip.className = 'cloud-chip' + (best !== 'edit' ? ' readonly' : '');
+    chip.textContent = best !== 'edit' ? 'Somente visualização' : partial || page !== 'edit' ? 'Acesso por coluna' : P.sectorName ? 'Setor ' + P.sectorName : roleLabel(P.role)[0].toUpperCase() + roleLabel(P.role).slice(1);
+    let title = P.admin ? 'Você é administrador desta planilha.' : `Seu acesso: ${roleLabel(P.role)}${P.sectorName ? ', setor ' + P.sectorName : ''}.`;
+    if (partial) {
+      const m = P.cols[id] || {};
+      const by = (l) => Object.keys(m).filter((c) => m[c] === l).map((c) => Perms.colName(+c)).join(', ');
+      title += `\nDemais colunas: ${levelLabel(page)}.` + (by('edit') ? `\nPode editar: ${by('edit')}.` : '') + (by('view') ? `\nSomente ver: ${by('view')}.` : '') + (by('none') ? `\nOcultas: ${by('none')}.` : '');
+    }
+    chip.title = title;
   }
   App.on('sheet', renderChip);
 
@@ -398,7 +428,12 @@
   }
   function shareInfo() {
     const p = cloud.perms;
-    const rows = doc.sheets.map((s) => `<tr><td>${esc(s.name)}</td><td>${Perms.levelOf(p, s.id) === 'edit' ? 'Pode editar' : 'Somente visualizar'}</td></tr>`).join('');
+    const rows = doc.sheets.map((s) => {
+      const lv = Perms.levelOf(p, s.id), m = (p.cols && p.cols[s.id]) || {};
+      const by = (l) => Object.keys(m).filter((c) => m[c] === l).map((c) => Perms.colName(+c)).join(', ');
+      const extra = Object.keys(m).length ? `<small class="sp-hint">${by('edit') ? 'Edita: ' + by('edit') + '. ' : ''}${by('view') ? 'Somente vê: ' + by('view') + '. ' : ''}${by('none') ? 'Ocultas: ' + by('none') + '.' : ''}</small>` : '';
+      return `<tr><td>${esc(s.name)}</td><td>${lv === 'edit' ? 'Pode editar' : lv === 'view' ? 'Somente visualizar' : 'Só as colunas liberadas'}${extra}</td></tr>`;
+    }).join('');
     App.ui.modal({
       title: `Compartilhar "${doc.title}"`, width: '480px',
       body: `<p class="modal-text">Seu acesso: <b>${esc(roleLabel(p.role))}</b>${p.sectorName ? ` · setor <b>${esc(p.sectorName)}</b>` : ''}. Somente administradores podem convidar pessoas e mudar permissões.</p>
@@ -407,17 +442,69 @@
       buttons: [{ label: 'Copiar link', action: () => { navigator.clipboard.writeText(docLink(cloud.id)).then(() => notify('Link copiado.')); return false; } }, { label: 'Fechar', primary: true }],
     });
   }
+  // Editor de colunas: escolhe, para uma regra (setor ou pessoa), o nível de cada coluna de uma página
+  function columnEditor({ title, hint, sheet, map, inheritLabel, onDone }) {
+    const si = doc.sheets.indexOf(sheet);
+    const used = App.usedRange(sheet).maxC;
+    const n = Math.min(sheet.cols, Math.max(used, 8, ...Object.keys(map).map(Number)));
+    const head = (c) => { try { const v = App.value(si, 1, c); return v === null || v === undefined ? '' : String(App.fmtValue(v, App.style(sheet, 1, c).nf)); } catch (e) { return ''; } };
+    const opt = (cur) => `<option value="">${esc(inheritLabel)}</option>` + COL_LEVELS.map(([k, l]) => `<option value="${k}"${cur === k ? ' selected' : ''}>${l}</option>`).join('');
+    const rows = [];
+    for (let c = 1; c <= n; c++) rows.push(`<tr><td class="ce-col">${Perms.colName(c)}</td><td class="ce-head">${esc(head(c).slice(0, 40)) || '<span class="sp-hint">(vazia)</span>'}</td><td><select class="input" data-c="${c}">${opt(map[c])}</select></td></tr>`);
+    App.ui.modal({
+      title, width: '560px', cls: 'modal-tall', enterSubmits: false,
+      body: `<p class="sp-hint">${esc(hint)}</p>
+        <div class="ce-all"><span>Aplicar a todas as colunas:</span><select class="input" id="ce-all"><option value="-">Escolher…</option>${opt(null)}</select></div>
+        <table class="sector-matrix ce-table"><thead><tr><th>Coluna</th><th>Cabeçalho (linha 1)</th><th>Acesso</th></tr></thead><tbody>${rows.join('')}</tbody></table>`,
+      buttons: [{ label: 'Cancelar' }, { label: 'Aplicar', primary: true, action: (d) => {
+        const out = {};
+        d.querySelectorAll('select[data-c]').forEach((x) => { if (x.value) out[x.dataset.c] = x.value; });
+        onDone(out);
+      } }],
+      onOpen: (d) => {
+        d.querySelector('#ce-all').onchange = (e) => {
+          if (e.target.value === '-') return;
+          d.querySelectorAll('select[data-c]').forEach((x) => { x.value = e.target.value; });
+          e.target.value = '-';
+        };
+      },
+    });
+  }
+  const ruleCount = (access, key) => Object.keys((access && access[key]) || {}).length;
+  const newId = (p) => (p || '') + Math.random().toString(36).slice(2, 8) + Math.random().toString(36).slice(2, 6);
+  // Grava as regras por coluna alteradas (ficam dentro das páginas)
+  function commitAccess(draft, validKeys) {
+    const changes = [];
+    for (const sh of doc.sheets) {
+      if (!draft[sh.id] && !sh.access) continue;
+      const src = draft[sh.id] || sh.access;
+      const clean = {};
+      for (const k in src) if (validKeys.has(k) && src[k] && Object.keys(src[k]).length) clean[k] = src[k];
+      const next = Object.keys(clean).length ? clean : null;
+      if (JSON.stringify(next) !== JSON.stringify(sh.access || null)) changes.push([sh, next]);
+    }
+    if (changes.length) App.change('Permissões por coluna', () => { for (const [sh, next] of changes) { if (next) sh.access = next; else delete sh.access; } });
+    return changes.length;
+  }
+
   async function shareDialog() {
     let st;
     try { st = await api('GET', `/api/docs/${cloud.id}/share`); }
     catch (e) { notify(e.message); return; }
     const acl = JSON.parse(JSON.stringify(st.acl));
-    const newId = () => Math.random().toString(36).slice(2, 8);
+    acl.members.forEach((mb) => { if (!mb.rid) mb.rid = newId('m'); });
+    // rascunho das regras por coluna, por página
+    const draft = {};
+    const sheetById = (id) => doc.sheets.find((s) => s.id === id);
+    const accessOf = (sid) => draft[sid] || (draft[sid] = JSON.parse(JSON.stringify((sheetById(sid) || {}).access || {})));
+    const peekAccess = (sid) => draft[sid] || (sheetById(sid) || {}).access || {};
     const m = App.ui.modal({
-      title: `Compartilhar "${doc.title}"`, width: '780px', cls: 'modal-tall share-modal', enterSubmits: false,
-      body: `<div class="sp-tabs share-tabs"><button class="on" data-t="people">Pessoas</button><button data-t="sectors">Setores e permissões</button><button data-t="link">Acesso pelo link</button></div>
-        <div class="share-pane" data-pane="people"></div><div class="share-pane" data-pane="sectors" hidden></div><div class="share-pane" data-pane="link" hidden></div>`,
+      title: `Compartilhar "${doc.title}"`, width: '820px', cls: 'modal-tall share-modal', enterSubmits: false,
+      body: `<div class="sp-tabs share-tabs"><button class="on" data-t="people">Pessoas</button><button data-t="sectors">Setores e permissões</button><button data-t="cols">Colunas por setor</button><button data-t="link">Acesso pelo link</button></div>
+        <div class="share-pane" data-pane="people"></div><div class="share-pane" data-pane="sectors" hidden></div><div class="share-pane" data-pane="cols" hidden></div><div class="share-pane" data-pane="link" hidden></div>`,
       buttons: [{ label: 'Cancelar' }, { label: 'Salvar', primary: true, action: () => {
+        const valid = new Set([...acl.sectors.map((s) => s.id), ...acl.members.map((x) => x.rid), 'link']);
+        commitAccess(draft, valid);
         api('PUT', `/api/docs/${cloud.id}/share`, { acl }).then(() => notify('Compartilhamento atualizado.')).catch((e) => notify(e.message));
       } }],
     });
@@ -429,47 +516,106 @@
     }));
     const sectorOpts = (cur, emptyLabel) => `<option value="">${esc(emptyLabel || 'Sem setor (acesso conforme o papel)')}</option>` + acl.sectors.map((s) => `<option value="${esc(s.id)}"${cur === s.id ? ' selected' : ''}>${esc(s.name)}</option>`).join('');
     const opts = (list, cur) => list.map(([k, l]) => `<option value="${k}"${cur === k ? ' selected' : ''}>${l}</option>`).join('');
+    const lvName = (l) => (LEVELS.find((x) => x[0] === l) || ['', l])[1];
+    const totalRules = (key) => st.sheets.reduce((n, sh) => n + ruleCount(peekAccess(sh.id), key) + (0), 0);
+
+    // permissões próprias de uma pessoa: páginas e colunas (têm prioridade sobre as do setor)
+    function personEditor(mb) {
+      const sec = acl.sectors.find((s) => s.id === mb.sector);
+      const cap = mb.role === 'viewer' ? 'view' : 'edit';
+      const own = Object.assign({}, mb.sheets || {});
+      const base = (sid) => (sec ? (sec.sheets[sid] || sec.default) : cap);
+      const pageLv = (sid) => own[sid] || base(sid);
+      const pm = App.ui.modal({
+        title: `Permissões de ${mb.name || mb.email}`, width: '640px', enterSubmits: false,
+        body: `<p class="sp-hint">O que você definir aqui vale só para esta pessoa e tem prioridade sobre ${sec ? `o setor <b>${esc(sec.name)}</b>` : 'o papel dela'}. ${mb.role === 'viewer' ? 'Leitores nunca editam.' : ''}</p>
+          <table class="sector-matrix pe-table"><thead><tr><th>Página</th><th>Acesso à página</th><th>Colunas</th></tr></thead><tbody></tbody></table>`,
+        buttons: [{ label: 'Cancelar' }, { label: 'Aplicar', primary: true, action: () => {
+          if (Object.keys(own).length) mb.sheets = own; else delete mb.sheets;
+          renderPeople();
+        } }],
+      });
+      const body = pm.el.querySelector('tbody');
+      const draw = () => {
+        body.innerHTML = st.sheets.map((sh) => {
+          const n = ruleCount(peekAccess(sh.id), mb.rid);
+          return `<tr><td>${esc(sh.name)}</td><td><select class="input" data-ps="${esc(sh.id)}"><option value="">Conforme ${sec ? 'o setor' : 'o papel'} (${lvName(base(sh.id))})</option>${opts(LEVELS, own[sh.id])}</select></td>
+            <td><button class="btn btn-sm" data-pc="${esc(sh.id)}">${icon('lock', 14)} Colunas${n ? ` (${n})` : ''}</button></td></tr>`;
+        }).join('');
+        body.querySelectorAll('[data-ps]').forEach((x) => (x.onchange = () => { if (x.value) own[x.dataset.ps] = x.value; else delete own[x.dataset.ps]; }));
+        body.querySelectorAll('[data-pc]').forEach((b) => (b.onclick = () => {
+          const sid = b.dataset.pc, sheet = sheetById(sid);
+          if (!sheet) return;
+          columnEditor({
+            title: `Colunas de "${sheet.name}" para ${mb.name || mb.email}`,
+            hint: 'Escolha o que esta pessoa pode fazer em cada coluna. "Conforme a página" segue o acesso definido para a página inteira.',
+            sheet, map: Object.assign({}, accessOf(sid)[mb.rid] || {}), inheritLabel: `Conforme a página (${lvName(pageLv(sid))})`,
+            onDone: (out) => { const acc = accessOf(sid); if (Object.keys(out).length) acc[mb.rid] = out; else delete acc[mb.rid]; draw(); },
+          });
+        }));
+      };
+      draw();
+    }
+
     function renderPeople() {
       const pane = d.querySelector('[data-pane="people"]');
       pane.innerHTML = `<div class="share-add"><input class="input" id="sh-email" type="email" placeholder="E-mail da pessoa"><select class="input" id="sh-role">${opts(ROLES, 'editor')}</select><select class="input" id="sh-sector">${sectorOpts(null)}</select><button class="btn btn-primary" id="sh-add">Adicionar</button></div>
-        <p class="sp-hint">A pessoa precisa entrar com este e-mail. Se ainda não tiver conta, o acesso fica reservado até ela se cadastrar.</p>
+        <p class="sp-hint">A pessoa precisa entrar com este e-mail. Se ainda não tiver conta, o acesso fica reservado até ela se cadastrar. Em <b>Permissões</b> você escolhe as páginas e colunas que cada pessoa pode ver ou editar.</p>
         <div class="share-list">
-          ${st.owner ? `<div class="share-row"><span class="avatar" style="background:${st.owner.color}">${esc(st.owner.name[0].toUpperCase())}</span><div class="sr-who"><b>${esc(st.owner.name)}</b><small>${esc(st.owner.email)}</small></div><span class="sr-fixed">Dono</span></div>` : ''}
-          ${acl.members.map((mb, i) => `<div class="share-row"><span class="avatar" style="background:${mb.registered === false ? '#9a9a9a' : '#5f6368'}">${esc((mb.name || mb.email)[0].toUpperCase())}</span>
+          ${st.owner ? `<div class="share-row"><span class="avatar" style="background:${st.owner.color}">${esc(st.owner.name[0].toUpperCase())}</span><div class="sr-who"><b>${esc(st.owner.name)}</b><small>${esc(st.owner.email)}</small></div><span class="sr-fixed">Dono · administrador</span></div>` : ''}
+          ${acl.members.map((mb, i) => {
+            const own = Object.keys(mb.sheets || {}).length + totalRules(mb.rid);
+            return `<div class="share-row"><span class="avatar" style="background:${mb.registered === false ? '#9a9a9a' : '#5f6368'}">${esc((mb.name || mb.email)[0].toUpperCase())}</span>
             <div class="sr-who"><b>${esc(mb.name || mb.email)}</b><small>${esc(mb.email)}${mb.registered === false ? ' · aguardando cadastro' : ''}${st.online.includes(mb.email) ? ' · <span class="online">online</span>' : ''}</small></div>
             <select class="input" data-role="${i}">${opts(ROLES, mb.role)}</select><select class="input" data-sector="${i}"${mb.role === 'admin' ? ' disabled' : ''}>${sectorOpts(mb.sector)}</select>
-            <button class="icon-btn" data-rm="${i}" title="Remover acesso">${icon('close', 16)}</button></div>`).join('')}
+            <button class="btn btn-sm" data-perm="${i}"${mb.role === 'admin' ? ' disabled title="Administradores veem e editam tudo"' : ''}>Permissões${own ? ` (${own})` : ''}</button>
+            <button class="icon-btn" data-rm="${i}" title="Remover acesso">${icon('close', 16)}</button></div>`;
+          }).join('')}
         </div>`;
       pane.querySelector('#sh-add').onclick = () => {
         const email = pane.querySelector('#sh-email').value.trim().toLowerCase();
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return notify('Informe um e-mail válido.');
         if (acl.members.some((x) => x.email === email) || (st.owner && st.owner.email === email)) return notify('Esta pessoa já tem acesso.');
-        acl.members.push({ email, role: pane.querySelector('#sh-role').value, sector: pane.querySelector('#sh-sector').value || null, name: null });
+        acl.members.push({ email, role: pane.querySelector('#sh-role').value, sector: pane.querySelector('#sh-sector').value || null, name: null, rid: newId('m') });
         renderPeople();
       };
       pane.querySelector('#sh-email').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); pane.querySelector('#sh-add').click(); } });
       pane.querySelectorAll('[data-role]').forEach((s) => (s.onchange = () => { acl.members[+s.dataset.role].role = s.value; renderPeople(); }));
       pane.querySelectorAll('[data-sector]').forEach((s) => (s.onchange = () => { acl.members[+s.dataset.sector].sector = s.value || null; }));
+      pane.querySelectorAll('[data-perm]').forEach((b) => (b.onclick = () => personEditor(acl.members[+b.dataset.perm])));
       pane.querySelectorAll('[data-rm]').forEach((b) => (b.onclick = () => { acl.members.splice(+b.dataset.rm, 1); renderPeople(); }));
     }
     function renderSectors() {
       const pane = d.querySelector('[data-pane="sectors"]');
-      pane.innerHTML = `<p class="sp-hint">Crie setores (por exemplo, Comercial ou Financeiro) e defina o que cada um pode ver e editar em cada página. Administradores sempre veem e editam tudo; leitores nunca editam.</p>
+      pane.innerHTML = `<p class="sp-hint">Crie setores (por exemplo, Comercial ou Financeiro) e defina o que cada um pode ver e editar em cada página e em cada coluna. Administradores sempre veem e editam tudo; leitores nunca editam.</p>
         ${acl.sectors.map((s, i) => `<div class="sector-card">
           <div class="sector-head"><input class="input" data-sname="${i}" value="${esc(s.name)}" placeholder="Nome do setor"><button class="icon-btn" data-srm="${i}" title="Excluir setor">${icon('close', 16)}</button></div>
           <div class="sector-row"><label class="field"><span>Acesso padrão às páginas</span><select class="input" data-sdef="${i}">${opts(LEVELS, s.default)}</select></label>
           <label class="check"><input type="checkbox" data-smanage="${i}"${s.manage ? ' checked' : ''}> Pode criar, excluir e renomear páginas</label></div>
-          <table class="sector-matrix"><thead><tr><th>Página</th><th>Acesso</th></tr></thead><tbody>
-          ${st.sheets.map((sh) => `<tr><td>${esc(sh.name)}</td><td><select class="input" data-sheet="${i}:${esc(sh.id)}"><option value="">Padrão (${LEVELS.find((l) => l[0] === s.default)[1]})</option>${opts(LEVELS, s.sheets[sh.id])}</select></td></tr>`).join('')}
+          <table class="sector-matrix"><thead><tr><th>Página</th><th>Acesso</th><th>Colunas</th></tr></thead><tbody>
+          ${st.sheets.map((sh) => { const n = ruleCount(peekAccess(sh.id), s.id); return `<tr><td>${esc(sh.name)}</td><td><select class="input" data-sheet="${i}:${esc(sh.id)}"><option value="">Padrão (${lvName(s.default)})</option>${opts(LEVELS, s.sheets[sh.id])}</select></td>
+            <td><button class="btn btn-sm" data-scols="${i}:${esc(sh.id)}">${icon('lock', 14)} Colunas${n ? ` (${n})` : ''}</button></td></tr>`; }).join('')}
           </tbody></table></div>`).join('') || '<p class="sp-hint">Nenhum setor criado.</p>'}
         <button class="btn" id="sec-add">${icon('plus', 16)} Adicionar setor</button>`;
-      pane.querySelector('#sec-add').onclick = () => { acl.sectors.push({ id: newId(), name: 'Novo setor', default: 'view', sheets: {}, manage: false }); renderSectors(); const ins = pane.querySelectorAll('[data-sname]'); ins[ins.length - 1].select(); };
+      pane.querySelector('#sec-add').onclick = () => { acl.sectors.push({ id: newId('s'), name: 'Novo setor', default: 'view', sheets: {}, manage: false }); renderSectors(); const ins = pane.querySelectorAll('[data-sname]'); ins[ins.length - 1].select(); };
       pane.querySelectorAll('[data-sname]').forEach((x) => (x.oninput = () => { acl.sectors[+x.dataset.sname].name = x.value; }));
       pane.querySelectorAll('[data-sdef]').forEach((x) => (x.onchange = () => { acl.sectors[+x.dataset.sdef].default = x.value; renderSectors(); }));
       pane.querySelectorAll('[data-smanage]').forEach((x) => (x.onchange = () => { acl.sectors[+x.dataset.smanage].manage = x.checked; }));
       pane.querySelectorAll('[data-sheet]').forEach((x) => (x.onchange = () => {
         const [i, id] = x.dataset.sheet.split(':');
         if (x.value) acl.sectors[+i].sheets[id] = x.value; else delete acl.sectors[+i].sheets[id];
+        renderSectors();
+      }));
+      pane.querySelectorAll('[data-scols]').forEach((b) => (b.onclick = () => {
+        const [i, sid] = b.dataset.scols.split(':');
+        const sec = acl.sectors[+i], sheet = sheetById(sid);
+        if (!sheet) return;
+        columnEditor({
+          title: `Colunas de "${sheet.name}" para o setor ${sec.name}`,
+          hint: 'Escolha o que o setor pode fazer em cada coluna. Colunas ocultas não aparecem para o setor e os dados delas nem chegam ao navegador dessas pessoas.',
+          sheet, map: Object.assign({}, accessOf(sid)[sec.id] || {}), inheritLabel: `Conforme a página (${lvName(sec.sheets[sid] || sec.default)})`,
+          onDone: (out) => { const acc = accessOf(sid); if (Object.keys(out).length) acc[sec.id] = out; else delete acc[sec.id]; renderSectors(); },
+        });
       }));
       pane.querySelectorAll('[data-srm]').forEach((b) => (b.onclick = () => {
         const s = acl.sectors[+b.dataset.srm];
@@ -498,9 +644,189 @@
       pane.querySelector('#sh-link-sector').onchange = (e) => { acl.linkSector = e.target.value || null; };
       pane.querySelector('#sh-copy').onclick = () => navigator.clipboard.writeText(docLink(cloud.id)).then(() => notify('Link copiado.'), () => notify('Selecione e copie o link.'));
     }
-    function render() { renderPeople(); renderSectors(); renderLink(); }
+    // quadro único: o administrador escolhe, para cada setor, quais colunas da página ele vê e edita
+    let matrixSheet = (App.sheet() && st.sheets.some((x) => x.id === App.sheet().id)) ? App.sheet().id : (st.sheets[0] && st.sheets[0].id);
+    function renderMatrix() {
+      const pane = d.querySelector('[data-pane="cols"]');
+      if (!acl.sectors.length) {
+        pane.innerHTML = `<p class="sp-hint">Crie os setores na aba <b>Setores e permissões</b> para escolher aqui quais colunas cada setor pode ver e editar.</p>`;
+        return;
+      }
+      const sheet = sheetById(matrixSheet);
+      if (!sheet) { pane.innerHTML = ''; return; }
+      const si = doc.sheets.indexOf(sheet);
+      const n = Math.min(sheet.cols, Math.max(App.usedRange(sheet).maxC, 8));
+      const head = (c) => { try { const v = App.value(si, 1, c); return v === null || v === undefined ? '' : String(App.fmtValue(v, App.style(sheet, 1, c).nf)); } catch (e) { return ''; } };
+      const acc = peekAccess(sheet.id);
+      const short = [['', 'Padrão'], ['none', 'Oculta'], ['view', 'Ver'], ['edit', 'Editar']];
+      const cellSel = (sid, c) => {
+        const cur = (acc[sid] && acc[sid][c]) || '';
+        return `<select class="input mx-sel lv-${cur || 'def'}" data-mx="${esc(sid)}:${c}">${short.map(([k, l]) => `<option value="${k}"${cur === k ? ' selected' : ''}>${l}</option>`).join('')}</select>`;
+      };
+      const rows = [];
+      for (let c = 1; c <= n; c++) rows.push(`<tr><td class="ce-col">${Perms.colName(c)}</td><td class="ce-head">${esc(head(c).slice(0, 30)) || '<span class="sp-hint">(vazia)</span>'}</td>${acl.sectors.map((sec) => `<td>${cellSel(sec.id, c)}</td>`).join('')}</tr>`);
+      pane.innerHTML = `<div class="mx-top"><label class="field"><span>Página</span><select class="input" id="mx-sheet">${st.sheets.map((x) => `<option value="${esc(x.id)}"${x.id === matrixSheet ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+          <p class="sp-hint">Escolha o que cada setor pode fazer em cada coluna. <b>Padrão</b> segue o acesso do setor à página inteira (mostrado abaixo do nome). Colunas <b>ocultas</b> não aparecem para o setor e os dados delas nem chegam ao navegador dessas pessoas. Para uma pessoa específica, use Pessoas › Permissões.</p></div>
+        <div class="mx-wrap"><table class="sector-matrix mx-table"><thead><tr><th>Coluna</th><th>Cabeçalho</th>${acl.sectors.map((sec) => `<th><b>${esc(sec.name)}</b><small>página: ${lvName(sec.sheets[sheet.id] || sec.default).toLowerCase()}</small>
+          <select class="input mx-all" data-mxall="${esc(sec.id)}"><option value="-">Todas…</option>${short.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></th>`).join('')}</tr></thead>
+        <tbody>${rows.join('')}</tbody></table></div>`;
+      pane.querySelector('#mx-sheet').onchange = (e) => { matrixSheet = e.target.value; renderMatrix(); };
+      const set = (sid, c, v) => {
+        const a = accessOf(sheet.id);
+        const rule = a[sid] || (a[sid] = {});
+        if (v) rule[c] = v; else delete rule[c];
+        if (!Object.keys(rule).length) delete a[sid];
+      };
+      pane.querySelectorAll('[data-mx]').forEach((x) => (x.onchange = () => {
+        const [sid, c] = x.dataset.mx.split(':');
+        set(sid, c, x.value);
+        x.className = `input mx-sel lv-${x.value || 'def'}`;
+      }));
+      pane.querySelectorAll('[data-mxall]').forEach((x) => (x.onchange = () => {
+        if (x.value === '-') return;
+        for (let c = 1; c <= n; c++) set(x.dataset.mxall, c, x.value);
+        renderMatrix();
+      }));
+    }
+    function render() { renderPeople(); renderSectors(); renderMatrix(); renderLink(); }
     render();
   }
+
+  // ---------- Permissões das colunas selecionadas (menu do cabeçalho) ----------
+  async function columnAccessDialog() {
+    if (!App.cloudMode) {
+      App.ui.modal({ title: 'Permissões por coluna', width: '460px', body: '<p class="modal-text">As permissões por coluna valem para planilhas na nuvem. Salve esta planilha na nuvem e convide as pessoas para escolher o que cada uma pode ver e editar.</p>', buttons: [{ label: 'Fechar' }, { label: 'Salvar na nuvem', primary: true, action: () => { saveToCloud(true); } }] });
+      return;
+    }
+    if (!cloud.perms.admin) return notify('Somente administradores podem definir permissões por coluna.');
+    let st;
+    try { st = await api('GET', `/api/docs/${cloud.id}/share`); } catch (e) { return notify(e.message); }
+    const sh = App.sheet(), R = App.selRect();
+    const c1 = R.c1, c2 = Math.min(R.c2, R.c1 + 199);
+    const acl = JSON.parse(JSON.stringify(st.acl));
+    let aclChanged = false;
+    acl.members.forEach((mb) => { if (!mb.rid) { mb.rid = newId('m'); aclChanged = true; } });
+    const lvName = (l) => (LEVELS.find((x) => x[0] === l) || ['', l])[1];
+    const targets = [
+      ...acl.sectors.map((s) => ({ key: s.id, who: `Setor ${s.name}`, sub: `Página: ${lvName(s.sheets[sh.id] || s.default)}` })),
+      ...acl.members.filter((mb) => mb.role !== 'admin').map((mb) => ({ key: mb.rid, who: mb.name || mb.email, sub: `${roleLabel(mb.role)}${mb.sector ? ' · setor ' + ((acl.sectors.find((s) => s.id === mb.sector) || {}).name || '') : ''}` })),
+    ];
+    if (acl.link !== 'none' && !acl.linkSector) targets.push({ key: 'link', who: 'Qualquer pessoa com o link', sub: acl.link === 'edit' ? 'Editor' : 'Leitor' });
+    const access = JSON.parse(JSON.stringify(sh.access || {}));
+    const current = (key) => {
+      const vals = new Set();
+      for (let c = c1; c <= c2; c++) vals.add((access[key] && access[key][c]) || '');
+      return vals.size === 1 ? [...vals][0] : 'mixed';
+    };
+    const label = c1 === c2 ? `coluna ${Perms.colName(c1)}` : `colunas ${Perms.colName(c1)} a ${Perms.colName(c2)}`;
+    const opt = (cur) => (cur === 'mixed' ? '<option value="mixed" selected>(vários)</option>' : '') + `<option value=""${cur === '' ? ' selected' : ''}>Conforme a página</option>` + COL_LEVELS.map(([k, l]) => `<option value="${k}"${cur === k ? ' selected' : ''}>${l}</option>`).join('');
+    App.ui.modal({
+      title: `Permissões da ${label}`, width: '600px', enterSubmits: false,
+      body: targets.length ? `<p class="sp-hint">Escolha quem pode ver ou editar a ${esc(label)} da página "${esc(sh.name)}". Administradores sempre veem e editam tudo. A regra de uma pessoa tem prioridade sobre a do setor dela.</p>
+          <div class="share-list">${targets.map((t, i) => `<div class="ca-row"><div class="sr-who"><b>${esc(t.who)}</b><small>${esc(t.sub)}</small></div><select class="input" data-t="${i}">${opt(current(t.key))}</select></div>`).join('')}</div>`
+        : '<p class="modal-text">Ainda não há setores nem pessoas nesta planilha. Use <b>Compartilhar</b> para convidar pessoas e criar setores.</p>',
+      buttons: targets.length ? [{ label: 'Cancelar' }, { label: 'Salvar', primary: true, action: (d) => {
+        d.querySelectorAll('select[data-t]').forEach((x) => {
+          if (x.value === 'mixed') return;
+          const key = targets[+x.dataset.t].key;
+          const rule = access[key] || (access[key] = {});
+          for (let c = c1; c <= c2; c++) { if (x.value) rule[c] = x.value; else delete rule[c]; }
+          if (!Object.keys(rule).length) delete access[key];
+        });
+        const run = () => {
+          App.change('Permissões da coluna', () => { if (Object.keys(access).length) sh.access = access; else delete sh.access; });
+          notify('Permissões da coluna salvas.');
+        };
+        if (aclChanged) api('PUT', `/api/docs/${cloud.id}/share`, { acl }).then(run).catch((e) => notify(e.message));
+        else run();
+      } }] : [{ label: 'Fechar', primary: true }],
+    });
+  }
+
+  // ---------- Histórico de edições da célula ----------
+  let histCard = null;
+  function closeHistory() {
+    if (!histCard) return;
+    histCard.remove(); histCard = null;
+    document.removeEventListener('mousedown', histOutside, true);
+  }
+  function histOutside(e) { if (histCard && !histCard.contains(e.target)) closeHistory(); }
+  async function cellHistory() {
+    if (!App.cloudMode) {
+      App.ui.modal({ title: 'Histórico de edições', width: '460px', body: '<p class="modal-text">O histórico de edições de cada célula (quem alterou, quando e o valor anterior) fica disponível nas planilhas salvas na nuvem.</p>', buttons: [{ label: 'Fechar' }, { label: 'Salvar na nuvem', primary: true, action: () => { saveToCloud(false); } }] });
+      return;
+    }
+    const sh = App.sheet(), r = App.sel.ar, c = App.sel.ac, a = App.E.addrToStr(r, c);
+    let list;
+    try { list = await api('GET', `/api/docs/${cloud.id}/history?sheet=${encodeURIComponent(sh.id)}&addr=${a}`); }
+    catch (e) { return notify(e.message); }
+    closeHistory();
+    const card = (histCard = document.createElement('div'));
+    card.className = 'hist-card';
+    let i = 0;
+    const fmt = (t) => new Date(t).toLocaleString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const val = (v, cls) => `<span class="hist-val${cls ? ' ' + cls : ''}">${esc(String(v).slice(0, 300))}</span>`;
+    const draw = () => {
+      const h = list[i];
+      let body;
+      if (!h) body = '<p class="hist-empty">Nenhum histórico de edições</p>';
+      else {
+        const what = h.before === null && h.after !== null ? `Adicionou ${val(h.after)}`
+          : h.after === null ? `Excluiu ${val(h.before, 'old')}`
+            : `Substituiu ${val(h.before, 'old')} por ${val(h.after)}`;
+        body = `<div class="hist-who"><span class="avatar" style="background:${esc(h.color)}">${esc((h.name || '?').trim()[0].toUpperCase())}</span><div><b>${esc(h.name)}</b><small>${esc(fmt(h.at))}</small></div></div><p class="hist-what">${what}</p>`;
+      }
+      card.innerHTML = `<div class="hist-head"><b>Histórico de edições · ${esc(a)}</b>
+          <button class="icon-btn" data-n="1" title="Edição anterior"${i >= list.length - 1 ? ' disabled' : ''}>‹</button>
+          <button class="icon-btn" data-n="-1" title="Próxima edição"${i <= 0 ? ' disabled' : ''}>›</button>
+          <button class="icon-btn" data-x title="Fechar">${icon('close', 16)}</button></div>
+        ${body}${list.length > 1 ? `<p class="hist-count">Edição ${list.length - i} de ${list.length}</p>` : ''}`;
+      card.querySelectorAll('[data-n]').forEach((b) => (b.onclick = () => { i = Math.max(0, Math.min(list.length - 1, i + +b.dataset.n)); draw(); }));
+      card.querySelector('[data-x]').onclick = closeHistory;
+    };
+    draw();
+    document.body.appendChild(card);
+    const rc = App.grid.cellRect(r, c), wr = $('grid-wrap').getBoundingClientRect();
+    let x = wr.left + rc.x + rc.w + 6, y = wr.top + rc.y;
+    if (x + card.offsetWidth > window.innerWidth - 8) x = Math.max(8, wr.left + rc.x - card.offsetWidth - 6);
+    if (y + card.offsetHeight > window.innerHeight - 8) y = Math.max(8, window.innerHeight - card.offsetHeight - 8);
+    card.style.left = x + 'px'; card.style.top = y + 'px';
+    setTimeout(() => document.addEventListener('mousedown', histOutside, true), 0);
+  }
+  App.on('selection', () => { if (histCard && !histCard.matches(':hover')) closeHistory(); });
+  App.on('sheet', closeHistory);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeHistory(); });
+
+  // itens extras nos menus de contexto
+  const COL_CMDS = new Set(['insertColsLeft', 'insertColsRight', 'deleteCols', 'hideCols', 'unhideCols', 'resizeCols', 'autofitCols']);
+  const stripCols = (list) => {
+    for (let i = list.length - 1; i >= 0; i--) {
+      const x = list[i];
+      if (x && x.cmd && COL_CMDS.has(x.cmd)) list.splice(i, 1);
+      else if (x && Array.isArray(x.sub)) { stripCols(x.sub); if (!x.sub.length) list.splice(i, 1); }
+    }
+    for (let i = list.length - 1; i > 0; i--) if (list[i] === '-' && list[i - 1] === '-') list.splice(i, 1);
+  };
+  // comandos de coluna bloqueados para quem não é administrador (também nos menus do topo)
+  function lockColumnCommands() {
+    for (const id of COL_CMDS) {
+      const c = App.cmds[id];
+      if (!c || c._locked) continue;
+      const run = c.run;
+      c.run = (...args) => { if (App.colsLocked && App.colsLocked()) return notify(Perms.COLS_MSG); return run(...args); };
+      c._locked = true;
+    }
+  }
+  App.on('contextItems', ({ hit, items }) => {
+    if (App.colsLocked && App.colsLocked()) stripCols(items);
+    if (hit.area === 'cell' || hit.area === 'fill') {
+      const at = items.findIndex((x) => x && x.label === 'Ver mais ações da célula');
+      items.splice(at >= 0 ? at : items.length, 0, { label: 'Mostrar histórico de edições', icon: 'history', cmd: 'cellHistory' });
+    }
+    if ((hit.area === 'colHdr' || hit.area === 'colEdge') && App.cloudMode && cloud.perms && cloud.perms.admin) {
+      items.push('-', { label: 'Permissões da coluna', icon: 'lock', cmd: 'columnAccess' });
+    }
+  });
 
   // ---------- Proteger páginas e intervalos ----------
   function protectRanges() {
@@ -550,7 +876,7 @@
   dataMenu.items = () => {
     const list = origData();
     const at = list.findIndex((x) => x && x.cmd === 'namedRanges');
-    list.splice(at + 1, 0, { label: 'Proteger páginas e intervalos', icon: 'lock', cmd: 'protectRanges' });
+    list.splice(at + 1, 0, { label: 'Proteger páginas e intervalos', icon: 'lock', cmd: 'protectRanges' }, { label: 'Permissões por coluna', icon: 'lock', cmd: 'columnAccess' });
     return list;
   };
 
@@ -559,8 +885,11 @@
   def('protectRanges', 'Proteger páginas e intervalos', protectRanges);
   def('share', 'Compartilhar', () => { if (!App.cloudMode) shareLocal(); else if (cloud.perms && cloud.perms.admin) shareDialog(); else shareInfo(); });
   def('login', 'Entrar', () => loginDialog());
+  def('columnAccess', 'Permissões por coluna', columnAccessDialog);
+  def('cellHistory', 'Mostrar histórico de edições', cellHistory);
 
   function init() {
+    lockColumnCommands();
     $('btn-account').addEventListener('click', (e) => accountMenu(e.currentTarget));
     renderAccount();
     loadMe();

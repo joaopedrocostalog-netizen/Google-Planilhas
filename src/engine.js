@@ -522,6 +522,11 @@
     value(si, r, c) {
       const key = si + ':' + r + ':' + c;
       if (this.cache.has(key)) return this.cache.get(key);
+      if (this.p.blocked && this.p.blocked(si, r, c)) {
+        const e = mkErr('#OCULTO!', 'Esta célula está em uma coluna que você não tem permissão para ver.');
+        this.cache.set(key, e);
+        return e;
+      }
       const text = this.p.raw(si, r, c);
       let v;
       if (text === '' || text === null || text === undefined) {

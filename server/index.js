@@ -154,28 +154,60 @@ async function onHello(c, msg) {
   sendInit(c);
   broadcast(room, c, { type: 'join', peer: peerInfo(c) });
 }
+// Valores alterados (para o histórico de edições). Inserções/exclusões de linhas e colunas não entram.
+function historyEntries(room, p) {
+  const out = [];
+  const val = (x) => (x && x.v !== undefined && x.v !== null && x.v !== '' ? String(x.v).slice(0, 2000) : null);
+  for (const id in p.sheets || {}) {
+    const e = p.sheets[id];
+    if (!e.cells || e.created || e.removed) continue;
+    if (e.props && ('rows' in e.props || 'cols' in e.props)) continue;
+    const sh = room.data.sheets.find((s) => s.id === id);
+    if (!sh) continue;
+    for (const a in e.cells) {
+      const b = val((sh.cells || {})[a]), f = val(e.cells[a]);
+      if (b !== f) out.push({ s: id, a, b, f });
+      if (out.length >= 5000) return out;
+    }
+  }
+  return out;
+}
 function onPatch(c, msg) {
   const room = c.room, p = msg.patch;
   if (!p || typeof p !== 'object' || (p.sheets && typeof p.sheets !== 'object')) return;
   const err = Perms.validate(p, c.perms, room.data);
   if (err) { c.ws.send({ type: 'reject', id: msg.id, reason: err }); sendInit(c); return; }
+  const hist = historyEntries(room, p);
   Patch.apply(room.data, p);
   room.version++;
+  if (hist.length) store.addHistory(room.id, c.user, hist).catch((e) => console.error('Falha ao gravar histórico', e.message));
   const structural = !!(p.order || Object.values(p.sheets || {}).some((e) => e.created || e.removed));
-  if (structural) refreshRoom(room, false);
+  const accessChanged = Object.values(p.sheets || {}).some((e) => (e.props && 'access' in e.props) || (e.created && e.created.access));
+  // quem teve as permissões por coluna alteradas recebe a planilha de novo (com as colunas certas)
+  const reinit = new Set();
+  if (structural || accessChanged) {
+    for (const o of [...room.clients]) {
+      const np = Perms.compute(permDoc(room), o.user);
+      if (!np) continue;
+      if (accessChanged && o !== c && JSON.stringify([np.cols, np.sheets]) !== JSON.stringify([o.perms.cols, o.perms.sheets])) reinit.add(o);
+      o.perms = np;
+    }
+  }
   c.ws.send({ type: 'ack', id: msg.id, version: room.version });
   for (const o of room.clients) {
     if (o === c) continue;
+    if (reinit.has(o)) { sendInit(o); continue; }
     const fp = Perms.filterPatch(p, o.perms);
     if (fp) o.ws.send({ type: 'patch', patch: fp, version: room.version, by: { cid: c.cid, name: c.user.name } });
   }
+  if (accessChanged && !c.perms.admin) sendInit(c);
   scheduleSave(room);
 }
 function onPresence(c, msg) {
   c.presence = { sheetId: String(msg.sheetId || ''), sel: msg.sel || null, editing: !!msg.editing };
   for (const o of c.room.clients) {
     if (o === c) continue;
-    if (c.presence.sheetId && Perms.levelOf(o.perms, c.presence.sheetId) === 'none') continue;
+    if (c.presence.sheetId && !Perms.sheetVisible(o.perms, c.presence.sheetId)) continue;
     o.ws.send({ type: 'presence', peer: peerInfo(c) });
   }
 }
@@ -217,16 +249,27 @@ function sanitizeAcl(input, room) {
   acl.sectors = (Array.isArray(input.sectors) ? input.sectors : []).slice(0, 100).map((s) => {
     const sheets = {};
     for (const k in (s && s.sheets) || {}) if (sheetIds.has(k) && LEVEL.has(s.sheets[k])) sheets[k] = s.sheets[k];
-    return { id: String(s.id || uid(6)).slice(0, 40), name: String(s.name || 'Setor').trim().slice(0, 60) || 'Setor', default: LEVEL.has(s.default) ? s.default : 'none', sheets, manage: !!s.manage };
+    return { id: (s.id && s.id !== 'link' ? String(s.id) : 's' + uid(5)).slice(0, 40), name: String(s.name || 'Setor').trim().slice(0, 60) || 'Setor', default: LEVEL.has(s.default) ? s.default : 'none', sheets, manage: !!s.manage };
   });
   const sectorIds = new Set(acl.sectors.map((s) => s.id));
   acl.linkSector = sectorIds.has(input.linkSector) ? input.linkSector : null;
   const seen = new Set();
-  acl.members = (Array.isArray(input.members) ? input.members : []).slice(0, 1000).map((m) => ({
-    email: String(m.email || '').trim().toLowerCase(),
-    role: ['admin', 'editor', 'viewer'].includes(m.role) ? m.role : 'editor',
-    sector: sectorIds.has(m.sector) ? m.sector : null,
-  })).filter((m) => emailOk(m.email) && !seen.has(m.email) && seen.add(m.email));
+  const rids = new Set();
+  acl.members = (Array.isArray(input.members) ? input.members : []).slice(0, 1000).map((m) => {
+    const out = {
+      email: String(m.email || '').trim().toLowerCase(),
+      role: ['admin', 'editor', 'viewer'].includes(m.role) ? m.role : 'editor',
+      sector: sectorIds.has(m.sector) ? m.sector : null,
+    };
+    // id da pessoa para as regras por coluna (sheet.access)
+    let rid = /^m[\w-]{3,40}$/.test(m.rid || '') ? m.rid : 'm' + uid(6);
+    while (rids.has(rid) || sectorIds.has(rid)) rid = 'm' + uid(6);
+    rids.add(rid); out.rid = rid;
+    const sheets = {};
+    for (const k in (m && m.sheets) || {}) if (sheetIds.has(k) && LEVEL.has(m.sheets[k])) sheets[k] = m.sheets[k];
+    if (Object.keys(sheets).length) out.sheets = sheets;
+    return out;
+  }).filter((m) => emailOk(m.email) && !seen.has(m.email) && seen.add(m.email));
   return acl;
 }
 
@@ -341,6 +384,20 @@ route('PUT', '/api/docs/:id/share', async (req, p) => {
   return { ok: true, acl };
 });
 
+route('GET', '/api/docs/:id/history', async (req, p) => {
+  const user = await requireUser(req);
+  const room = await getRoom(p.id);
+  if (!room) throw httpError(404, 'Planilha não encontrada.');
+  const perms = Perms.compute(permDoc(room), user);
+  if (!perms) throw httpError(403, 'Você não tem acesso a esta planilha.');
+  const q = new URL(req.url, 'http://x').searchParams;
+  const sheet = String(q.get('sheet') || ''), addr = String(q.get('addr') || '').toUpperCase();
+  if (!/^[A-Z]{1,3}\d{1,7}$/.test(addr)) throw httpError(400, 'Célula inválida.');
+  if (!Perms.canSee(perms, sheet, addr)) throw httpError(403, 'Você não tem permissão para ver esta célula.');
+  const rows = await store.getHistory(room.id, sheet, addr, 100);
+  return rows.map((h) => ({ at: h.at, name: h.user_name || 'Alguém', color: colorFor(h.user_id || ''), before: h.before, after: h.after }));
+});
+
 // ---------- Arquivos do site ----------
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
 function serveStatic(req, res, pathname) {
@@ -391,8 +448,30 @@ async function shutdown() {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-store.init().then(() => {
+// Descreve o erro de conexão sem expor a senha
+function describeDbError(e) {
+  const parts = [];
+  if (e.code) parts.push('código ' + e.code);
+  if (e.message) parts.push(e.message);
+  for (const sub of e.errors || []) parts.push((sub.code ? sub.code + ' ' : '') + (sub.message || ''));
+  if (!parts.length) parts.push(String(e));
+  try {
+    const u = new URL(process.env.DATABASE_URL || '');
+    parts.push(`(servidor ${u.hostname}${u.port ? ':' + u.port : ''}, banco ${u.pathname.slice(1)}, usuário ${u.username})`);
+  } catch (err) { parts.push('(DATABASE_URL não é um endereço válido: confira se colou o "Internal Database URL" inteiro)'); }
+  return parts.join(' | ');
+}
+
+(async function start() {
+  for (let attempt = 1; ; attempt++) {
+    try { await store.init(); break; }
+    catch (e) {
+      console.error(`Não foi possível iniciar o banco de dados (tentativa ${attempt}/6): ${describeDbError(e)}`);
+      if (attempt >= 6) process.exit(1);
+      await new Promise((r) => setTimeout(r, attempt * 3000));
+    }
+  }
   server.listen(PORT, () => console.log(`Planilhas no ar na porta ${PORT} (armazenamento: ${store.kind})`));
-}).catch((e) => { console.error('Não foi possível iniciar o banco de dados:', e.message); process.exit(1); });
+})();
 
 module.exports = { server };

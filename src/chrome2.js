@@ -260,6 +260,7 @@
           { label: 'Menu suspenso', icon: 'dropdown', cmd: 'insertDropdown' }, '-',
           { label: 'Ver mais ações da célula', sub: [{ label: 'Formatação condicional', cmd: 'condFormat' }, { label: 'Validação de dados', cmd: 'dataValidation' }, { label: 'Estatísticas da coluna', cmd: 'columnStats' }, { label: 'Limpar tudo', cmd: 'clearAll' }] }];
       } else return;
+      App.emit('contextItems', { hit, items, R });
       App.ui.menuPopup({ x, y }, items);
     });
   }
