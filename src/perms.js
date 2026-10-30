@@ -162,7 +162,29 @@
     hidden: 'Somente administradores podem ocultar páginas.',
     color: 'Somente administradores podem mudar a cor das páginas.',
   };
-  const FORMAT_MSG = 'Somente administradores podem alterar a formatação, notas e regras da planilha. Você pode apenas preencher os valores.';
+  const FORMAT_MSG = 'Somente administradores podem usar essa formatação (bordas, alinhamento, ajuste de texto, mesclagem), notas, links e regras.';
+  // Formatação liberada para os setores (a mesma da barra de ferramentas deles):
+  // formato de número, fonte, tamanho, negrito, itálico, tachado, cor do texto e cor de preenchimento
+  const EXEC_STYLE = ['nf', 'ff', 'fs', 'b', 'i', 'st', 'color', 'bg'];
+  // Célula resultante quando um setor altera "before" para "after": só o valor e a formatação liberada mudam
+  function execMerge(before, after) {
+    const out = {}, s = {};
+    if (before) for (const k in before) if (k !== 'v' && k !== 's' && k[0] !== '_') out[k] = before[k];
+    if (before && before.s) for (const k in before.s) if (!EXEC_STYLE.includes(k)) s[k] = before.s[k];
+    if (after && after.s) for (const k of EXEC_STYLE) if (after.s[k] !== undefined && after.s[k] !== null) s[k] = after.s[k];
+    if (Object.keys(s).length) out.s = s;
+    if (after && after.v !== undefined && after.v !== null && after.v !== '') out.v = after.v;
+    return Object.keys(out).length ? out : null;
+  }
+  function normCell(x) {
+    if (!x) return null;
+    const o = {};
+    for (const k in x) if (k[0] !== '_' && x[k] !== undefined && x[k] !== null) o[k] = x[k];
+    if (o.v === '') delete o.v;
+    if (o.s && !Object.keys(o.s).length) delete o.s;
+    return Object.keys(o).length ? o : null;
+  }
+  const execAllowed = (before, after) => stable(execMerge(before, after)) === stable(normCell(after));
 
   // Valida uma alteração. data: documento atual. inv (opcional): alteração inversa, de onde vêm os valores anteriores.
   // Quem não é administrador só preenche valores nas colunas liberadas; o resto da planilha é dos administradores.
@@ -200,7 +222,7 @@
             if (pr) return `A célula ${a} está protegida${pr.desc ? ' (' + pr.desc + ')' : ''}. Peça acesso a um administrador.`;
           }
           const before = invCells ? (a in invCells ? invCells[a] : null) : sheet ? (sheet.cells || {})[a] || null : null;
-          if (nonValue(before) !== nonValue(e.cells[a])) return FORMAT_MSG;
+          if (!execAllowed(before, e.cells[a])) return FORMAT_MSG;
         }
       }
     }
@@ -258,7 +280,7 @@
   // Pode ver a célula?
   const canSee = (perms, sheetId, addr) => sheetVisible(perms, sheetId) && colLevel(perms, sheetId, colOf(addr)) !== 'none';
 
-  const api = { COLS_MSG, FORMAT_MSG, nonValue, compute, validate, filterDoc, filterPatch, levelOf, colLevel, sheetVisible, bestLevel, hasHiddenCols, hasColRules, blockingProtection, defaultAcl, canSee, colOf, colName, RANK, LEVELS };
+  const api = { COLS_MSG, FORMAT_MSG, nonValue, execMerge, execAllowed, stable, normCell, EXEC_STYLE, compute, validate, filterDoc, filterPatch, levelOf, colLevel, sheetVisible, bestLevel, hasHiddenCols, hasColRules, blockingProtection, defaultAcl, canSee, colOf, colName, RANK, LEVELS };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Perms = api;
 })(typeof window !== 'undefined' ? window : globalThis);

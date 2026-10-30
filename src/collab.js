@@ -841,7 +841,10 @@
   const EXEC_OK = new Set(['undo', 'redo', 'cut', 'copy', 'paste', 'pasteValues', 'find', 'findReplace', 'clearValues',
     'zoom', 'toggleFormulaBar', 'toggleMenus', 'fullscreen', 'toggleGridlines', 'toggleFormulas', 'switchSheet', 'nextSheet', 'prevSheet',
     'selectAll', 'selectColumn', 'selectRow', 'insertDate', 'insertTime', 'insertDateTime', 'fillDown', 'fillRight',
-    'print', 'download', 'openCloud', 'share', 'login', 'cellHistory', 'shortcuts', 'about', 'functionList', 'columnStats']);
+    'print', 'download', 'openCloud', 'share', 'login', 'cellHistory', 'shortcuts', 'about', 'functionList', 'columnStats',
+    // barra de ferramentas liberada para os setores
+    'menuSearch', 'paintFormat', 'format', 'customFormat', 'fmt_number', 'fmt_time', 'fmt_date', 'fmt_currency', 'fmt_percent', 'fmt_scientific',
+    'decDec', 'decInc', 'fontFamily', 'fontSize', 'fontSizeInc', 'fontSizeDec', 'bold', 'italic', 'strike', 'textColor', 'fillColor']);
   const COL_CMDS = new Set(['renameCol', 'insertColsLeft', 'insertColsRight', 'deleteCols', 'hideCols', 'unhideCols', 'resizeCols', 'autofitCols', 'addCols']);
   const EXEC_HIDDEN_MENUS = new Set(['Inserir', 'Formatar', 'Dados', 'Extensões']);
   App.adminOnly = () => !!(App.cloudMode && cloud.perms && !cloud.perms.admin);
