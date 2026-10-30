@@ -636,8 +636,27 @@ body.dragging-file .drop-overlay { display: flex; }
 /* ---------- Executores (setores): só o que podem usar ---------- */
 /* barra de ferramentas dos setores: pesquisa, desfazer/refazer, imprimir, pintar formatação, zoom,
    formatos de número, fonte, tamanho, negrito, itálico, tachado, cor do texto e de preenchimento */
-body.executor #toolbar > *:not(.tb-search):not([data-cmd="undo"]):not([data-cmd="redo"]):not([data-cmd="print"]):not([data-cmd="paintFormat"]):not([data-dd="zoom"]):not([data-cmd="fmt_currency"]):not([data-cmd="fmt_percent"]):not([data-cmd="decDec"]):not([data-cmd="decInc"]):not([data-dd="formats"]):not([data-dd="font"]):not([data-cmd="fontSizeDec"]):not(#tb-size):not([data-cmd="fontSizeInc"]):not([data-cmd="bold"]):not([data-cmd="italic"]):not([data-cmd="strike"]):not([data-dd="textColor"]):not([data-dd="fillColor"]):not(.tb-sep) { display: none !important; }
+body.executor #toolbar > *:not(.tb-search):not([data-cmd="undo"]):not([data-cmd="redo"]):not([data-cmd="print"]):not([data-cmd="paintFormat"]):not([data-dd="zoom"]):not([data-cmd="fmt_currency"]):not([data-cmd="fmt_percent"]):not([data-cmd="decDec"]):not([data-cmd="decInc"]):not([data-dd="formats"]):not([data-dd="font"]):not([data-cmd="fontSizeDec"]):not(#tb-size):not([data-cmd="fontSizeInc"]):not([data-cmd="bold"]):not([data-cmd="italic"]):not([data-cmd="strike"]):not([data-dd="textColor"]):not([data-dd="fillColor"]):not([data-dd="filterViews"]):not(.tb-sep) { display: none !important; }
+body.executor #toolbar > [data-dd="filterViews"] { margin-left: 9px; }
 body.executor #toolbar > span.tb-sep:nth-of-type(n+6) { display: none !important; }
 body.executor #tab-add, body.executor #add-rows, body.executor #btn-history, body.executor #btn-star, body.executor #btn-share, body.executor #pivot-chip, body.executor .chart-menu, body.executor .ch-h { display: none !important; }
 body.executor .chart-obj { cursor: default; }
 body.executor .doc-title { pointer-events: none; }
+
+/* ---------- Visualizações de filtro (pessoais) ---------- */
+.view-bar { display: flex; align-items: center; gap: 12px; background: #3c4043; color: #fff; padding: 6px 12px 6px 16px; font-size: 13px; flex: none; }
+.view-bar .vb-title { display: flex; align-items: center; gap: 8px; font-weight: 500; white-space: nowrap; }
+.view-bar .vb-range { color: #c4c7c5; white-space: nowrap; }
+.view-bar .vb-note { color: #c4c7c5; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.view-bar .vb-btn { background: transparent; border: 1px solid #80868b; color: #fff; border-radius: 16px; padding: 4px 12px; font-size: 12.5px; }
+.view-bar .vb-btn:hover { background: rgba(255,255,255,.1); }
+.view-bar .vb-x { background: transparent; border: 0; color: #fff; width: 30px; height: 30px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; }
+.view-bar .vb-x:hover { background: rgba(255,255,255,.15); }
+.group-panel { position: absolute; right: 16px; top: 34px; z-index: 6; width: 250px; max-height: calc(100% - 60px); overflow: auto; background: var(--white); border-radius: 8px; box-shadow: var(--shadow); border-top: 3px solid var(--red); font-size: 13px; }
+.group-panel h3 { margin: 0; padding: 10px 12px 6px; font-size: 13px; font-weight: 500; }
+.group-panel small { display: block; padding: 0 12px 8px; color: var(--text-2); }
+.gp-item { display: flex; justify-content: space-between; gap: 8px; width: 100%; border: 0; background: none; text-align: left; padding: 7px 12px; }
+.gp-item:hover { background: var(--surface); }
+.gp-item.on { background: var(--red-soft); color: var(--red-dark); font-weight: 500; }
+.gp-item em { font-style: normal; color: var(--text-3); }
+@media (max-width: 700px) { .view-bar .vb-note { display: none; } }

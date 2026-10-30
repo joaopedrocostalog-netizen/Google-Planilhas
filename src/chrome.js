@@ -38,6 +38,7 @@
     comment: P('M4.5 5h15v11h-9l-4.5 3.5V16h-1.5z'),
     chart: P('M5 20V11M10 20V5M15 20v-6M20 20V9M3 20.5h18'),
     filter: P('M4 5h16l-6 7.5V19l-4 1.5v-8z'),
+    filterViews: P('M3.5 4.5h17v15h-17zM3.5 9h17M9 9v10.5M13 12.5h6l-2.3 2.8V18l-1.4.6v-2.7z'),
     sigma: '<text x="12" y="18" text-anchor="middle" font-size="19" font-family="Arial" fill="currentColor">Σ</text>',
     chevDown: P('m7 10 5 5 5-5'),
     chevUp: P('m7 14 5-5 5 5'),
@@ -284,7 +285,8 @@
     { label: 'Dados', items: () => [
       { label: 'Classificar página', sub: () => [{ label: `Classificar página por coluna ${E.numToCol(sel.ac)} (A a Z)`, cmd: 'sortSheet', arg: false }, { label: `Classificar página por coluna ${E.numToCol(sel.ac)} (Z a A)`, cmd: 'sortSheet', arg: true }] },
       { label: 'Classificar intervalo', sub: () => [{ label: `Classificar intervalo por coluna ${E.numToCol(sel.ac)} (A a Z)`, cmd: 'sortRange', arg: false }, { label: `Classificar intervalo por coluna ${E.numToCol(sel.ac)} (Z a A)`, cmd: 'sortRange', arg: true }, { label: 'Opções avançadas de classificação de intervalo', cmd: 'sortAdvanced' }] }, '-',
-      { label: () => (App.sheet().filter ? 'Remover filtro' : 'Criar um filtro'), icon: 'filter', cmd: 'toggleFilter' }, '-',
+      { label: () => (App.sheet().filter ? 'Remover filtro' : 'Criar um filtro'), icon: 'filter', cmd: 'toggleFilter' },
+      { label: 'Visualizações de filtro', icon: 'filterViews', sub: () => App.viewMenuItems() }, '-',
       { label: 'Validação de dados', cmd: 'dataValidation' },
       { label: 'Estatísticas da coluna', cmd: 'columnStats' },
       { label: 'Intervalos nomeados', cmd: 'namedRanges' }, '-',
@@ -367,6 +369,7 @@
       <span class="tb-sep"></span>
       ${btn('insertLink', 'link', 'Inserir link (Ctrl+K)')}${btn('insertComment', 'comment', 'Inserir comentário (Ctrl+Alt+M)')}${btn('insertChart', 'chart', 'Inserir gráfico')}
       ${btn('toggleFilter', 'filter', 'Criar um filtro', 'id="tb-filter"')}
+      ${dd('filterViews', icon('filterViews'), 'Visualizações de filtro (só para você)')}
       ${dd('functions', icon('sigma'), 'Funções')}
       <span class="tb-spacer"></span>
       <button class="tb" data-cmd="toggleMenus" title="Ocultar os menus (Ctrl+Shift+F)" id="tb-collapse">${icon('chevUp')}</button>`;
@@ -406,6 +409,7 @@
       case 'valign': iconRow(anchor, [['valignTop', 'valignTop', 'Em cima'], ['valignMiddle', 'valignMiddle', 'No meio'], ['valignBottom', 'valignBottom', 'Embaixo']]); break;
       case 'wrap': iconRow(anchor, [['wrapOverflow', 'overflow', 'Transbordar'], ['wrapWrap', 'wrap', 'Ajustar'], ['wrapClip', 'clip', 'Cortar']]); break;
       case 'rotate': menuPopup(anchor, [{ label: 'Nenhuma', cmd: 'rotNone' }, { label: 'Inclinar para cima', cmd: 'rot45' }, { label: 'Girar para cima', cmd: 'rotUp' }, { label: 'Girar para baixo', cmd: 'rotDown' }]); break;
+      case 'filterViews': menuPopup(anchor, App.viewMenuItems()); break;
       case 'functions': menuPopup(anchor, [
         { label: 'SOMA', need: 'autoSum', action: () => run('autoSum', 'SOMA') }, { label: 'MÉDIA', need: 'autoSum', action: () => run('autoSum', 'MÉDIA') },
         { label: 'CONT.NÚM', need: 'autoSum', action: () => run('autoSum', 'CONT.NÚM') }, { label: 'MÁXIMO', need: 'autoSum', action: () => run('autoSum', 'MÁXIMO') },
