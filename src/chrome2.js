@@ -238,6 +238,8 @@
       if (hit.area === 'colHdr' || hit.area === 'colEdge') {
         items = [...base,
           { label: `Renomear coluna ${E.numToCol(R.c1)}`, cmd: 'renameCol', arg: R.c1 },
+          { label: 'Personalizar cabeçalho da coluna', cmd: 'colHeaderStyle' },
+          (sh.colGroups || []).some((g) => !(g.c2 < R.c1 || g.c1 > R.c2)) ? { label: `Desagrupar ${cl}`, cmd: 'ungroupCols' } : { label: `Agrupar ${cl} (com +)`, cmd: 'groupCols' },
           { label: `Inserir ${colsTxt(nc)} à esquerda`, cmd: 'insertColsLeft' }, { label: `Inserir ${colsTxt(nc)} à direita`, cmd: 'insertColsRight' },
           { label: `Excluir ${cl}`, cmd: 'deleteCols' }, { label: `Limpar ${cl}`, cmd: 'clearValues' }, { label: `Ocultar ${cl}`, cmd: 'hideCols' },
           { label: `Redimensionar ${cl}`, cmd: 'resizeCols' }, { label: 'Ajustar ao conteúdo', cmd: 'autofitCols' }, '-',
@@ -260,6 +262,7 @@
           { label: 'Criar um filtro', cmd: 'toggleFilter', disabled: !!sh.filter }, { label: 'Classificar intervalo', sub: [{ label: 'A a Z', cmd: 'sortRange', arg: false }, { label: 'Z a A', cmd: 'sortRange', arg: true }, { label: 'Opções avançadas', cmd: 'sortAdvanced' }] }, '-',
           { label: 'Inserir link', icon: 'link', cmd: 'insertLink' }, { label: 'Comentário', icon: 'comment', cmd: 'insertComment' }, { label: 'Inserir nota', icon: 'note', cmd: 'insertNote' },
           { label: 'Menu suspenso', icon: 'dropdown', cmd: 'insertDropdown' }, '-',
+          ...(App.dvAt(sh, sel.ar, sel.ac) && App.dvAt(sh, sel.ar, sel.ac).type === 'checkbox' ? [{ label: 'Remover caixa de seleção', icon: 'checkbox', cmd: 'removeCheckbox' }] : []),
           { label: 'Ver mais ações da célula', sub: [{ label: 'Formatação condicional', cmd: 'condFormat' }, { label: 'Validação de dados', cmd: 'dataValidation' }, { label: 'Estatísticas da coluna', cmd: 'columnStats' }, { label: 'Limpar tudo', cmd: 'clearAll' }] }];
       } else return;
       App.emit('contextItems', { hit, items, R });

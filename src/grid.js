@@ -37,7 +37,9 @@
     st.Fc = Math.min(sh.freeze.cols || 0, sh.cols);
     st.FW = L[st.Fc + 1]; st.FH = T[st.Fr + 1];
     st.hdrW = Math.round(Math.max(46, 14 + 8 * String(sh.rows).length) * z);
-    st.hdrH = Math.round(24 * z);
+    // faixa acima dos cabeçalhos para os grupos de colunas (botões + e −)
+    st.gut = sh.colGroups && sh.colGroups.length ? Math.round(18 * z) : 0;
+    st.hdrH = Math.round(24 * z) + st.gut;
     spacer.style.width = st.hdrW + L[sh.cols + 1] + 'px';
     spacer.style.height = st.hdrH + T[sh.rows + 1] + 64 + 'px';
     resize();
@@ -331,6 +333,41 @@
     }
   }
 
+  // Grupos de colunas: faixa com + (recolhido) e − (aberto). Abrir vale só para quem clicou.
+  function drawColGroups(sh, hw, W, z) {
+    st.groupBoxes = [];
+    if (!st.gut) return;
+    const g = st.gut, s = Math.round(12 * z);
+    ctx.save();
+    ctx.beginPath(); ctx.rect(hw, 0, W - hw, g); ctx.clip();
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(hw, 0, W - hw, g);
+    ctx.fillStyle = C.hdrLine; ctx.fillRect(hw, g - 1, W - hw, 1);
+    ctx.font = `${(10.5 * z).toFixed(1)}px Arial, sans-serif`; ctx.textBaseline = 'middle';
+    for (const grp of sh.colGroups) {
+      const open = App.isGroupOpen(sh, grp);
+      const x1 = colX(grp.c1), x2 = colX(grp.c2) + colW(grp.c2);
+      const by = Math.round((g - s) / 2);
+      let bx;
+      if (open) {
+        bx = Math.round(x2 - s - 3 * z);
+        ctx.strokeStyle = '#9aa0a6'; ctx.lineWidth = 1.5 * z;
+        ctx.beginPath(); ctx.moveTo(x1 + 4 * z, g / 2); ctx.lineTo(bx - 3 * z, g / 2); ctx.moveTo(x1 + 4 * z, g / 2 - 3 * z); ctx.lineTo(x1 + 4 * z, g / 2 + 3 * z); ctx.stroke();
+        if (grp.label) { const tw = ctx.measureText(grp.label).width + 8 * z; ctx.fillStyle = '#ffffff'; ctx.fillRect(x1 + 10 * z, 1, tw, g - 3); ctx.fillStyle = '#3c4043'; ctx.textAlign = 'left'; ctx.fillText(grp.label, x1 + 14 * z, g / 2); }
+      } else {
+        bx = Math.round(x1 + 2 * z);
+        if (grp.label) { ctx.fillStyle = '#3c4043'; ctx.textAlign = 'left'; ctx.fillText(grp.label, bx + s + 4 * z, g / 2); }
+      }
+      ctx.fillStyle = open ? '#ffffff' : C.sel; ctx.strokeStyle = open ? '#5f6368' : C.sel; ctx.lineWidth = 1;
+      roundRect(bx + 0.5, by + 0.5, s, s, 2 * z); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = open ? '#3c4043' : '#ffffff'; ctx.lineWidth = 1.6 * z;
+      ctx.beginPath(); ctx.moveTo(bx + 3 * z, by + s / 2 + 0.5); ctx.lineTo(bx + s - 2 * z, by + s / 2 + 0.5);
+      if (!open) { ctx.moveTo(bx + s / 2 + 0.5, by + 3 * z); ctx.lineTo(bx + s / 2 + 0.5, by + s - 2 * z); }
+      ctx.stroke();
+      st.groupBoxes.push({ x: bx - 2, y: 0, w: s + 4 + (open ? 0 : (grp.label ? ctx.measureText(grp.label).width + 6 * z : 0)), h: g, id: grp.id });
+    }
+    ctx.restore();
+  }
+
   function roundRect(x, y, w, h, r) {
     ctx.beginPath();
     ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y); ctx.quadraticCurveTo(x + w, y, x + w, y + r);
@@ -407,7 +444,7 @@
       const size = Math.round(12 * z);
       const cx = s.al === 'l' ? it.x + pad + size / 2 : s.al === 'r' ? it.x + it.w - pad - size / 2 : it.x + it.w / 2;
       const cy = it.y + it.h / 2;
-      const on = inf.v === true || (typeof inf.v === 'string' && /^(true|verdadeiro)$/i.test(inf.v));
+      const on = App.cbIsOn(inf.dv, inf.raw, inf.v);
       ctx.lineWidth = 1.5 * z;
       roundRect(cx - size / 2, cy - size / 2, size, size, 2 * z);
       if (on) { ctx.fillStyle = C.check; ctx.fill(); ctx.strokeStyle = C.check; ctx.stroke();
@@ -665,7 +702,9 @@
     const hdrBg = viewOn ? '#3c4043' : C.hdrBg, hdrText = viewOn ? '#e8eaed' : C.hdrText;
     ctx.fillStyle = hdrBg; ctx.fillRect(hw, 0, W - hw, hh);
     const drawCols = (from, to, sx, clipX, clipW) => {
+      const hh = st.hdrH - st.gut; // altura das letras (abaixo da faixa de grupos)
       if (clipW <= 0) return;
+      ctx.save(); ctx.translate(0, st.gut);
       ctx.save(); ctx.beginPath(); ctx.rect(clipX, 0, clipW, hh); ctx.clip();
       const c0 = Math.max(from, colAtContent(clipX - hw + sx)), c1 = Math.min(to, colAtContent(clipX - hw + sx + clipW));
       for (let c = c0; c <= c1; c++) {
@@ -679,9 +718,12 @@
           continue;
         }
         const inSel = c >= R.c1 && c <= R.c2;
-        if (inSel) { ctx.fillStyle = fullCols ? C.hdrFullBg : C.hdrSelBg; ctx.fillRect(x, 0, w, hh); }
-        ctx.fillStyle = inSel ? (fullCols ? C.hdrFullText : C.hdrSelText) : hdrText;
-        ctx.font = `${inSel ? 'bold ' : ''}${(11 * z).toFixed(1)}px Arial, sans-serif`;
+        // cabeçalho personalizado (fundo, cor do texto, negrito)
+        const hs = sh.colHdr && sh.colHdr[c];
+        if (hs && hs.bg) { ctx.fillStyle = hs.bg; ctx.fillRect(x, 0, w, hh); }
+        if (inSel) { ctx.fillStyle = fullCols ? C.hdrFullBg : C.hdrSelBg; if (hs && hs.bg) ctx.globalAlpha = 0.45; ctx.fillRect(x, 0, w, hh); ctx.globalAlpha = 1; }
+        ctx.fillStyle = inSel && !(hs && hs.bg) ? (fullCols ? C.hdrFullText : C.hdrSelText) : (hs && hs.color) || (hs && hs.bg ? '#000000' : inSel ? C.hdrSelText : hdrText);
+        ctx.font = `${inSel || (hs && hs.b) ? 'bold ' : ''}${(11 * z).toFixed(1)}px Arial, sans-serif`;
         const nm = sh.colNames && sh.colNames[c];
         if (nm) {
           // nome dado pelo administrador (ex.: CLIENTE) no lugar da letra
@@ -714,9 +756,11 @@
         ctx.fillStyle = C.hdrLine; ctx.fillRect(Math.round(x + w) - 1, 0, 1, hh);
       }
       ctx.restore();
+      ctx.restore();
     };
     drawCols(st.Fc + 1, sh.cols, st.sx, hw + st.FW, W - hw - st.FW);
     drawCols(1, st.Fc, 0, hw, st.FW);
+    drawColGroups(sh, hw, W, z);
     ctx.fillStyle = C.hdrLine; ctx.fillRect(hw, hh - 1, W - hw, 1);
     // cabeçalho de linhas
     ctx.fillStyle = hdrBg; ctx.fillRect(0, hh, hw, H - hh);
@@ -775,6 +819,10 @@
       return { area: 'corner' };
     }
     if (y < st.hdrH) {
+      if (st.gut && y < st.gut) {
+        const b = (st.groupBoxes || []).find((q) => x >= q.x && x <= q.x + q.w);
+        return b ? { area: 'colGroup', id: b.id } : { area: 'gutter' };
+      }
       const c = colAtScreen(x);
       // filtro criado a partir da coluna: botão no próprio cabeçalho
       const hf = App.activeFilter(sh);
@@ -848,6 +896,8 @@
       case 'unhideCols': App.change('Reexibir colunas', () => { let c = h.c - 1; while (c >= 1 && sh.hiddenCols[c]) { delete sh.hiddenCols[c]; c--; } }); return;
       case 'unhideRows': App.change('Reexibir linhas', () => { let r = h.r - 1; while (r >= 1 && sh.hiddenRows[r]) { delete sh.hiddenRows[r]; r--; } }); return;
       case 'freezeRowBar': st.drag = { kind: 'freezeRows' }; bindDrag(); return;
+      case 'colGroup': App.toggleGroup(sh, h.id); return;
+      case 'gutter': return;
       case 'filterHdr': App.emit('filterMenu', { c: h.c, x: colX(h.c) + colW(h.c), y: st.hdrH }); return;
       case 'freezeColBar': st.drag = { kind: 'freezeCols' }; bindDrag(); return;
       case 'colHdr':
@@ -935,7 +985,8 @@
     }
     // rolagem automática ao arrastar para fora
     if (['cells', 'cols', 'rows', 'point', 'fill'].includes(d.kind)) {
-      const out = p.x > st.vw - 8 || p.y > st.vh - 8 || (p.x < st.hdrW + st.FW && d.kind !== 'rows') || (p.y < st.hdrH + st.FH && d.kind !== 'cols');
+      // só rola quando o mouse sai da área da grade (antes, passar pelas linhas/colunas congeladas fazia a planilha andar sozinha)
+      const out = p.x > st.vw - 8 || p.y > st.vh - 8 || (p.x < st.hdrW + 6 && d.kind !== 'rows') || (p.y < st.hdrH + 6 && d.kind !== 'cols');
       if (out && !autoTimer) autoTimer = setInterval(autoScroll, 40);
       if (!out && autoTimer) { clearInterval(autoTimer); autoTimer = null; }
     }
@@ -945,8 +996,8 @@
     const p = pos(lastMouse);
     if (p.x > st.vw - 8) scroller.scrollLeft += 30;
     if (p.y > st.vh - 8) scroller.scrollTop += 30;
-    if (p.x < st.hdrW + st.FW && st.sx > 0) scroller.scrollLeft -= 30;
-    if (p.y < st.hdrH + st.FH && st.sy > 0) scroller.scrollTop -= 30;
+    if (p.x < st.hdrW + 6 && st.sx > 0) scroller.scrollLeft -= 30;
+    if (p.y < st.hdrH + 6 && st.sy > 0) scroller.scrollTop -= 30;
     onMove(lastMouse);
   }
   function onUp() {
@@ -1056,7 +1107,7 @@
     const p = pos(e);
     const h = hit(p.x, p.y);
     scroller.style.cursor = h.area === 'colEdge' ? 'col-resize' : h.area === 'rowEdge' ? 'row-resize' : h.area === 'fill' ? 'crosshair'
-      : h.area === 'colHdr' || h.area === 'filterHdr' || h.area === 'rowHdr' || h.area === 'unhideCols' || h.area === 'unhideRows' || h.area === 'corner' ? 'pointer'
+      : h.area === 'colHdr' || h.area === 'filterHdr' || h.area === 'colGroup' || h.area === 'rowHdr' || h.area === 'unhideCols' || h.area === 'unhideRows' || h.area === 'corner' ? 'pointer'
         : h.area === 'freezeRowBar' ? 'row-resize' : h.area === 'freezeColBar' ? 'col-resize' : 'default';
     const key = h.area === 'cell' ? h.r + ':' + h.c : null;
     if (key === hoverKey) return;

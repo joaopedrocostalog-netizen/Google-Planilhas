@@ -37,7 +37,7 @@ async function isGlobalAdmin(u) {
   const rows = await store.listDocsFor(u);
   return rows.some((r) => r.owner_id === u.id || ((r.acl && r.acl.members) || []).some((m) => m.email === u.email && m.role === 'admin'));
 }
-const meUser = async (u) => Object.assign(publicUser(u), { admin: await isGlobalAdmin(u) });
+const meUser = async (u) => Object.assign(publicUser(u), { admin: await isGlobalAdmin(u), prefs: u.prefs || {} });
 const emailOk = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
@@ -322,6 +322,16 @@ route('PUT', '/api/me', async (req) => {
   }
   await store.updateUser(user.id, f);
   return meUser(Object.assign(user, f));
+});
+// preferências da pessoa (ex.: cores personalizadas da paleta)
+route('PUT', '/api/me/prefs', async (req) => {
+  const user = await requireUser(req);
+  const b = await readBody(req, 100000);
+  const prefs = Object.assign({}, user.prefs || {});
+  if (Array.isArray(b.colors)) prefs.colors = b.colors.filter((c) => /^#[0-9a-f]{6}$/i.test(c)).slice(-30);
+  if (b.views && typeof b.views === 'object' && JSON.stringify(b.views).length < 200000) prefs.views = b.views;
+  await store.savePrefs(user.id, prefs);
+  return prefs;
 });
 route('GET', '/api/docs', async (req) => {
   const user = await requireUser(req);

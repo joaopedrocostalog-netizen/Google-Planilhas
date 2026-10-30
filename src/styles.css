@@ -660,3 +660,51 @@ body.executor .doc-title { pointer-events: none; }
 .gp-item.on { background: var(--red-soft); color: var(--red-dark); font-weight: 500; }
 .gp-item em { font-style: normal; color: var(--text-3); }
 @media (max-width: 700px) { .view-bar .vb-note { display: none; } }
+
+/* ---------- Paleta: status e personalizadas ---------- */
+.pal-status { flex-wrap: wrap; }
+.pal-status .sw { border-radius: 4px; }
+.pal-mine { flex-wrap: wrap; gap: 4px; }
+.sw-wrap { position: relative; display: inline-flex; }
+.sw-del { position: absolute; top: -6px; right: -6px; width: 14px; height: 14px; border-radius: 50%; background: #3c4043; color: #fff; font-size: 11px; line-height: 14px; text-align: center; font-style: normal; cursor: pointer; display: none; }
+.sw-wrap:hover .sw-del { display: block; }
+.sw-add { display: inline-flex; align-items: center; justify-content: center; border: 1px dashed var(--line-2) !important; background: var(--white) !important; cursor: pointer; position: relative; overflow: hidden; }
+.sw-add input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.ch-preview { margin: 12px 0 8px; height: 30px; border: 1px solid var(--line-2); border-radius: 4px; display: flex; align-items: center; justify-content: center; font: 12px Arial, sans-serif; }
+.ch-presets { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* ---------- Linhas antigas recolhidas ---------- */
+.old-chip { position: absolute; right: 28px; bottom: 16px; z-index: 6; border: 1px solid var(--red); background: var(--white); color: var(--red-dark); border-radius: 16px; padding: 6px 14px; font-weight: 500; box-shadow: 0 1px 4px rgba(0,0,0,.18); }
+.old-chip b { font-size: 15px; margin-right: 4px; }
+.old-chip.open { background: var(--red-soft); }
+
+/* ---------- Minha visualização ---------- */
+.main { position: relative; }
+.myview { position: absolute; inset: 0; z-index: 20; background: var(--white); display: flex; flex-direction: column; }
+.mv-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 12px; background: #3c4043; color: #fff; font-size: 13px; }
+.mv-bar .mv-title { display: flex; align-items: center; gap: 6px; font-weight: 500; }
+.mv-bar label { display: flex; align-items: center; gap: 6px; color: #e8eaed; }
+.mv-bar .input { height: 28px; font-size: 13px; max-width: 220px; background: #fff; color: var(--ink); }
+.mv-bar .btn { background: transparent; color: #fff; border-color: #80868b; }
+.mv-bar .icon-btn { color: #fff; margin-left: auto; }
+.mv-hint { color: #c4c7c5; font-size: 12px; }
+.mv-table-wrap { flex: 1; overflow: auto; }
+.mv-table { border-collapse: collapse; font: 13px Arial, sans-serif; min-width: 100%; }
+.mv-table th, .mv-table td { border: 1px solid #e2e2e2; padding: 4px 8px; white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; height: 24px; }
+.mv-table thead th { position: sticky; top: 0; background: #f6f6f6; color: #3c4043; font-weight: 500; text-align: left; z-index: 2; }
+.mv-table td.num { text-align: right; }
+.mv-rn { background: #f6f6f6; color: #5a5a5a; font-weight: 400 !important; text-align: center !important; cursor: pointer; width: 46px; position: sticky; left: 0; z-index: 1; }
+.mv-table thead .mv-rn { z-index: 3; }
+.mv-rn:hover { color: var(--red-dark); }
+.mv-group td { background: #fdecee; color: var(--ink); padding: 6px 8px; }
+.mv-group span { color: var(--text-2); margin-left: 6px; }
+.mv-tog { width: 20px; height: 20px; border: 1px solid var(--red); background: var(--white); color: var(--red-dark); border-radius: 4px; font-weight: 700; line-height: 16px; padding: 0; }
+.mv-check { display: inline-flex; width: 14px; height: 14px; border: 1.5px solid #5f5f5f; border-radius: 2px; align-items: center; justify-content: center; font-size: 11px; color: #fff; cursor: pointer; }
+.mv-check.on { background: var(--red); border-color: var(--red); }
+.mv-cb { text-align: center; }
+.mv-input { width: 100%; min-width: 120px; border: 2px solid var(--red); padding: 2px 4px; font: inherit; outline: none; }
+.mv-empty { color: var(--text-2); text-align: center; padding: 30px !important; }
+.mv-list { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+.mv-li { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; }
+.mv-li span { flex: 1; }
+.mv-li .icon-btn { width: 26px; height: 26px; font-size: 11px; }

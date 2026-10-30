@@ -190,7 +190,7 @@
         const p = E.parseAddr(a);
         if (App.inRect(R, p.row, p.col)) {
           const dv = App.dvAt(sh, p.row, p.col);
-          sh.cells[a].v = dv && dv.type === 'checkbox' ? 'FALSE' : '';
+          sh.cells[a].v = dv && dv.type === 'checkbox' ? App.cbValues(dv).off : '';
           App.cleanup(sh, a);
         }
       }
@@ -223,6 +223,120 @@
   def('autofitCols', 'Ajustar colunas ao conteúdo', () => { const R = App.selRect(); App.grid.autofitCols(R.c1); });
   def('addRows', 'Adicionar linhas', (n) => { const sh = App.sheet(); App.change('Adicionar linhas', () => { sh.rows += Math.max(1, Math.min(100000, +n || 1000)); }); });
   def('addCols', 'Adicionar colunas', (n) => { const sh = App.sheet(); App.change('Adicionar colunas', () => { sh.cols += Math.max(1, Math.min(1000, +n || 26)); }); });
+  def('freezeCustom', 'Congelar (personalizado)', () => {
+    const sh = App.sheet();
+    App.ui.modal({
+      title: 'Congelar linhas e colunas', width: '380px',
+      body: `<p class="sp-hint">As linhas do topo e as colunas da esquerda ficam fixas ao rolar. Use 0 para descongelar.</p>
+        <div class="field-row"><label class="field"><span>Linhas</span><input class="input" id="fz-r" type="number" min="0" max="${sh.rows}" value="${sh.freeze.rows || 0}"></label>
+        <label class="field"><span>Colunas</span><input class="input" id="fz-c" type="number" min="0" max="${sh.cols}" value="${sh.freeze.cols || 0}"></label></div>`,
+      buttons: [{ label: 'Cancelar' }, { label: 'Congelar', primary: true, action: (d) => {
+        const r = Math.max(0, Math.min(sh.rows - 1, parseInt(d.querySelector('#fz-r').value, 10) || 0));
+        const c = Math.max(0, Math.min(sh.cols - 1, parseInt(d.querySelector('#fz-c').value, 10) || 0));
+        App.change('Congelar', () => { sh.freeze = { rows: r, cols: c }; });
+      } }],
+    });
+  });
+  // Cabeçalho da coluna: nome, fundo, cor do texto e negrito (ex.: A → DATA, fundo preto e letra branca)
+  def('colHeaderStyle', 'Personalizar cabeçalho da coluna', (col) => {
+    const sh = App.sheet(), R = App.selRect();
+    const c1 = typeof col === 'number' ? col : R.c1, c2 = typeof col === 'number' ? col : Math.min(R.c2, R.c1 + 200);
+    const cur = (sh.colHdr && sh.colHdr[c1]) || {};
+    const name = (sh.colNames && sh.colNames[c1]) || '';
+    const label = c1 === c2 ? `coluna ${E.numToCol(c1)}` : `colunas ${E.numToCol(c1)} a ${E.numToCol(c2)}`;
+    App.ui.modal({
+      title: `Cabeçalho da ${label}`, width: '440px',
+      body: `${c1 === c2 ? `<label class="field"><span>Nome (no lugar da letra ${E.numToCol(c1)})</span><input class="input" id="ch-name" value="${App.esc(name)}" placeholder="${E.numToCol(c1)}" maxlength="60"></label>` : ''}
+        <div class="field-row"><label class="field"><span>Fundo</span><span class="inline"><input type="color" id="ch-bg" value="${cur.bg || '#000000'}"> <label class="check"><input type="checkbox" id="ch-bg-on"${cur.bg ? ' checked' : ''}> usar</label></span></label>
+        <label class="field"><span>Cor do texto</span><span class="inline"><input type="color" id="ch-color" value="${cur.color || '#ffffff'}"> <label class="check"><input type="checkbox" id="ch-color-on"${cur.color ? ' checked' : ''}> usar</label></span></label></div>
+        <label class="check"><input type="checkbox" id="ch-b"${cur.b ? ' checked' : ''}> Negrito</label>
+        <div class="ch-preview" id="ch-prev"></div>
+        <div class="ch-presets"><span class="sp-hint">Modelos:</span> <button class="btn btn-sm" data-p="#000000|#ffffff">Preto e branco</button> <button class="btn btn-sm" data-p="#e30613|#ffffff">Vermelho</button> <button class="btn btn-sm" data-p="#34a853|#ffffff">Verde</button> <button class="btn btn-sm" data-p="">Padrão</button></div>`,
+      onOpen: (d) => {
+        const prev = () => {
+          const p = d.querySelector('#ch-prev');
+          const bg = d.querySelector('#ch-bg-on').checked ? d.querySelector('#ch-bg').value : '#f6f6f6';
+          const color = d.querySelector('#ch-color-on').checked ? d.querySelector('#ch-color').value : bg === '#f6f6f6' ? '#5a5a5a' : '#000000';
+          const nm = d.querySelector('#ch-name') ? d.querySelector('#ch-name').value || E.numToCol(c1) : E.numToCol(c1);
+          p.style.background = bg; p.style.color = color; p.style.fontWeight = d.querySelector('#ch-b').checked ? '700' : '400';
+          p.textContent = nm;
+        };
+        d.querySelectorAll('input').forEach((x) => x.addEventListener('input', prev));
+        d.querySelector('#ch-bg').addEventListener('input', () => { d.querySelector('#ch-bg-on').checked = true; prev(); });
+        d.querySelector('#ch-color').addEventListener('input', () => { d.querySelector('#ch-color-on').checked = true; prev(); });
+        d.querySelectorAll('[data-p]').forEach((b) => (b.onclick = () => {
+          const [bg, fg] = b.dataset.p.split('|');
+          d.querySelector('#ch-bg-on').checked = !!bg; d.querySelector('#ch-color-on').checked = !!fg; d.querySelector('#ch-b').checked = !!bg;
+          if (bg) d.querySelector('#ch-bg').value = bg;
+          if (fg) d.querySelector('#ch-color').value = fg;
+          prev();
+        }));
+        prev();
+      },
+      buttons: [{ label: 'Cancelar' }, { label: 'Aplicar', primary: true, action: (d) => {
+        const st = {};
+        if (d.querySelector('#ch-bg-on').checked) st.bg = d.querySelector('#ch-bg').value;
+        if (d.querySelector('#ch-color-on').checked) st.color = d.querySelector('#ch-color').value;
+        if (d.querySelector('#ch-b').checked) st.b = true;
+        const newName = d.querySelector('#ch-name') ? d.querySelector('#ch-name').value.trim().slice(0, 60) : null;
+        App.change('Cabeçalho da coluna', () => {
+          const all = Object.assign({}, sh.colHdr || {});
+          for (let c = c1; c <= c2; c++) { if (Object.keys(st).length) all[c] = Object.assign({}, st); else delete all[c]; }
+          if (Object.keys(all).length) sh.colHdr = all; else delete sh.colHdr;
+          if (newName !== null && newName !== name) {
+            const nm = Object.assign({}, sh.colNames || {});
+            if (newName) nm[c1] = newName; else delete nm[c1];
+            if (Object.keys(nm).length) sh.colNames = nm; else delete sh.colNames;
+          }
+        });
+      } }],
+    });
+  });
+  // Grupos de colunas (ex.: Entrega 1, Entrega 2): ficam recolhidos com + para todos; abrir vale só para quem clicou
+  def('groupCols', 'Agrupar colunas', () => {
+    const sh = App.sheet(), R = App.selRect();
+    const label0 = (sh.colNames && sh.colNames[R.c1]) || '';
+    App.ui.prompt(`Agrupar colunas ${E.numToCol(R.c1)} a ${E.numToCol(R.c2)}`, 'Nome do grupo (ex.: Entrega 1)', label0, (v) => {
+      App.change('Agrupar colunas', () => {
+        const list = (sh.colGroups || []).filter((g) => g.c2 < R.c1 || g.c1 > R.c2);
+        list.push({ id: App.uid(), c1: R.c1, c2: R.c2, label: String(v || '').trim().slice(0, 40) });
+        list.sort((a, b) => a.c1 - b.c1);
+        sh.colGroups = list;
+      });
+      notify('Grupo criado. Ele aparece recolhido (+) para todos; quem clicar abre só para si.');
+    }, 'Agrupar');
+  });
+  def('ungroupCols', 'Desagrupar colunas', () => {
+    const sh = App.sheet(), R = App.selRect();
+    if (!(sh.colGroups || []).some((g) => !(g.c2 < R.c1 || g.c1 > R.c2))) return notify('Não há grupo nas colunas selecionadas.');
+    App.change('Desagrupar colunas', () => {
+      const list = sh.colGroups.filter((g) => g.c2 < R.c1 || g.c1 > R.c2);
+      if (list.length) sh.colGroups = list; else delete sh.colGroups;
+    });
+  });
+  // Mostrar só os últimos N dias: linhas mais antigas ficam recolhidas atrás de um botão +
+  def('recentRows', 'Mostrar só os últimos dias', () => {
+    const sh = App.sheet(), used = App.usedRange(sh), si = App.sheetIndex(sh);
+    const cur = sh.recent || { col: App.sel.ac, days: 30 };
+    const head = (c) => { const n = sh.colNames && sh.colNames[c]; if (n) return n; const v = App.value(si, 1, c); return v === null || v === undefined ? '' : String(App.fmtValue(v, App.style(sh, 1, c).nf)); };
+    const opts = [];
+    for (let c = 1; c <= Math.max(1, used.maxC); c++) opts.push(`<option value="${c}"${cur.col === c ? ' selected' : ''}>${E.numToCol(c)}${head(c) ? ' · ' + App.esc(String(head(c)).slice(0, 30)) : ''}</option>`);
+    App.ui.modal({
+      title: 'Mostrar só os últimos dias', width: '440px',
+      body: `<p class="sp-hint">As linhas com data mais antiga ficam recolhidas para todos. Um botão <b>+</b> mostra as antigas, e abrir vale só para quem clicou.</p>
+        <label class="field"><span>Coluna com a data</span><select class="input" id="rc-col">${opts.join('')}</select></label>
+        <label class="field"><span>Mostrar os últimos (dias)</span><input class="input" id="rc-days" type="number" min="1" max="3650" value="${cur.days || 30}"></label>`,
+      buttons: [
+        ...(sh.recent ? [{ label: 'Desativar', action: () => { App.change('Últimos dias', () => { delete sh.recent; }); } }] : []),
+        { label: 'Cancelar' },
+        { label: 'Aplicar', primary: true, action: (d) => {
+          const col = +d.querySelector('#rc-col').value, days = Math.max(1, Math.min(3650, parseInt(d.querySelector('#rc-days').value, 10) || 30));
+          App.change('Últimos dias', () => { sh.recent = { col, days }; });
+        } },
+      ],
+    });
+  });
+  def('toggleOldRows', 'Mostrar/ocultar linhas antigas', () => App.toggleOld(App.sheet()));
   def('freezeRows', 'Congelar linhas', (n) => { const sh = App.sheet(); App.change('Congelar', () => { sh.freeze.rows = n === 'current' ? sel.ar : n; }); });
   def('freezeCols', 'Congelar colunas', (n) => { const sh = App.sheet(); App.change('Congelar', () => { sh.freeze.cols = n === 'current' ? sel.ac : n; }); });
   def('zoom', 'Zoom', (z) => { doc.zoom = Math.max(25, Math.min(400, +z || 100)); App.scheduleSave(); App.grid.layout(); App.emit('zoom'); });
@@ -380,14 +494,23 @@
     if (App.editing()) { App.editor.insertText(name + '('); return; }
     App.startEdit({ mode: 'enter', initial: '=' + name + '(' });
   });
+  // Ctrl+D: com uma linha selecionada, copia a célula de cima (não precisa selecionar a informação de origem)
   def('fillDown', 'Preencher para baixo', () => {
     const R = App.selRect();
-    if (R.r1 === R.r2) return;
+    if (R.r1 === R.r2) {
+      if (R.r1 <= 1) return;
+      App.change('Preencher para baixo', () => App.fill(si(), { r1: R.r1 - 1, c1: R.c1, r2: R.r1 - 1, c2: R.c2 }, Object.assign({}, R, { r1: R.r1 - 1 }), 'down'));
+      return;
+    }
     App.change('Preencher para baixo', () => App.fill(si(), { r1: R.r1, c1: R.c1, r2: R.r1, c2: R.c2 }, R, 'down'));
   }, 'Ctrl+D');
   def('fillRight', 'Preencher para a direita', () => {
     const R = App.selRect();
-    if (R.c1 === R.c2) return;
+    if (R.c1 === R.c2) {
+      if (R.c1 <= 1) return;
+      App.change('Preencher para a direita', () => App.fill(si(), { r1: R.r1, c1: R.c1 - 1, r2: R.r2, c2: R.c1 - 1 }, Object.assign({}, R, { c1: R.c1 - 1 }), 'right'));
+      return;
+    }
     App.change('Preencher para a direita', () => App.fill(si(), { r1: R.r1, c1: R.c1, r2: R.r2, c2: R.c1 }, R, 'right'));
   }, 'Ctrl+R');
   def('selectAll', 'Selecionar tudo', () => {
@@ -550,10 +673,50 @@
     const sh = App.sheet();
     const boxes = cells.filter(([r, c]) => { const d = App.dvAt(sh, r, c); return d && d.type === 'checkbox'; });
     if (!boxes.length) return false;
-    const anyOff = boxes.some(([r, c]) => App.value(si(), r, c) !== true);
-    App.change('Caixa de seleção', () => { for (const [r, c] of boxes) App.setRaw(sh, r, c, anyOff ? 'TRUE' : 'FALSE'); });
+    const isOn = ([r, c]) => App.cbIsOn(App.dvAt(sh, r, c), App.raw(sh, r, c), App.value(si(), r, c));
+    const anyOff = boxes.some((b) => !isOn(b));
+    const apply = () => App.change('Caixa de seleção', () => {
+      for (const [r, c] of boxes) { const v = App.cbValues(App.dvAt(sh, r, c)); App.setRaw(sh, r, c, anyOff ? v.on : v.off); }
+    });
+    // pede confirmação antes de alterar (pode ser desligado na regra de validação)
+    const ask = boxes.some(([r, c]) => App.dvAt(sh, r, c).confirm !== false);
+    if (!ask) { apply(); return true; }
+    const where = boxes.length === 1 ? E.addrToStr(boxes[0][0], boxes[0][1]) : `${boxes.length} células`;
+    const first = App.cbValues(App.dvAt(sh, boxes[0][0], boxes[0][1]));
+    const to = anyOff ? first.on : first.off;
+    const label = to === 'TRUE' ? 'marcar' : to === 'FALSE' ? 'desmarcar' : `mudar para "${to || '(vazio)'}"`;
+    App.ui.confirm('Confirmar alteração', `Deseja ${label} a caixa de seleção em ${where}?`, 'Confirmar', apply);
     return true;
   };
+  // Remove as caixas de seleção da seleção (administradores)
+  def('removeCheckbox', 'Remover caixa de seleção', () => {
+    const sh = App.sheet(), R = App.selRect();
+    const minus = (A, B) => {
+      // partes de A fora de B
+      if (B.r2 < A.r1 || B.r1 > A.r2 || B.c2 < A.c1 || B.c1 > A.c2) return [A];
+      const out = [];
+      if (A.r1 < B.r1) out.push({ r1: A.r1, c1: A.c1, r2: B.r1 - 1, c2: A.c2 });
+      if (A.r2 > B.r2) out.push({ r1: B.r2 + 1, c1: A.c1, r2: A.r2, c2: A.c2 });
+      const r1 = Math.max(A.r1, B.r1), r2 = Math.min(A.r2, B.r2);
+      if (A.c1 < B.c1) out.push({ r1, c1: A.c1, r2, c2: B.c1 - 1 });
+      if (A.c2 > B.c2) out.push({ r1, c1: B.c2 + 1, r2, c2: A.c2 });
+      return out;
+    };
+    if (!sh.dv.some((d) => d.type === 'checkbox' && minus(d.range, R).length !== 1)) { notify('Não há caixas de seleção nas células selecionadas.'); return; }
+    App.ui.confirm('Remover caixa de seleção?', 'As caixas de seleção das células selecionadas serão removidas, junto com os valores marcados/desmarcados.', 'Remover', () => {
+      App.change('Remover caixa de seleção', () => {
+        const next = [];
+        for (const d of sh.dv) {
+          if (d.type !== 'checkbox') { next.push(d); continue; }
+          for (let r = Math.max(R.r1, d.range.r1); r <= Math.min(R.r2, d.range.r2); r++) for (let c = Math.max(R.c1, d.range.c1); c <= Math.min(R.c2, d.range.c2); c++) {
+            if (App.cbValid(d, App.raw(sh, r, c))) App.setRaw(sh, r, c, '');
+          }
+          minus(d.range, R).forEach((part, i) => next.push(Object.assign({}, d, { id: i ? App.uid() : d.id, range: part })));
+        }
+        sh.dv = next;
+      });
+    });
+  });
 
   // ---------- Movimento após confirmar a edição ----------
   App.moveAfterCommit = (r, c, dr, dc) => {

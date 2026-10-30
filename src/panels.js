@@ -195,8 +195,10 @@
         App.change('Validação de dados', () => {
           sh.dv = final;
           for (const d of final) if (d.type === 'checkbox') for (let r = d.range.r1; r <= Math.min(d.range.r2, d.range.r1 + 5000); r++) for (let c = d.range.c1; c <= d.range.c2; c++) {
-            if (!/^(TRUE|FALSE|VERDADEIRO|FALSO)$/i.test(App.raw(sh, r, c))) App.setRaw(sh, r, c, 'FALSE');
+            const raw = App.raw(sh, r, c);
+            if (!App.cbValid(d, raw)) { const v = App.cbValues(d); App.setRaw(sh, r, c, /^(true|verdadeiro)$/i.test(raw) || (d.prevOn && raw === d.prevOn) ? v.on : v.off); }
           }
+          for (const d of final) delete d.prevOn;
         });
       } else preview();
     };
@@ -220,6 +222,9 @@
         <label class="field"><span>Aplicar ao intervalo</span><input class="input" data-f="range" value="${esc(App.rangeText(d.range))}"></label>
         <label class="field"><span>Critérios</span><select class="input" data-f="type">${DV_TYPES.map(([k, l]) => `<option value="${k}"${d.type === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
         ${d.type === 'list' ? `<div class="dv-items">${d.items.map((it, i) => `<div class="dv-row"><label class="dv-color" style="background:${d.colors[it] || '#ececec'}" data-i="${i}"></label><input class="input" data-item="${i}" value="${esc(it)}"><button class="icon-btn" data-rm="${i}" title="Remover item">${icon('close', 16)}</button></div>`).join('')}</div><button class="btn sp-add-item">${icon('plus', 16)} Adicionar outro item</button>` : ''}
+        ${d.type === 'checkbox' ? `<label class="check"><input type="checkbox" data-f="custom"${d.custom ? ' checked' : ''}> Usar valores personalizados nas células</label>
+          <div class="field-row cb-values"${d.custom ? '' : ' hidden'}><label class="field"><span>Marcada</span><input class="input" data-f="checked" value="${esc(d.checked || '')}" placeholder="Ex.: SIM"></label><label class="field"><span>Desmarcada</span><input class="input" data-f="unchecked" value="${esc(d.unchecked || '')}" placeholder="Ex.: NÃO"></label></div>
+          <label class="check"><input type="checkbox" data-f="confirm"${d.confirm !== false ? ' checked' : ''}> Pedir confirmação ao marcar ou desmarcar</label>` : ''}
         ${d.type === 'range' ? `<label class="field"><span>Intervalo com os itens</span><input class="input" data-f="src" placeholder="Página1!A1:A10" value="${esc(d.src)}"></label>` : ''}
         ${d.type === 'number' ? `<label class="field"><span>Condição</span>${condSelect(d.cond.type, numConds).replace('data-f="type"', 'data-f="ctype"')}</label><div class="field-row"><input class="input" data-f="ca" placeholder="Valor" value="${esc(d.cond.a)}"><input class="input" data-f="cb" placeholder="Valor" value="${esc(d.cond.b)}"${argsFor(d.cond.type) < 2 ? ' hidden' : ''}></div>` : ''}
         ${d.type === 'text' ? `<label class="field"><span>Condição</span>${condSelect(d.cond.type, textConds).replace('data-f="type"', 'data-f="ctype"')}</label><input class="input" data-f="ca" placeholder="Texto" value="${esc(d.cond.a)}">` : ''}
@@ -232,6 +237,10 @@
       q('range').onchange = () => { const R = rangeFromInput(q('range').value); if (R) { d.range = R; preview(); } };
       q('type').onchange = () => { d.type = q('type').value; d.cond.type = d.type === 'text' ? 'contains' : 'between'; preview(); renderRule(body); };
       if (q('src')) q('src').onchange = () => { d.src = q('src').value; preview(); };
+      if (q('custom')) q('custom').onchange = () => { d.prevOn = App.cbValues(d).on; d.custom = q('custom').checked; body.querySelector('.cb-values').hidden = !d.custom; if (d.custom && !d.checked) { d.checked = 'SIM'; d.unchecked = 'NÃO'; q('checked').value = 'SIM'; q('unchecked').value = 'NÃO'; } preview(); };
+      if (q('checked')) q('checked').oninput = () => { d.checked = q('checked').value; preview(); };
+      if (q('unchecked')) q('unchecked').oninput = () => { d.unchecked = q('unchecked').value; preview(); };
+      if (q('confirm')) q('confirm').onchange = () => { d.confirm = q('confirm').checked; };
       if (q('style')) q('style').onchange = () => { d.style = q('style').value; preview(); };
       if (q('ctype')) q('ctype').onchange = () => { d.cond.type = q('ctype').value; renderRule(body); };
       if (q('ca')) q('ca').oninput = () => { d.cond.a = q('ca').value; preview(); };

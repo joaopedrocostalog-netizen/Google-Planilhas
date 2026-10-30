@@ -159,23 +159,47 @@
   const GRAYS = ['#000000', '#434343', '#666666', '#999999', '#b7b7b7', '#cccccc', '#d9d9d9', '#efefef', '#f3f3f3', '#ffffff'];
   const HUES = ['#980000', '#ff0000', '#ff9900', '#ffff00', '#00ff00', '#00ffff', '#4a86e8', '#0000ff', '#9900ff', '#ff00ff'];
   const BRAND = ['#e30613', '#b8000c', '#0d0d0d', '#ffffff'];
+  // Cores padrão de status (iguais para todos)
+  const STATUS_COLORS = [
+    ['#34a853', 'Finalizado'], ['#b7e1cd', 'Finalizado (claro)'], ['#fbbc04', 'Em andamento'], ['#fce8b2', 'Em andamento (claro)'],
+    ['#ea4335', 'Pendente / atrasado'], ['#f4c7c3', 'Pendente (claro)'], ['#4285f4', 'Aguardando'], ['#c9daf8', 'Aguardando (claro)'],
+    ['#ff6d01', 'Em trânsito'], ['#a142f4', 'Agendado'], ['#9aa0a6', 'Cancelado'],
+  ];
+  App.STATUS_COLORS = STATUS_COLORS;
+  // Cores personalizadas salvas (na conta, quando há login; senão neste navegador)
+  App.customColors = App.customColors || (() => { try { return JSON.parse(localStorage.getItem('planilhas:colors') || '[]'); } catch (e) { return []; } });
+  App.saveCustomColors = App.saveCustomColors || ((list) => { try { localStorage.setItem('planilhas:colors', JSON.stringify(list)); } catch (e) { /* ignora */ } });
   function palette(onPick, current, resetLabel) {
     const box = document.createElement('div');
     box.className = 'palette';
-    const sw = (c) => `<button class="sw${current && current.toLowerCase() === c ? ' on' : ''}" data-c="${c}" style="background:${c}" title="${c}"></button>`;
+    const sw = (c, title) => `<button class="sw${current && current.toLowerCase() === c.toLowerCase() ? ' on' : ''}" data-c="${c}" style="background:${c}" title="${esc(title || c)}"></button>`;
     const tints = [0.8, 0.6, 0.4].map((t) => HUES.map((h) => App.mixColor(h, '#ffffff', t)))
       .concat([0.25, 0.5].map((t) => HUES.map((h) => App.mixColor(h, '#000000', t))));
-    box.innerHTML = `<button class="pal-reset" data-c="">${icon('close', 14)} ${esc(resetLabel || 'Redefinir')}</button>` +
-      `<div class="pal-row">${GRAYS.map(sw).join('')}</div><div class="pal-row">${HUES.map(sw).join('')}</div>` +
-      tints.map((row) => `<div class="pal-row">${row.map(sw).join('')}</div>`).join('') +
-      `<div class="pal-label">MARCA</div><div class="pal-row">${BRAND.map(sw).join('')}</div>` +
-      `<label class="pal-custom">${icon('plus', 14)} Personalizado <input type="color" value="${current || '#e30613'}"></label>`;
+    const draw = () => {
+      const custom = App.customColors();
+      box.innerHTML = `<button class="pal-reset" data-c="">${icon('close', 14)} ${esc(resetLabel || 'Redefinir')}</button>` +
+        `<div class="pal-row">${GRAYS.map((c) => sw(c)).join('')}</div><div class="pal-row">${HUES.map((c) => sw(c)).join('')}</div>` +
+        tints.map((row) => `<div class="pal-row">${row.map((c) => sw(c)).join('')}</div>`).join('') +
+        `<div class="pal-label">STATUS</div><div class="pal-row pal-status">${STATUS_COLORS.map(([c, t]) => sw(c, t)).join('')}</div>` +
+        `<div class="pal-label">MARCA</div><div class="pal-row">${BRAND.map((c) => sw(c)).join('')}</div>` +
+        `<div class="pal-label">PERSONALIZADAS</div><div class="pal-row pal-mine">${custom.map((c) => `<span class="sw-wrap">${sw(c)}<i class="sw-del" data-del="${c}" title="Remover cor">×</i></span>`).join('')}
+          <label class="sw sw-add" title="Adicionar cor personalizada">${icon('plus', 14)}<input type="color" value="${current || '#e30613'}"></label></div>`;
+      box.querySelector('.sw-add input').addEventListener('change', (e) => {
+        const c = e.target.value.toLowerCase();
+        const list = App.customColors().filter((x) => x.toLowerCase() !== c);
+        list.push(c);
+        App.saveCustomColors(list.slice(-20));
+        closePopup(); onPick(c);
+      });
+    };
+    draw();
     box.addEventListener('click', (e) => {
+      const del = e.target.closest('[data-del]');
+      if (del) { e.stopPropagation(); App.saveCustomColors(App.customColors().filter((x) => x !== del.dataset.del)); draw(); return; }
       const b = e.target.closest('[data-c]');
       if (!b) return;
       closePopup(); onPick(b.dataset.c || null);
     });
-    box.querySelector('input[type=color]').addEventListener('change', (e) => { closePopup(); onPick(e.target.value); });
     return box;
   }
   App.palette = palette;
@@ -246,8 +270,10 @@
         { label: 'Nenhuma coluna', cmd: 'freezeCols', arg: 0, check: () => !sheetFrozen().cols },
         { label: '1 coluna', cmd: 'freezeCols', arg: 1, check: () => sheetFrozen().cols === 1 },
         { label: '2 colunas', cmd: 'freezeCols', arg: 2, check: () => sheetFrozen().cols === 2 },
-        { label: `Até a coluna atual (${E.numToCol(sel.ac)})`, cmd: 'freezeCols', arg: 'current', check: () => sheetFrozen().cols > 2 && sheetFrozen().cols === sel.ac },
+        { label: `Até a coluna atual (${E.numToCol(sel.ac)})`, cmd: 'freezeCols', arg: 'current', check: () => sheetFrozen().cols > 2 && sheetFrozen().cols === sel.ac }, '-',
+        { label: 'Personalizado…', cmd: 'freezeCustom' },
       ] }, '-',
+      { label: 'Minha visualização', icon: 'filterViews', cmd: 'myView' },
       { label: 'Zoom', sub: () => [50, 75, 90, 100, 125, 150, 200].map((z) => ({ label: z + '%', cmd: 'zoom', arg: z, check: () => doc.zoom === z })) },
       { label: 'Ocultar menus', cmd: 'toggleMenus' },
       { label: 'Tela cheia', cmd: 'fullscreen' },
@@ -286,7 +312,8 @@
       { label: 'Classificar página', sub: () => [{ label: `Classificar página por coluna ${E.numToCol(sel.ac)} (A a Z)`, cmd: 'sortSheet', arg: false }, { label: `Classificar página por coluna ${E.numToCol(sel.ac)} (Z a A)`, cmd: 'sortSheet', arg: true }] },
       { label: 'Classificar intervalo', sub: () => [{ label: `Classificar intervalo por coluna ${E.numToCol(sel.ac)} (A a Z)`, cmd: 'sortRange', arg: false }, { label: `Classificar intervalo por coluna ${E.numToCol(sel.ac)} (Z a A)`, cmd: 'sortRange', arg: true }, { label: 'Opções avançadas de classificação de intervalo', cmd: 'sortAdvanced' }] }, '-',
       { label: () => (App.sheet().filter ? 'Remover filtro' : 'Criar um filtro'), icon: 'filter', cmd: 'toggleFilter' },
-      { label: 'Visualizações de filtro', icon: 'filterViews', sub: () => App.viewMenuItems() }, '-',
+      { label: 'Visualizações de filtro', icon: 'filterViews', sub: () => App.viewMenuItems() },
+      { label: 'Mostrar só os últimos dias…', cmd: 'recentRows' }, '-',
       { label: 'Validação de dados', cmd: 'dataValidation' },
       { label: 'Estatísticas da coluna', cmd: 'columnStats' },
       { label: 'Intervalos nomeados', cmd: 'namedRanges' }, '-',

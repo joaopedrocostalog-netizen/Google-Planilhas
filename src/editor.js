@@ -62,9 +62,10 @@
     box.style.minHeight = rc.h + 1 + 'px';
     // cresce para a direita conforme o texto, depois quebra a linha
     const maxW = Math.max(rc.w + 1, st.vw - rc.x - 8);
-    mirror.style.width = 'auto';
+    // mede a largura do texto em si (com width:auto o espelho herdava a largura da caixa e ela crescia sem parar)
+    mirror.style.width = 'max-content';
     mirror.style.whiteSpace = 'pre';
-    const natural = mirror.scrollWidth + 16;
+    const natural = Math.ceil(mirror.getBoundingClientRect().width) + 16;
     const w = Math.min(maxW, Math.max(rc.w + 1, natural));
     mirror.style.whiteSpace = 'pre-wrap';
     box.style.width = w + 'px';
