@@ -632,3 +632,9 @@ body.dragging-file .drop-overlay { display: flex; }
 .mx-name { min-width: 170px; }
 .mx-name .input { height: 28px; font-size: 13px; width: 100%; }
 .mx-name .input:not(:placeholder-shown) { font-weight: 500; border-color: var(--red); }
+
+/* ---------- Executores (setores): só o que podem usar ---------- */
+body.executor #toolbar > *:not([data-cmd="undo"]):not([data-cmd="redo"]):not([data-cmd="print"]):not([data-dd="zoom"]) { display: none !important; }
+body.executor #tab-add, body.executor #add-rows, body.executor #btn-history, body.executor #btn-star, body.executor #btn-share, body.executor #menu-search-btn, body.executor #pivot-chip, body.executor .chart-menu, body.executor .ch-h { display: none !important; }
+body.executor .chart-obj { cursor: default; }
+body.executor .doc-title { pointer-events: none; }

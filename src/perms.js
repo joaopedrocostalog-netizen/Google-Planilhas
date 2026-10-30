@@ -69,7 +69,7 @@
       }
       if (Object.keys(map).length) cols[sh.id] = map;
     }
-    const manage = admin || (cap === 'edit' && (sector ? !!sector.manage : true));
+    const manage = admin; // a estrutura da planilha é só dos administradores
     return {
       admin, owner, manage, viaLink,
       role: admin ? 'admin' : cap === 'view' ? 'viewer' : 'editor',
@@ -131,48 +131,63 @@
   }
 
   // Valida uma alteração. data: documento atual (para ler intervalos protegidos). Retorna mensagem de erro ou null.
-  function validate(patch, perms, data) {
+  // Texto estável (chaves ordenadas) para comparar células
+  function stable(x) {
+    if (x === null || typeof x !== 'object') return JSON.stringify(x === undefined ? null : x);
+    if (Array.isArray(x)) return '[' + x.map(stable).join(',') + ']';
+    return '{' + Object.keys(x).filter((k) => x[k] !== undefined).sort().map((k) => JSON.stringify(k) + ':' + stable(x[k])).join(',') + '}';
+  }
+  // Tudo da célula menos o valor (formatação, nota, link, comentários…)
+  function nonValue(x) {
+    const o = {};
+    if (x) for (const k in x) if (k !== 'v' && k[0] !== '_') o[k] = x[k];
+    return stable(o);
+  }
+  // Mensagem para cada tipo de alteração de página que só administradores podem fazer
+  const PROP_MSG = {
+    freeze: 'Somente administradores podem congelar linhas e colunas.',
+    rowH: 'Somente administradores podem alterar o tamanho das linhas.',
+    hiddenRows: 'Somente administradores podem ocultar ou reexibir linhas.',
+    rows: 'Somente administradores podem inserir ou excluir linhas.',
+    colNames: 'Somente administradores podem renomear colunas.',
+    access: 'Somente administradores podem definir permissões por coluna.',
+    protected: 'Somente administradores podem proteger intervalos.',
+    filter: 'Somente administradores podem criar ou alterar filtros.',
+    cf: 'Somente administradores podem criar formatação condicional.',
+    dv: 'Somente administradores podem criar regras de validação.',
+    banding: 'Somente administradores podem alterar a formatação.',
+    merges: 'Somente administradores podem mesclar células.',
+    charts: 'Somente administradores podem criar ou alterar gráficos.',
+    name: 'Somente administradores podem renomear páginas.',
+    hidden: 'Somente administradores podem ocultar páginas.',
+    color: 'Somente administradores podem mudar a cor das páginas.',
+  };
+  const FORMAT_MSG = 'Somente administradores podem alterar a formatação, notas e regras da planilha. Você pode apenas preencher os valores.';
+
+  // Valida uma alteração. data: documento atual. inv (opcional): alteração inversa, de onde vêm os valores anteriores.
+  // Quem não é administrador só preenche valores nas colunas liberadas; o resto da planilha é dos administradores.
+  function validate(patch, perms, data, inv) {
     if (!perms) return 'Você não tem acesso a esta planilha.';
     if (perms.admin) return null;
-    if (patch.title !== undefined && patch.title !== null && !perms.manage) return 'Somente quem gerencia a planilha pode renomeá-la.';
-    if (patch.names !== undefined && !perms.manage) return 'Somente quem gerencia a planilha pode alterar intervalos nomeados.';
+    if (patch.title !== undefined && patch.title !== null) return 'Somente administradores podem renomear a planilha.';
+    if (patch.names !== undefined) return 'Somente administradores podem alterar intervalos nomeados.';
     for (const id in patch.sheets || {}) {
       const e = patch.sheets[id];
       const sheet = data.sheets.find((s) => s.id === id);
       const name = sheet ? `"${sheet.name}"` : 'esta página';
-      if (e.created) {
-        if (!perms.manage) return 'Você não tem permissão para criar páginas.';
-        if (e.created.protected && e.created.protected.length) return 'Somente administradores podem proteger intervalos.';
-        if (e.created.access && Object.keys(e.created.access).length) return 'Somente administradores podem definir permissões por coluna.';
-        if (e.created.colNames && Object.keys(e.created.colNames).length) return 'Somente administradores podem renomear colunas.';
-        continue;
-      }
-      if (e.removed) {
-        if (!perms.manage || levelOf(perms, id) !== 'edit' || hasColRules(perms, id)) return `Você não tem permissão para excluir a página ${name}.`;
-        continue;
-      }
+      if (e.created) return 'Somente administradores podem criar páginas.';
+      if (e.removed) return 'Somente administradores podem excluir páginas.';
       if (!sheetVisible(perms, id)) return 'Você não tem acesso a esta página.';
-      const lv = levelOf(perms, id);
       if (e.props) {
-        // altura automática de linha acompanha a edição de uma célula liberada
-        const keys = Object.keys(e.props).filter((k) => !(k === 'rowH' && bestLevel(perms, id) === 'edit'));
-        const resize = 'rows' in e.props || 'cols' in e.props;
-        // as colunas (A, B, C…) só podem ser alteradas por administradores
-        if ('cols' in e.props || 'colW' in e.props || 'hiddenCols' in e.props) return COLS_MSG;
-        if ('colNames' in e.props) return 'Somente administradores podem renomear colunas.';
-        if ('access' in e.props) return 'Somente administradores podem definir permissões por coluna.';
-        if ('protected' in e.props) {
-          return resize
-            ? `A página ${name} tem intervalos protegidos que seriam deslocados. Somente administradores podem inserir ou excluir linhas e colunas antes deles.`
-            : 'Somente administradores podem proteger intervalos.';
-        }
-        if (('name' in e.props || 'hidden' in e.props) && !perms.manage) return 'Você não tem permissão para renomear ou ocultar páginas.';
-        if (keys.length && lv !== 'edit') {
-          if (resize && hasColRules(perms, id)) return `Você não pode inserir ou excluir linhas e colunas na página ${name}.`;
-          return lv === 'view' ? `Você só pode visualizar a formatação da página ${name}.` : 'Você não tem acesso a esta página.';
+        const keys = Object.keys(e.props);
+        if (keys.length) {
+          if ('cols' in e.props || 'colW' in e.props || 'hiddenCols' in e.props) return COLS_MSG;
+          const k = keys.find((x) => PROP_MSG[x]);
+          return k ? PROP_MSG[k] : 'Somente administradores podem alterar a estrutura e a formatação da planilha.';
         }
       }
       if (e.cells) {
+        const invCells = inv && inv.sheets && inv.sheets[id] && inv.sheets[id].cells;
         for (const a in e.cells) {
           const c = colOf(a);
           const cl = colLevel(perms, id, c);
@@ -184,10 +199,12 @@
             const pr = blockingProtection(perms, sheet, a);
             if (pr) return `A célula ${a} está protegida${pr.desc ? ' (' + pr.desc + ')' : ''}. Peça acesso a um administrador.`;
           }
+          const before = invCells ? (a in invCells ? invCells[a] : null) : sheet ? (sheet.cells || {})[a] || null : null;
+          if (nonValue(before) !== nonValue(e.cells[a])) return FORMAT_MSG;
         }
       }
     }
-    if (patch.order && !perms.manage) return 'Você não tem permissão para reorganizar as páginas.';
+    if (patch.order) return 'Somente administradores podem reorganizar as páginas.';
     return null;
   }
 
@@ -241,7 +258,7 @@
   // Pode ver a célula?
   const canSee = (perms, sheetId, addr) => sheetVisible(perms, sheetId) && colLevel(perms, sheetId, colOf(addr)) !== 'none';
 
-  const api = { COLS_MSG, compute, validate, filterDoc, filterPatch, levelOf, colLevel, sheetVisible, bestLevel, hasHiddenCols, hasColRules, blockingProtection, defaultAcl, canSee, colOf, colName, RANK, LEVELS };
+  const api = { COLS_MSG, FORMAT_MSG, nonValue, compute, validate, filterDoc, filterPatch, levelOf, colLevel, sheetVisible, bestLevel, hasHiddenCols, hasColRules, blockingProtection, defaultAcl, canSee, colOf, colName, RANK, LEVELS };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Perms = api;
 })(typeof window !== 'undefined' ? window : globalThis);

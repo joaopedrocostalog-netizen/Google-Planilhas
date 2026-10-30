@@ -82,16 +82,17 @@
   function tabMenu(i, anchor) {
     const n = doc.sheets.length;
     App.ui.menuPopup(anchor, [
-      { label: 'Excluir', action: () => run('deleteSheet', i) },
-      { label: 'Duplicar', action: () => { run('switchSheet', i); run('duplicateSheet'); } },
-      { label: 'Renomear', action: () => startRename(i) },
-      { label: 'Mudar cor', sub: () => [{ label: 'Redefinir', action: () => run('sheetColor', { i, color: null }) }, ...['#e30613', '#b8000c', '#0d0d0d', '#ff9900', '#f1c232', '#6aa84f', '#3c78d8', '#674ea7', '#a64d79', '#999999'].map((c) => ({ label: c, swatch: c, action: () => run('sheetColor', { i, color: c }) }))] },
-      { label: 'Ocultar página', action: () => run('hideSheet', i) }, '-',
-      { label: 'Mover para a direita', disabled: i >= n - 1, action: () => run('moveSheet', { i, to: i + 1 }) },
-      { label: 'Mover para a esquerda', disabled: i <= 0, action: () => run('moveSheet', { i, to: i - 1 }) },
+      { label: 'Excluir', need: 'deleteSheet', action: () => run('deleteSheet', i) },
+      { label: 'Duplicar', need: 'duplicateSheet', action: () => { run('switchSheet', i); run('duplicateSheet'); } },
+      { label: 'Renomear', need: 'renameSheet', action: () => startRename(i) },
+      { label: 'Mudar cor', need: 'sheetColor', sub: () => [{ label: 'Redefinir', action: () => run('sheetColor', { i, color: null }) }, ...['#e30613', '#b8000c', '#0d0d0d', '#ff9900', '#f1c232', '#6aa84f', '#3c78d8', '#674ea7', '#a64d79', '#999999'].map((c) => ({ label: c, swatch: c, action: () => run('sheetColor', { i, color: c }) }))] },
+      { label: 'Ocultar página', need: 'hideSheet', action: () => run('hideSheet', i) }, '-',
+      { label: 'Mover para a direita', need: 'moveSheet', disabled: i >= n - 1, action: () => run('moveSheet', { i, to: i + 1 }) },
+      { label: 'Mover para a esquerda', need: 'moveSheet', disabled: i <= 0, action: () => run('moveSheet', { i, to: i - 1 }) },
     ], { above: true });
   }
   function startRename(i) {
+    if (App.adminOnly && App.adminOnly()) return;
     const tab = document.querySelector(`.tab[data-i="${i}"] .tab-name`);
     if (!tab) return;
     tab.contentEditable = 'true';
@@ -241,15 +242,15 @@
           { label: `Excluir ${cl}`, cmd: 'deleteCols' }, { label: `Limpar ${cl}`, cmd: 'clearValues' }, { label: `Ocultar ${cl}`, cmd: 'hideCols' },
           { label: `Redimensionar ${cl}`, cmd: 'resizeCols' }, { label: 'Ajustar ao conteúdo', cmd: 'autofitCols' }, '-',
           { label: `Classificar página de A a Z`, cmd: 'sortSheet', arg: false }, { label: `Classificar página de Z a A`, cmd: 'sortSheet', arg: true }, '-',
-          { label: sh.filter ? 'Remover filtro' : 'Criar um filtro', cmd: 'toggleFilter' },
-          { label: `Congelar até a coluna ${E.numToCol(R.c2)}`, action: () => run('freezeCols', R.c2) },
+          { label: sh.filter && sh.filter.r1 === 0 && R.c1 >= sh.filter.c1 && R.c2 <= sh.filter.c2 ? 'Remover filtro' : sh.filter && sh.filter.r1 === 0 ? `Filtrar também a ${cl}` : sh.filter ? 'Remover filtro' : `Criar um filtro a partir da ${cl}`, cmd: sh.filter && sh.filter.r1 !== 0 ? 'toggleFilter' : 'filterFromColumn', arg: undefined },
+          { label: `Congelar até a coluna ${E.numToCol(R.c2)}`, need: 'freezeCols', action: () => run('freezeCols', R.c2) },
           { label: 'Estatísticas da coluna', cmd: 'columnStats' }, { label: 'Validação de dados', cmd: 'dataValidation' }, { label: 'Formatação condicional', cmd: 'condFormat' }];
       } else if (hit.area === 'rowHdr' || hit.area === 'rowEdge') {
         items = [...base,
           { label: `Inserir ${rowsTxt(nr)} acima`, cmd: 'insertRowsAbove' }, { label: `Inserir ${rowsTxt(nr)} abaixo`, cmd: 'insertRowsBelow' },
           { label: `Excluir ${rl}`, cmd: 'deleteRows' }, { label: `Limpar ${rl}`, cmd: 'clearValues' }, { label: `Ocultar ${rl}`, cmd: 'hideRows' },
           { label: `Redimensionar ${rl}`, cmd: 'resizeRows' }, '-',
-          { label: `Congelar até a linha ${R.r2}`, action: () => run('freezeRows', R.r2) },
+          { label: `Congelar até a linha ${R.r2}`, need: 'freezeRows', action: () => run('freezeRows', R.r2) },
           { label: 'Formatação condicional', cmd: 'condFormat' }, { label: 'Validação de dados', cmd: 'dataValidation' }];
       } else if (hit.area === 'cell' || hit.area === 'fill') {
         items = [...base,
@@ -307,7 +308,7 @@
       if (!f) return;
       const crit = (f.crit && f.crit[c]) || {};
       const counts = new Map();
-      for (let r = f.r1 + 1; r <= f.r2; r++) {
+      for (let r = f.r1 + 1, end = App.filterEnd(sh); r <= end; r++) {
         // valores das linhas visíveis pelos outros filtros
         let hiddenByOther = false;
         for (const k in f.crit) {
@@ -352,7 +353,7 @@
       }));
       box.querySelectorAll('.fp-sort').forEach((b) => b.addEventListener('click', () => {
         App.ui.closePopup();
-        App.change('Classificar', () => App.sortRange(si, { r1: f.r1, c1: f.c1, r2: f.r2, c2: f.c2 }, [{ col: c, asc: b.dataset.sort === 'asc' }], true));
+        App.change('Classificar', () => App.sortRange(si, { r1: f.r1, c1: f.c1, r2: App.filterEnd(sh), c2: f.c2 }, [{ col: c, asc: b.dataset.sort === 'asc' }], true));
       }));
       box.querySelector('.fp-cancel').addEventListener('click', () => App.ui.closePopup());
       box.querySelector('.fp-ok').addEventListener('click', () => {

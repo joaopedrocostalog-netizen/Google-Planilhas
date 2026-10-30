@@ -155,10 +155,36 @@
     let res;
     try { res = fn(); } catch (e) { console.error(e); restore(snap); App.emit('notify', 'Não foi possível concluir a operação.'); return false; }
     if (res === false) return false;
-    const [fwd, inv] = window.Patch.diffPair(JSON.parse(snap), JSON.parse(JSON.stringify(docView(), replacer)));
+    const before = JSON.parse(snap);
+    let [fwd, inv] = window.Patch.diffPair(before, JSON.parse(JSON.stringify(docView(), replacer)));
+    // quem só preenche valores (planilhas compartilhadas): mantém apenas os valores das células,
+    // descartando formatação, notas e links que viriam junto (ao colar, arrastar o preenchimento etc.)
+    if (fwd && App.valuesOnly && App.valuesOnly()) {
+      let dropped = false;
+      for (const id in fwd.sheets) {
+        const e = fwd.sheets[id];
+        if (!e.cells) continue;
+        const sh = doc.sheets.find((x) => x.id === id);
+        if (!sh) continue;
+        for (const a in e.cells) {
+          const b = inv.sheets[id].cells[a], f = e.cells[a];
+          const keep = {};
+          if (b) for (const k in b) if (k !== 'v') keep[k] = b[k];
+          if (f && f.v !== undefined && f.v !== null && f.v !== '') keep.v = f.v;
+          if (window.Perms.nonValue(b) === window.Perms.nonValue(f)) continue;
+          dropped = true;
+          if (Object.keys(keep).length) sh.cells[a] = JSON.parse(JSON.stringify(keep)); else delete sh.cells[a];
+        }
+      }
+      if (dropped) {
+        [fwd, inv] = window.Patch.diffPair(before, JSON.parse(JSON.stringify(docView(), replacer)));
+        invalidate();
+        if (!fwd) { App.emit('change', {}); App.emit('notify', window.Perms.FORMAT_MSG); return false; }
+      }
+    }
     // permissões (planilhas compartilhadas): desfaz a alteração se não for permitida
     if (fwd && App.validatePatch) {
-      const err = App.validatePatch(fwd);
+      const err = App.validatePatch(fwd, inv);
       if (err) { applyPatch(inv); if (isStructural(inv)) App.emit('sheet'); App.emit('change', {}); App.emit('notify', err); return false; }
     }
     if (fwd) {
@@ -185,7 +211,7 @@
     if (!h) return App.emit('notify', key === 'inv' ? 'Nada para desfazer' : 'Nada para refazer');
     const p = h[key];
     if (App.validatePatch) {
-      const err = App.validatePatch(p);
+      const err = App.validatePatch(p, h[key === 'inv' ? 'fwd' : 'inv']);
       if (err) { from.push(h); return App.emit('notify', err); }
     }
     const before = doc.active;
@@ -445,13 +471,15 @@
   };
 
   // ---------- Filtros ----------
+  // última linha filtrada (no filtro a partir da coluna, acompanha os dados preenchidos)
+  App.filterEnd = (sh) => { const f = sh.filter; return !f ? 0 : f.r1 === 0 ? Math.max(1, usedRange(sh).maxR) : f.r2; };
   App.filterHidden = (sh) => {
     if (sh._fh) return sh._fh;
     const set = new Set();
     const f = sh.filter;
     if (f && f.crit) {
       const si = App.sheetIndex(sh);
-      for (let r = f.r1 + 1; r <= f.r2; r++) {
+      for (let r = f.r1 + 1, end = App.filterEnd(sh); r <= end; r++) {
         for (const k in f.crit) {
           const c = +k, cr = f.crit[k];
           const v = App.value(si, r, c);

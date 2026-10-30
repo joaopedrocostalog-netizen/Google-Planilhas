@@ -316,7 +316,7 @@
     }
     // ícones de filtro na linha de cabeçalho
     const f = sh.filter;
-    if (f && f.r1 >= r0 && f.r1 <= r1) {
+    if (f && f.r1 >= 1 && f.r1 >= r0 && f.r1 <= r1 && !(App.adminOnly && App.adminOnly())) {
       for (let c = Math.max(f.c1, c0); c <= Math.min(f.c2, c1); c++) {
         if (!colW(c)) continue;
         const x = X(c + 1) - 18 * st.z, y = Y(f.r1) + (rowH(f.r1) - 14 * st.z) / 2, s = 14 * st.z;
@@ -694,6 +694,20 @@
           ctx.fillRect(lx - 3.5 * z, ly, 7 * z, 5.5 * z);
           ctx.beginPath(); ctx.arc(lx, ly, 2.4 * z, Math.PI, 0); ctx.stroke();
         }
+        const hf = sh.filter;
+        if (hf && hf.r1 === 0 && c >= hf.c1 && c <= hf.c2 && w > 24 * z) {
+          // botão de filtro no cabeçalho da coluna
+          const s = 14 * z, bx = x + w - 18 * z, by = (hh - s) / 2;
+          const active = hf.crit && hf.crit[c] && ((hf.crit[c].hidden && hf.crit[c].hidden.length) || hf.crit[c].cond);
+          const showBtn = !(App.adminOnly && App.adminOnly());
+          if (showBtn || active) {
+            ctx.fillStyle = active ? C.sel : '#ffffff'; ctx.strokeStyle = active ? C.sel : '#9a9a9a'; ctx.lineWidth = 1;
+            roundRect(bx, by, s, s, 3 * z); ctx.fill(); ctx.stroke();
+            ctx.fillStyle = active ? '#ffffff' : '#555';
+            ctx.beginPath(); ctx.moveTo(bx + 3 * z, by + 4 * z); ctx.lineTo(bx + s - 3 * z, by + 4 * z); ctx.lineTo(bx + s / 2 + 1 * z, by + 8 * z);
+            ctx.lineTo(bx + s / 2 + 1 * z, by + 11 * z); ctx.lineTo(bx + s / 2 - 1 * z, by + 11 * z); ctx.lineTo(bx + s / 2 - 1 * z, by + 8 * z); ctx.closePath(); ctx.fill();
+          }
+        }
         ctx.fillStyle = C.hdrLine; ctx.fillRect(Math.round(x + w) - 1, 0, 1, hh);
       }
       ctx.restore();
@@ -750,15 +764,20 @@
   function hit(x, y) {
     const sh = App.sheet();
     if (x < 0 || y < 0 || x > st.vw || y > st.vh) return { area: 'out' };
+    const locked = !!(App.adminOnly && App.adminOnly());
     if (y < st.hdrH && x < st.hdrW) {
+      if (locked) return { area: 'corner' };
       if (y > st.hdrH - 6) return { area: 'freezeRowBar' };
       if (x > st.hdrW - 6) return { area: 'freezeColBar' };
       return { area: 'corner' };
     }
     if (y < st.hdrH) {
       const c = colAtScreen(x);
+      // filtro criado a partir da coluna: botão no próprio cabeçalho
+      const hf = sh.filter;
+      if (hf && hf.r1 === 0 && c >= hf.c1 && c <= hf.c2 && colW(c) && !locked && x > colX(c) + colW(c) - 22 * st.z && x < colX(c) + colW(c) - 4) return { area: 'filterHdr', c };
       // planilha compartilhada: só administradores mexem na estrutura das colunas
-      if (App.colsLocked && App.colsLocked()) return { area: 'colHdr', c };
+      if (locked || (App.colsLocked && App.colsLocked())) return { area: 'colHdr', c };
       const right = colX(c) + colW(c);
       if (Math.abs(x - right) <= 4) return { area: 'colEdge', c };
       const left = colX(c);
@@ -771,6 +790,7 @@
     }
     if (x < st.hdrW) {
       const r = rowAtScreen(y);
+      if (locked) return { area: 'rowHdr', r };
       const bottom = rowY(r) + rowH(r);
       if (Math.abs(y - bottom) <= 3) return { area: 'rowEdge', r };
       const top = rowY(r);
@@ -825,6 +845,7 @@
       case 'unhideCols': App.change('Reexibir colunas', () => { let c = h.c - 1; while (c >= 1 && sh.hiddenCols[c]) { delete sh.hiddenCols[c]; c--; } }); return;
       case 'unhideRows': App.change('Reexibir linhas', () => { let r = h.r - 1; while (r >= 1 && sh.hiddenRows[r]) { delete sh.hiddenRows[r]; r--; } }); return;
       case 'freezeRowBar': st.drag = { kind: 'freezeRows' }; bindDrag(); return;
+      case 'filterHdr': App.emit('filterMenu', { c: h.c, x: colX(h.c) + colW(h.c), y: st.hdrH }); return;
       case 'freezeColBar': st.drag = { kind: 'freezeCols' }; bindDrag(); return;
       case 'colHdr':
         if (e.shiftKey) { sel.ec = h.c; sel.er = sh.rows; sel.ar = 1; App.emit('selection'); schedule(); }
@@ -845,7 +866,7 @@
         }
         // clique na seta do filtro
         const f = sh.filter;
-        if (f && h.r === f.r1 && h.c >= f.c1 && h.c <= f.c2) {
+        if (f && h.r === f.r1 && h.c >= f.c1 && h.c <= f.c2 && !(App.adminOnly && App.adminOnly())) {
           const right = colX(h.c) + colW(h.c);
           if (p.x > right - 22 * st.z) { select(h.r, h.c, false, true); App.emit('filterMenu', { c: h.c, x: right, y: rowY(h.r) + rowH(h.r) }); return; }
         }
@@ -1016,6 +1037,7 @@
     return Math.min(maxH, 600);
   }
   App.autoFitRows = (sh, rows) => {
+    if (App.adminOnly && App.adminOnly()) return; // tamanho das linhas: só administradores
     const si = App.sheetIndex(sh);
     App.invalidate();
     for (const r of rows) {
@@ -1031,7 +1053,7 @@
     const p = pos(e);
     const h = hit(p.x, p.y);
     scroller.style.cursor = h.area === 'colEdge' ? 'col-resize' : h.area === 'rowEdge' ? 'row-resize' : h.area === 'fill' ? 'crosshair'
-      : h.area === 'colHdr' || h.area === 'rowHdr' || h.area === 'unhideCols' || h.area === 'unhideRows' || h.area === 'corner' ? 'pointer'
+      : h.area === 'colHdr' || h.area === 'filterHdr' || h.area === 'rowHdr' || h.area === 'unhideCols' || h.area === 'unhideRows' || h.area === 'corner' ? 'pointer'
         : h.area === 'freezeRowBar' ? 'row-resize' : h.area === 'freezeColBar' ? 'col-resize' : 'default';
     const key = h.area === 'cell' ? h.r + ':' + h.c : null;
     if (key === hoverKey) return;

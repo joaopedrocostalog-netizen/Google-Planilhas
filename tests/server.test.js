@@ -41,7 +41,7 @@ function connect(token, doc) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 (async () => {
-  const proc = spawn(process.execPath, [path.join(__dirname, '..', 'server', 'index.js')], { env: Object.assign({}, process.env, { PORT: String(PORT), DATABASE_URL: '' }), stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = spawn(process.execPath, [path.join(__dirname, '..', 'server', 'index.js')], { env: Object.assign({}, process.env, { PORT: String(PORT), DATABASE_URL: '', ADMIN_EMAILS: 'ana@empresa.com' }), stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';
   proc.stdout.on('data', (d) => { log += d; });
   proc.stderr.on('data', (d) => { log += d; });
@@ -65,6 +65,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const data = { title: 'Orçamento', sheets: [{ id: 'p1', name: 'Vendas', cells: { A1: { v: '10' } } }, { id: 'p2', name: 'Salários', cells: { A1: { v: '5000' } } }] };
     const doc = await api('POST', '/api/docs', { title: 'Orçamento', data }, ana.token);
     check('criar planilha', !!doc.id, true);
+    check('só administradores criam planilhas na nuvem', (await api('POST', '/api/docs', { title: 'X' }, bia.token))._status, 403);
+    check('perfil indica administrador', [(await api('GET', '/api/me', null, ana.token)).admin, (await api('GET', '/api/me', null, bia.token)).admin], [true, false]);
     check('sem acesso antes de compartilhar', (await api('GET', '/api/docs/' + doc.id, null, bia.token))._status, 403);
 
     // setores: Comercial edita Vendas e não vê Salários; Financeiro vê tudo
@@ -136,6 +138,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await A.wait('ack');
     const pn = await B.wait('patch', (m) => m.patch.sheets.p1 && m.patch.sheets.p1.props && m.patch.sheets.p1.props.colNames);
     check('nome de coluna oculta não vaza', pn.patch.sheets.p1.props.colNames, { 1: 'CLIENTE' });
+    B.send({ type: 'patch', id: 51, patch: { sheets: { p1: { cells: { D2: { v: '5', s: { b: true } } } } } } });
+    check('executor não formata', /Somente administradores podem alterar a formatação/.test((await B.wait('reject')).reason), true);
+    await B.wait('init');
+    B.send({ type: 'patch', id: 52, patch: { sheets: { p1: { props: { freeze: { rows: 1, cols: 0 } } } } } });
+    check('executor não congela', (await B.wait('reject')).reason, 'Somente administradores podem congelar linhas e colunas.');
+    await B.wait('init');
+    B.send({ type: 'patch', id: 53, patch: { sheets: { p1: { props: { rowH: { 2: 40 } } } } } });
+    check('executor não muda altura de linha', (await B.wait('reject')).reason, 'Somente administradores podem alterar o tamanho das linhas.');
+    await B.wait('init');
     B.send({ type: 'patch', id: 44, patch: { sheets: { p1: { cells: { D1: { v: 'Meta' } } } } } });
     check('coluna liberada pode ser editada', (await B.wait('ack')).id, 44);
     A.send({ type: 'patch', id: 45, patch: { sheets: { p1: { cells: { B3: { v: '999' }, E1: { v: 'ok' } } } } } });
@@ -165,10 +176,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     C.send({ type: 'patch', id: 6, patch: { sheets: { p1: { cells: { C1: { v: 'x' } } } } } });
     check('leitor não edita', (await C.wait('reject')).reason, 'Você só pode visualizar a página "Vendas".');
 
-    // presença
+    // presença: administradores veem todos; setores diferentes não se veem
     B.send({ type: 'presence', sheetId: 'p1', sel: { r1: 2, c1: 2, r2: 2, c2: 2 } });
     const pr = await A.wait('presence');
     check('presença', [pr.peer.name, pr.peer.presence.sel.r1], ['Bia', 2]);
+    C.send({ type: 'presence', sheetId: 'p1', sel: { r1: 3, c1: 1, r2: 3, c2: 1 } });
+    await A.wait('presence', (m) => m.peer.name === 'Caio');
+    await sleep(150);
+    check('setores diferentes não se veem', [B.msgs.some((m) => (m.type === 'presence' || m.type === 'join') && m.peer.name === 'Caio'), ic.peers.some((p) => p.name === 'Bia')], [false, false]);
 
     // remover o acesso pelo link derruba o Caio
     await api('PUT', `/api/docs/${doc.id}/share`, { acl: Object.assign({}, acl, { link: 'none' }) }, ana.token);
