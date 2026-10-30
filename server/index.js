@@ -211,6 +211,13 @@ function onPatch(c, msg) {
     if (fp) o.ws.send({ type: 'patch', patch: fp, version: room.version, by: { cid: c.cid, name: c.user.name } });
   }
   if (accessChanged && !c.perms.admin) sendInit(c);
+  // completa o CPF/CNPJ do motorista (DSS) e avisa todos, inclusive quem digitou
+  const fill = lookupFills(room, p);
+  if (fill) {
+    Patch.apply(room.data, fill);
+    room.version++;
+    for (const o of room.clients) { const fp = Perms.filterPatch(fill, o.perms); if (fp) o.ws.send({ type: 'patch', patch: fp, version: room.version, by: { cid: 'dss', name: 'DSS' } }); }
+  }
   scheduleSave(room);
 }
 function onPresence(c, msg) {
@@ -323,6 +330,17 @@ route('PUT', '/api/me', async (req) => {
   await store.updateUser(user.id, f);
   return meUser(Object.assign(user, f));
 });
+// pessoas que criaram conta e ainda não têm acesso a nenhuma planilha (para o administrador liberar)
+route('GET', '/api/users/pending', async (req) => {
+  const user = await requireUser(req);
+  if (!(await isGlobalAdmin(user))) throw httpError(403, 'Somente administradores.');
+  const docs = await store.allDocAcls();
+  const owners = new Set(docs.map((d) => d.owner_id));
+  const emails = new Set();
+  for (const d of docs) for (const m of (d.acl && d.acl.members) || []) emails.add(m.email);
+  const users = await store.listUsers();
+  return users.filter((u) => !owners.has(u.id) && !emails.has(u.email) && !ADMIN_EMAILS.includes(u.email)).map((u) => ({ email: u.email, name: u.name, desde: u.created_at }));
+});
 // preferências da pessoa (ex.: cores personalizadas da paleta)
 route('PUT', '/api/me/prefs', async (req) => {
   const user = await requireUser(req);
@@ -330,6 +348,7 @@ route('PUT', '/api/me/prefs', async (req) => {
   const prefs = Object.assign({}, user.prefs || {});
   if (Array.isArray(b.colors)) prefs.colors = b.colors.filter((c) => /^#[0-9a-f]{6}$/i.test(c)).slice(-30);
   if (b.views && typeof b.views === 'object' && JSON.stringify(b.views).length < 200000) prefs.views = b.views;
+  if (b.fviews && typeof b.fviews === 'object' && JSON.stringify(b.fviews).length < 300000) prefs.fviews = b.fviews;
   await store.savePrefs(user.id, prefs);
   return prefs;
 });
@@ -418,6 +437,76 @@ route('GET', '/api/docs/:id/history', async (req, p) => {
   const rows = await store.getHistory(room.id, sheet, addr, 100);
   return rows.map((h) => ({ at: h.at, name: h.user_name || 'Alguém', color: colorFor(h.user_id || ''), before: h.before, after: h.after }));
 });
+
+// ---------- DSS: catálogo de motoristas (GET {DSS_BASE_URL}/listarMotoristas, Basic) ----------
+const DSS_BASE = (process.env.DSS_BASE_URL || 'https://costalog.dssinformatica.com.br/wsdss').replace(/\/$/, '');
+const DSS_USER = process.env.DSS_USUARIO || process.env.DSS_USERNAME || '';
+const DSS_PASS = process.env.DSS_SENHA || process.env.DSS_PASSWORD || '';
+const DSS_TOKEN = process.env.DSS_TOKEN || '';
+const DSS_DRIVERS_PATH = process.env.DSS_MOTORISTAS_PATH || '/listarMotoristas';
+let drivers = { items: [], expires: 0, error: null, loading: null };
+const pick = (o, keys) => { for (const k of keys) { const v = o && o[k]; if (v !== undefined && v !== null && String(v).trim() !== '' && String(v).toLowerCase() !== 'null') return String(v).trim(); } return ''; };
+async function loadDrivers(force) {
+  if (!force && Date.now() < drivers.expires) return drivers;
+  if (drivers.loading) return drivers.loading;
+  drivers.loading = (async () => {
+    try {
+      if (!DSS_TOKEN && !(DSS_USER && DSS_PASS)) throw httpError(503, 'A integração com o DSS não está configurada: cadastre DSS_USUARIO e DSS_SENHA no servidor.');
+      const url = DSS_BASE + (DSS_DRIVERS_PATH.startsWith('/') ? DSS_DRIVERS_PATH : '/' + DSS_DRIVERS_PATH);
+      const headers = { Accept: 'application/json', Authorization: DSS_TOKEN ? 'Bearer ' + DSS_TOKEN : 'Basic ' + Buffer.from(DSS_USER + ':' + DSS_PASS).toString('base64') };
+      const r = await fetch(url, { headers, signal: AbortSignal.timeout(20000), redirect: 'error' });
+      const text = await r.text();
+      let j;
+      try { j = JSON.parse(text); } catch (e) { throw httpError(502, `O DSS respondeu algo que não é JSON (HTTP ${r.status}). Confira DSS_BASE_URL.`); }
+      if (!r.ok || (typeof j.status === 'number' && j.status !== 200)) throw httpError(502, `O DSS recusou a consulta de motoristas (HTTP ${r.status}${j.mensagemErro ? ': ' + j.mensagemErro : ''}).`);
+      const rows = Array.isArray(j) ? j : j.registros || j.motoristas || j.data || [];
+      const seen = new Map();
+      for (const it of rows) {
+        const nome = pick(it, ['nome_motorista', 'nome', 'motorista_nome', 'motorista', 'razao_social']);
+        const doc = pick(it, ['cnpj_cpf', 'cpf_cnpj', 'cpf', 'cnpj', 'motorista_cpf']);
+        if (!nome || nome.length > 150) continue;
+        const key = nome.toUpperCase() + '|' + doc;
+        if (!seen.has(key)) seen.set(key, { nome, cpf: doc, id: pick(it, ['id', 'motorista_id']) });
+      }
+      drivers = { items: [...seen.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')), expires: Date.now() + 15 * 60e3, error: null, loading: null, at: new Date().toISOString() };
+      console.log(`[DSS] motoristas carregados: ${drivers.items.length}`);
+    } catch (e) {
+      drivers = Object.assign({}, drivers, { expires: Date.now() + 60e3, error: e.message || String(e), status: e.status || 502, loading: null });
+      console.error('[DSS] motoristas:', drivers.error);
+    }
+    return drivers;
+  })();
+  return drivers.loading;
+}
+route('GET', '/api/dss/motoristas', async (req) => {
+  await requireUser(req);
+  const d = await loadDrivers(new URL(req.url, 'http://x').searchParams.get('atualizar') === '1');
+  if (!d.items.length && d.error) throw httpError(d.status || 502, d.error);
+  return { motoristas: d.items, atualizado: d.at || null, aviso: d.error || null };
+});
+// Ao digitar um motorista conhecido na coluna configurada, o servidor completa o CPF/CNPJ (vale também para quem não edita a coluna do CPF)
+function lookupFills(room, p) {
+  const out = {};
+  for (const id in p.sheets || {}) {
+    const e = p.sheets[id];
+    const sh = room.data.sheets.find((s) => s.id === id);
+    const lk = sh && sh.lookup;
+    if (!e.cells || !lk || !lk.col || !lk.cpfCol) continue;
+    if (!drivers.items.length) { loadDrivers(); continue; }
+    const byName = new Map(drivers.items.map((d) => [d.nome.toUpperCase(), d]));
+    for (const a in e.cells) {
+      const m = /^([A-Z]+)(\d+)$/.exec(a);
+      if (!m || Perms.colOf(a) !== lk.col) continue;
+      const d = e.cells[a] && byName.get(String(e.cells[a].v || '').trim().toUpperCase());
+      if (!d || !d.cpf) continue;
+      const target = Perms.colName(lk.cpfCol) + m[2];
+      const cur = (sh.cells || {})[target];
+      if (cur && String(cur.v || '') === d.cpf) continue;
+      (out[id] = out[id] || { cells: {} }).cells[target] = Object.assign({}, cur || {}, { v: d.cpf });
+    }
+  }
+  return Object.keys(out).length ? { sheets: out } : null;
+}
 
 // ---------- Arquivos do site ----------
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };

@@ -80,25 +80,54 @@
   };
   App.wb = new E.Workbook(provider);
 
+  // ---------- Visualização de filtro com ordem própria: posição na tela -> posição real ----------
+  // Com uma visualização que reordena colunas, agrupa ou classifica linhas, a grade trabalha com posições "de tela".
+  // As funções de acesso abaixo traduzem para a posição real; o código interno usa App.withReal para trabalhar direto.
+  App.vm = null;
+  let realDepth = 0;
+  App.withReal = (fn) => { realDepth++; try { return fn(); } finally { realDepth--; } };
+  const mapAny = (sh, r, c) => {
+    const v = App.vm;
+    if (!v || !sh || sh.id !== v.sheetId) return [r, c];
+    const e = v.rows[r];
+    return [e ? (e.r || null) : r, v.cols[c] || c];
+  };
+  const mapRC = (sh, r, c) => (realDepth ? [r, c] : mapAny(sh, r, c));
+  App.mapRC = mapRC;
+  // célula real de uma posição de tela (null nas linhas de título de grupo)
+  App.realCell = (r, c) => { const [rr, cc] = mapAny(App.sheet(), r, c); return rr ? { r: rr, c: cc } : null; };
+  // posição de tela de uma célula real (null se ela não aparece na visualização)
+  App.dispCell = (r, c) => {
+    const v = App.vm;
+    if (!v || App.sheet().id !== v.sheetId) return { r, c };
+    const dr = v.rowPos.get(r), dc = v.colPos.get(c);
+    return dr && dc ? { r: dr, c: dc } : null;
+  };
+  App.vmRow = (r) => (App.vm && App.vm.sheetId === App.sheet().id ? App.vm.rows[r] || null : null);
+
   // ---------- Acesso a células ----------
-  App.cell = (sh, r, c) => sh.cells[addr(r, c)];
-  App.raw = (sh, r, c) => { const x = sh.cells[addr(r, c)]; return x && x.v !== undefined && x.v !== null ? x.v : ''; };
-  App.style = (sh, r, c) => { const x = sh.cells[addr(r, c)]; return (x && x.s) || {}; };
-  App.value = (si, r, c) => App.wb.value(si, r, c);
+  App.cell = (sh, r, c) => { [r, c] = mapRC(sh, r, c); return r ? sh.cells[addr(r, c)] : undefined; };
+  App.raw = (sh, r, c) => { [r, c] = mapRC(sh, r, c); if (!r) return ''; const x = sh.cells[addr(r, c)]; return x && x.v !== undefined && x.v !== null ? x.v : ''; };
+  App.style = (sh, r, c) => { [r, c] = mapRC(sh, r, c); if (!r) return {}; const x = sh.cells[addr(r, c)]; return (x && x.s) || {}; };
+  App.value = (si, r, c) => { [r, c] = mapRC(doc.sheets[si], r, c); return r ? App.wb.value(si, r, c) : null; };
   function cleanup(sh, a) {
     const x = sh.cells[a];
     if (!x) return;
     if (x.s && !Object.keys(x.s).length) delete x.s;
-    if ((x.v === '' || x.v === undefined || x.v === null) && !x.s && !x.note && !x.link && !(x.comments && x.comments.length)) delete sh.cells[a];
+    if ((x.v === '' || x.v === undefined || x.v === null) && !x.s && !x.note && !x.link && !x.crit && !(x.comments && x.comments.length)) delete sh.cells[a];
   }
   App.cleanup = cleanup;
   App.setRaw = (sh, r, c, text) => {
+    [r, c] = mapRC(sh, r, c);
+    if (!r) return;
     const a = addr(r, c);
     const x = sh.cells[a] || (sh.cells[a] = {});
     x.v = text === null || text === undefined ? '' : String(text);
     cleanup(sh, a);
   };
   App.setStyle = (sh, r, c, fn) => {
+    [r, c] = mapRC(sh, r, c);
+    if (!r) return;
     const a = addr(r, c);
     const x = sh.cells[a] || (sh.cells[a] = { v: '' });
     x.s = x.s || {};
@@ -106,6 +135,8 @@
     cleanup(sh, a);
   };
   App.setCellObj = (sh, r, c, obj) => {
+    [r, c] = mapRC(sh, r, c);
+    if (!r) return;
     const a = addr(r, c);
     if (!obj) delete sh.cells[a];
     else { sh.cells[a] = obj; cleanup(sh, a); }
@@ -425,7 +456,9 @@
   App.fmtAuto = fmtAuto;
 
   // ---------- Mesclagens ----------
+  const NO_MERGES = new Map();
   App.mergeMap = (sh) => {
+    if (!realDepth && App.vm && App.vm.sheetId === sh.id) return NO_MERGES; // sem mesclagens na visualização reordenada
     if (sh._mm) return sh._mm;
     const m = new Map();
     for (const g of sh.merges) {
@@ -475,7 +508,8 @@
   App.views = new Map();
   App.activeFilter = (sh) => (sh && App.views.get(sh.id)) || (sh && sh.filter) || null;
   App.filterEnd = (sh) => { const f = App.activeFilter(sh); return !f ? 0 : f.r1 === 0 || f.dyn ? Math.max(1, f.r1 + 1, usedRange(sh).maxR) : f.r2; };
-  App.filterHidden = (sh) => {
+  App.filterHidden = (sh) => App.withReal(() => filterHiddenReal(sh));
+  function filterHiddenReal(sh) {
     if (sh._fh) return sh._fh;
     const set = new Set();
     const f = App.activeFilter(sh);
@@ -493,7 +527,7 @@
     }
     sh._fh = set;
     return set;
-  };
+  }
   App.isRowHidden = (sh, r) => !!sh.hiddenRows[r] || App.filterHidden(sh).has(r) || App.oldRows(sh).has(r);
 
   // ---------- Grupos pessoais: abrir/fechar vale só para quem clicou ----------
@@ -507,6 +541,24 @@
     if (o[k]) delete o[k]; else o[k] = 1;
     saveOpen(); invalidate(); App.emit('change', { view: true });
   };
+  // travar: o grupo aberto continua aberto ao clicar fora dele
+  App.isGroupLocked = (sh, g) => loadOpen()[sh.id + ':' + g.id] === 2;
+  App.toggleGroupLock = (sh, id) => {
+    const o = loadOpen(), k = sh.id + ':' + id;
+    o[k] = o[k] === 2 ? 1 : 2;
+    saveOpen(); App.emit('change', { view: true });
+    App.emit('notify', o[k] === 2 ? 'Grupo travado aberto (só para você).' : 'Grupo destravado: ele recolhe ao clicar fora dele.');
+  };
+  // grupos abertos e não travados recolhem ao clicar numa célula fora deles
+  App.collapseUnlocked = (sh, col) => {
+    const o = loadOpen();
+    let changed = false;
+    for (const g of sh.colGroups || []) {
+      const k = sh.id + ':' + g.id;
+      if (o[k] === 1 && (col < g.c1 || col > g.c2)) { delete o[k]; changed = true; }
+    }
+    if (changed) { saveOpen(); invalidate(); App.emit('change', { view: true }); }
+  };
   App.colCollapsed = (sh, c) => !!(sh.colGroups && sh.colGroups.some((g) => c >= g.c1 && c <= g.c2 && !App.isGroupOpen(sh, g)));
   // Linhas antigas (regra "últimos N dias"): ficam recolhidas até a pessoa clicar em +
   App.showOld = (sh) => !!loadOpen()[sh.id + ':__old'];
@@ -517,23 +569,29 @@
     if (m) { const y = +m[3] < 100 ? 2000 + +m[3] : +m[3]; return new Date(Date.UTC(y, +m[2] - 1, +m[1])); }
     return null;
   };
-  App.oldRowsAll = (sh) => {
+  // Regras de linhas recolhidas (administrador): data mais antiga que N dias, acima de uma linha, ou valores de uma coluna
+  App.foldRules = (sh) => sh.fold || (sh.recent ? { days: { col: sh.recent.col, n: sh.recent.days || 30 } } : null);
+  App.oldRowsAll = (sh) => App.withReal(() => oldRowsReal(sh));
+  function oldRowsReal(sh) {
     if (sh._old) return sh._old;
     const set = new Set();
-    const rule = sh.recent;
-    if (rule && rule.col) {
+    const rule = App.foldRules(sh);
+    if (rule) {
       const si = App.sheetIndex(sh), used = usedRange(sh);
-      const now = new Date(), cutoff = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) - (rule.days || 30) * 864e5;
-      for (let r = 1; r <= used.maxR; r++) {
-        const d = dateOf(App.value(si, r, rule.col), App.raw(sh, r, rule.col));
-        if (d && d.getTime() < cutoff) set.add(r);
+      const first = (sh.freeze && sh.freeze.rows) || 0;
+      const now = new Date(), cutoff = rule.days ? Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) - (rule.days.n || 30) * 864e5 : 0;
+      const vals = rule.values && rule.values.list && rule.values.list.length ? new Set(rule.values.list.map((x) => String(x).trim().toUpperCase())) : null;
+      for (let r = first + 1; r <= used.maxR; r++) {
+        if (rule.above && r < rule.above) { set.add(r); continue; }
+        if (rule.days && rule.days.col) { const d = dateOf(App.value(si, r, rule.days.col), App.raw(sh, r, rule.days.col)); if (d && d.getTime() < cutoff) { set.add(r); continue; } }
+        if (vals && rule.values.col) { const t = String(App.fmtValue(App.value(si, r, rule.values.col), App.style(sh, r, rule.values.col).nf)).trim().toUpperCase(); if (vals.has(t)) set.add(r); }
       }
     }
     sh._old = set;
     return set;
-  };
+  }
   const EMPTY = new Set();
-  App.oldRows = (sh) => (sh.recent && !App.showOld(sh) ? App.oldRowsAll(sh) : EMPTY);
+  App.oldRows = (sh) => (App.foldRules(sh) && !App.showOld(sh) ? App.oldRowsAll(sh) : EMPTY);
   // rótulo da coluna: letra e, se houver, o nome dado a ela (ex.: "A · CLIENTE")
   App.colLabel = (sh, c) => { const n = sh && sh.colNames && sh.colNames[c]; return n ? `${E.numToCol(c)} · ${n}` : E.numToCol(c); };
   App.isColHidden = (sh, c) => !!sh.hiddenCols[c] || !!(App.colBlocked && App.colBlocked(sh, c)) || App.colCollapsed(sh, c);
@@ -608,6 +666,16 @@
   App.mixColor = mix;
   // Estilo efetivo: estilo da célula + cores alternadas + regras condicionais
   App.effectiveStyle = (sh, si, r, c, base) => {
+    [r, c] = mapRC(sh, r, c);
+    if (!r) return base;
+    return App.withReal(() => effectiveStyleReal(sh, si, r, c, base));
+  };
+  // deslocamento real entre duas posições de tela (para ajustar fórmulas ao copiar/preencher)
+  App.realDelta = (sh, r, c, sr, sc) => {
+    const [a, b] = mapRC(sh, r, c), [x, y] = mapRC(sh, sr, sc);
+    return a && x ? [a - x, b - y] : [r - sr, c - sc];
+  };
+  function effectiveStyleReal(sh, si, r, c, base) {
     let st = base;
     if (sh.banding && sh.banding.length) {
       for (const b of sh.banding) {
@@ -643,7 +711,7 @@
   };
 
   // ---------- Validação de dados ----------
-  App.dvAt = (sh, r, c) => sh.dv.find((d) => inRect(d.range, r, c)) || null;
+  App.dvAt = (sh, r, c) => { [r, c] = mapRC(sh, r, c); return r ? sh.dv.find((d) => inRect(d.range, r, c)) || null : null; };
   // Caixa de seleção: valores personalizados (ex.: SIM / NÃO) ou VERDADEIRO / FALSO
   App.cbValues = (d) => (d && d.custom && d.checked ? { on: String(d.checked), off: String(d.unchecked || '') } : { on: 'TRUE', off: 'FALSE' });
   App.cbIsOn = (d, raw, v) => {
@@ -868,7 +936,7 @@
     return null;
   }
   // Preenche `dst` a partir de `src` (mesma largura ou altura). dir: 'down' | 'up' | 'right' | 'left'
-  App.fill = (si, src, dst, dir) => {
+  App.fill = (si, src, dst, dir, exact) => {
     const sh = doc.sheets[si];
     const vertical = dir === 'down' || dir === 'up';
     const lines = vertical ? [src.c1, src.c2] : [src.r1, src.r2];
@@ -879,7 +947,7 @@
       const ordered = dir === 'up' || dir === 'left' ? srcPos.slice().reverse() : srcPos;
       const srcCells = ordered.map(([r, c]) => App.cell(sh, r, c));
       const srcVals = ordered.map(([r, c]) => App.value(si, r, c));
-      const gen = seriesFor(srcCells, srcVals, 0);
+      const gen = exact ? null : seriesFor(srcCells, srcVals, 0);
       const targets = [];
       if (dir === 'down') for (let r = src.r2 + 1; r <= dst.r2; r++) targets.push([r, line]);
       if (dir === 'up') for (let r = src.r1 - 1; r >= dst.r1; r--) targets.push([r, line]);
@@ -891,7 +959,7 @@
         const obj = App.cloneCell(App.cell(sh, sr, sc)) || {};
         delete obj.note; delete obj.comments;
         if (gen) obj.v = gen(i);
-        else if (typeof obj.v === 'string' && obj.v[0] === '=') obj.v = E.shiftFormula(obj.v, r - sr, c - sc);
+        else if (typeof obj.v === 'string' && obj.v[0] === '=') { const [dr, dc] = App.realDelta(sh, r, c, sr, sc); obj.v = E.shiftFormula(obj.v, dr, dc); }
         App.setCellObj(sh, r, c, Object.keys(obj).length ? obj : null);
       });
     }
@@ -906,7 +974,7 @@
       for (let c = R.c1; c <= R.c2; c++) row.push(App.cloneCell(App.cell(sh, r, c)));
       cells.push(row);
     }
-    const merges = sh.merges.filter((g) => g.r1 >= R.r1 && g.r2 <= R.r2 && g.c1 >= R.c1 && g.c2 <= R.c2)
+    const merges = App.vm && App.vm.sheetId === sh.id ? [] : sh.merges.filter((g) => g.r1 >= R.r1 && g.r2 <= R.r2 && g.c1 >= R.c1 && g.c2 <= R.c2)
       .map((g) => ({ r1: g.r1 - R.r1, c1: g.c1 - R.c1, r2: g.r2 - R.r1, c2: g.c2 - R.c1 }));
     return { si, R, cells, merges };
   };
@@ -939,10 +1007,10 @@
         } else if (mode === 'formula') {
           obj = App.cloneCell(cur) || {};
           obj.v = src ? src.v : '';
-          if (!cut && typeof obj.v === 'string' && obj.v[0] === '=') obj.v = E.shiftFormula(obj.v, r - srcR, c - srcC);
+          if (!cut && typeof obj.v === 'string' && obj.v[0] === '=') { const [dr, dc] = App.realDelta(sh, r, c, srcR, srcC); obj.v = E.shiftFormula(obj.v, dr, dc); }
         } else {
           obj = App.cloneCell(src);
-          if (obj && !cut && typeof obj.v === 'string' && obj.v[0] === '=') obj.v = E.shiftFormula(obj.v, r - srcR, c - srcC);
+          if (obj && !cut && typeof obj.v === 'string' && obj.v[0] === '=') { const [dr, dc] = App.realDelta(sh, r, c, srcR, srcC); obj.v = E.shiftFormula(obj.v, dr, dc); }
         }
         if (r <= sh.rows + 5000 && c <= 18278) App.setCellObj(sh, r, c, obj && Object.keys(obj).length ? obj : null);
       }
