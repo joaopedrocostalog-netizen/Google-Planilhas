@@ -41,12 +41,19 @@ function pgStore(url) {
   let host = '';
   try { host = new URL(url).hostname; } catch (e) { /* mantém vazio */ }
   const noSsl = process.env.PGSSL === '0' || !host.includes('.') || host === '127.0.0.1';
-  const pool = new Pool({ connectionString: url, ssl: noSsl ? false : { rejectUnauthorized: false }, max: 8 });
+  // PGSCHEMA: espaço separado dentro de um banco compartilhado com outros sistemas
+  const schema = process.env.PGSCHEMA || '';
+  if (schema && !/^[a-z_][a-z0-9_]*$/.test(schema)) throw new Error('PGSCHEMA inválido: ' + schema);
+  const pool = new Pool({
+    connectionString: url, ssl: noSsl ? false : { rejectUnauthorized: false }, max: 8,
+    options: schema ? `-c search_path=${schema}` : undefined,
+  });
   const q = (text, params) => pool.query(text, params);
   const row = async (text, params) => { const r = await q(text, params); return r.rows[0] || null; };
   return {
-    kind: 'postgres',
+    kind: 'postgres' + (schema ? ` (schema ${schema})` : ''),
     async init() {
+      if (schema) await q(`CREATE SCHEMA IF NOT EXISTS ${schema}`);
       await q(`CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, name TEXT NOT NULL, pass TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
