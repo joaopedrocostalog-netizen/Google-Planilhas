@@ -131,7 +131,7 @@
     scheduleSave();
   }
   function invalidate() {
-    for (const sh of doc.sheets) { sh._used = null; sh._mm = null; sh._fh = null; }
+    for (const sh of doc.sheets) { sh._used = null; sh._mm = null; sh._fh = null; sh._old = null; }
     App.wb.invalidate();
     App._fmtCache = new Map();
     App._cfCache = new Map();
@@ -494,10 +494,49 @@
     sh._fh = set;
     return set;
   };
-  App.isRowHidden = (sh, r) => !!sh.hiddenRows[r] || App.filterHidden(sh).has(r);
+  App.isRowHidden = (sh, r) => !!sh.hiddenRows[r] || App.filterHidden(sh).has(r) || App.oldRows(sh).has(r);
+
+  // ---------- Grupos pessoais: abrir/fechar vale só para quem clicou ----------
+  const openKey = () => 'planilhas:open:' + (App.docId || '');
+  let openState = null;
+  const loadOpen = () => { if (!openState || openState.key !== openKey()) { let v = {}; try { v = JSON.parse(localStorage.getItem(openKey()) || '{}'); } catch (e) { /* vazio */ } openState = { key: openKey(), v }; } return openState.v; };
+  const saveOpen = () => { try { localStorage.setItem(openKey(), JSON.stringify(openState.v)); } catch (e) { /* ignora */ } };
+  App.isGroupOpen = (sh, g) => !!loadOpen()[sh.id + ':' + g.id];
+  App.toggleGroup = (sh, id) => {
+    const o = loadOpen(), k = sh.id + ':' + id;
+    if (o[k]) delete o[k]; else o[k] = 1;
+    saveOpen(); invalidate(); App.emit('change', { view: true });
+  };
+  App.colCollapsed = (sh, c) => !!(sh.colGroups && sh.colGroups.some((g) => c >= g.c1 && c <= g.c2 && !App.isGroupOpen(sh, g)));
+  // Linhas antigas (regra "últimos N dias"): ficam recolhidas até a pessoa clicar em +
+  App.showOld = (sh) => !!loadOpen()[sh.id + ':__old'];
+  App.toggleOld = (sh) => App.toggleGroup(sh, '__old');
+  const dateOf = (v, raw) => {
+    if (typeof v === 'number' && v > 20000 && v < 80000) return E.serialToDate(v);
+    const m = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/.exec(String(raw || '').trim());
+    if (m) { const y = +m[3] < 100 ? 2000 + +m[3] : +m[3]; return new Date(Date.UTC(y, +m[2] - 1, +m[1])); }
+    return null;
+  };
+  App.oldRowsAll = (sh) => {
+    if (sh._old) return sh._old;
+    const set = new Set();
+    const rule = sh.recent;
+    if (rule && rule.col) {
+      const si = App.sheetIndex(sh), used = usedRange(sh);
+      const now = new Date(), cutoff = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) - (rule.days || 30) * 864e5;
+      for (let r = 1; r <= used.maxR; r++) {
+        const d = dateOf(App.value(si, r, rule.col), App.raw(sh, r, rule.col));
+        if (d && d.getTime() < cutoff) set.add(r);
+      }
+    }
+    sh._old = set;
+    return set;
+  };
+  const EMPTY = new Set();
+  App.oldRows = (sh) => (sh.recent && !App.showOld(sh) ? App.oldRowsAll(sh) : EMPTY);
   // rótulo da coluna: letra e, se houver, o nome dado a ela (ex.: "A · CLIENTE")
   App.colLabel = (sh, c) => { const n = sh && sh.colNames && sh.colNames[c]; return n ? `${E.numToCol(c)} · ${n}` : E.numToCol(c); };
-  App.isColHidden = (sh, c) => !!sh.hiddenCols[c] || !!(App.colBlocked && App.colBlocked(sh, c));
+  App.isColHidden = (sh, c) => !!sh.hiddenCols[c] || !!(App.colBlocked && App.colBlocked(sh, c)) || App.colCollapsed(sh, c);
 
   // Condições usadas por filtros, formatação condicional e validação
   App.CONDITIONS = [
@@ -605,6 +644,16 @@
 
   // ---------- Validação de dados ----------
   App.dvAt = (sh, r, c) => sh.dv.find((d) => inRect(d.range, r, c)) || null;
+  // Caixa de seleção: valores personalizados (ex.: SIM / NÃO) ou VERDADEIRO / FALSO
+  App.cbValues = (d) => (d && d.custom && d.checked ? { on: String(d.checked), off: String(d.unchecked || '') } : { on: 'TRUE', off: 'FALSE' });
+  App.cbIsOn = (d, raw, v) => {
+    if (d && d.custom && d.checked) return String(raw).trim().toLowerCase() === String(d.checked).trim().toLowerCase();
+    return v === true || (typeof raw === 'string' && /^(true|verdadeiro)$/i.test(raw.trim()));
+  };
+  App.cbValid = (d, text) => {
+    if (d && d.custom && d.checked) { const t = String(text).trim().toLowerCase(); return t === String(d.checked).trim().toLowerCase() || t === String(d.unchecked || '').trim().toLowerCase(); }
+    return /^(TRUE|FALSE|VERDADEIRO|FALSO)$/i.test(text);
+  };
   App.dvItems = (sh, d) => {
     if (d.type === 'list') return d.items || [];
     if (d.type === 'range' && d.src) {
@@ -622,7 +671,7 @@
   App.validate = (sh, r, c, text) => {
     const d = App.dvAt(sh, r, c);
     if (!d || text === '' || (typeof text === 'string' && text[0] === '=')) return true;
-    if (d.type === 'checkbox') return /^(TRUE|FALSE|VERDADEIRO|FALSO)$/i.test(text);
+    if (d.type === 'checkbox') return App.cbValid(d, text);
     if (d.type === 'list' || d.type === 'range') return App.dvItems(sh, d).some((x) => x.toLowerCase() === String(text).toLowerCase());
     if (d.type === 'number') {
       const n = numOf(text);
@@ -689,6 +738,8 @@
       sh.colW = shiftMap(sh.colW, at, count);
       sh.hiddenCols = shiftMap(sh.hiddenCols, at, count);
       if (sh.colNames) sh.colNames = shiftMap(sh.colNames, at, count);
+      if (sh.colHdr) sh.colHdr = shiftMap(sh.colHdr, at, count);
+      if (sh.colGroups && sh.colGroups.length) sh.colGroups = sh.colGroups.map((g) => { const R = shiftRect({ r1: 1, r2: 1, c1: g.c1, c2: g.c2 }, 'col', at, count); return R ? Object.assign({}, g, { c1: R.c1, c2: R.c2 }) : null; }).filter(Boolean);
       if (sh.access) { const acc = {}; for (const k in sh.access) acc[k] = shiftMap(sh.access[k], at, count); sh.access = acc; }
       sh.cols = Math.max(1, sh.cols + count);
       if (sh.freeze.cols >= at) sh.freeze.cols = Math.max(0, count > 0 ? sh.freeze.cols + count : Math.max(at - 1, sh.freeze.cols + count));

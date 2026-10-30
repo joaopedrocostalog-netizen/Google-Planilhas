@@ -152,6 +152,22 @@
     notify('Você saiu da sua conta.');
   }
 
+  // ---------- Preferências salvas na conta (cores personalizadas, visualizações) ----------
+  const localColors = App.customColors, localSaveColors = App.saveCustomColors;
+  App.customColors = () => (cloud.user && cloud.user.prefs && Array.isArray(cloud.user.prefs.colors) ? cloud.user.prefs.colors : localColors());
+  App.saveCustomColors = (list) => {
+    localSaveColors(list);
+    if (!cloud.user) return;
+    cloud.user.prefs = Object.assign({}, cloud.user.prefs, { colors: list });
+    api('PUT', '/api/me/prefs', { colors: list }).catch(() => { /* fica salvo neste navegador */ });
+  };
+  App.savePrefs = (patch) => {
+    if (!cloud.user) return Promise.resolve();
+    cloud.user.prefs = Object.assign({}, cloud.user.prefs, patch);
+    return api('PUT', '/api/me/prefs', patch).catch(() => {});
+  };
+  App.userPrefs = () => (cloud.user && cloud.user.prefs) || {};
+
   // ---------- Conexão em tempo real ----------
   function send(obj) { if (cloud.ws && cloud.ws.readyState === 1) cloud.ws.send(JSON.stringify(obj)); }
   function setStatus(kind) {
@@ -846,7 +862,7 @@
     'menuSearch', 'paintFormat', 'format', 'customFormat', 'fmt_number', 'fmt_time', 'fmt_date', 'fmt_currency', 'fmt_percent', 'fmt_scientific',
     'decDec', 'decInc', 'fontFamily', 'fontSize', 'fontSizeInc', 'fontSizeDec', 'bold', 'italic', 'strike', 'textColor', 'fillColor',
     // visualizações de filtro (pessoais, não mudam a planilha dos outros)
-    'createFilterView', 'createGroupedView', 'closeFilterView', 'clearViewFilters']);
+    'createFilterView', 'createGroupedView', 'closeFilterView', 'clearViewFilters', 'toggleOldRows', 'myView']);
   const COL_CMDS = new Set(['renameCol', 'insertColsLeft', 'insertColsRight', 'deleteCols', 'hideCols', 'unhideCols', 'resizeCols', 'autofitCols', 'addCols']);
   const EXEC_HIDDEN_MENUS = new Set(['Inserir', 'Formatar', 'Dados', 'Extensões']);
   App.adminOnly = () => !!(App.cloudMode && cloud.perms && !cloud.perms.admin);

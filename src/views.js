@@ -105,6 +105,28 @@
   });
   App.on('sheet', render);
 
+  // ---------- Botão das linhas antigas (regra "últimos N dias") ----------
+  let oldChip = null;
+  function renderOld() {
+    const sh = App.sheet();
+    const all = sh && sh.recent ? App.oldRowsAll(sh) : null;
+    if (!all || !all.size) { if (oldChip) oldChip.hidden = true; return; }
+    if (!oldChip) {
+      oldChip = document.createElement('button');
+      oldChip.className = 'old-chip';
+      oldChip.onclick = () => App.run('toggleOldRows');
+      $('grid-wrap').appendChild(oldChip);
+    }
+    const open = App.showOld(sh), n = all.size, d = sh.recent.days || 30;
+    oldChip.hidden = false;
+    oldChip.classList.toggle('open', open);
+    oldChip.innerHTML = open ? `<b>−</b> Ocultar ${n} ${n === 1 ? 'linha' : 'linhas'} com mais de ${d} dias` : `<b>+</b> ${n} ${n === 1 ? 'linha' : 'linhas'} com mais de ${d} dias`;
+    oldChip.title = open ? 'Só você está vendo as linhas antigas.' : 'Mostrar as linhas antigas (só para você)';
+  }
+  let ot = null;
+  App.on('change', () => { clearTimeout(ot); ot = setTimeout(renderOld, 120); });
+  App.on('sheet', () => setTimeout(renderOld, 0));
+
   // ---------- Itens do menu (barra de ferramentas e Dados) ----------
   App.viewMenuItems = () => {
     const sh = App.sheet(), used = App.usedRange(sh);
@@ -115,7 +137,8 @@
     }
     const items = [
       { label: 'Criar visualização agrupada', icon: 'plus', sub: cols.length ? cols : [{ label: 'Nenhuma coluna com dados', disabled: true }] },
-      { label: 'Criar visualização com filtro', icon: 'plus', cmd: 'createFilterView' },
+      { label: 'Criar visualização com filtro', icon: 'plus', cmd: 'createFilterView' }, '-',
+      { label: 'Minha visualização (colunas, ordem, agrupar, status)', icon: 'filterViews', cmd: 'myView' },
     ];
     if (App.views.has(sh.id)) items.push('-', { label: 'Limpar filtros da visualização', cmd: 'clearViewFilters' }, { label: 'Fechar visualização', icon: 'close', cmd: 'closeFilterView' });
     return items;

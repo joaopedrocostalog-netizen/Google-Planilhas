@@ -20,6 +20,7 @@ function memoryStore(file) {
     async getUserById(id) { return clone(db.users[id]); },
     async createUser(u) { db.users[u.id] = Object.assign({ created_at: new Date().toISOString() }, u); persist(); return clone(u); },
     async updateUser(id, fields) { Object.assign(db.users[id], fields); persist(); },
+    async savePrefs(id, prefs) { if (db.users[id]) { db.users[id].prefs = clone(prefs); persist(); } },
     async createSession(hash, userId) { db.sessions[hash] = { user_id: userId, created_at: Date.now() }; persist(); },
     async getSession(hash) { return clone(db.sessions[hash]); },
     async deleteSession(hash) { delete db.sessions[hash]; persist(); },
@@ -70,6 +71,7 @@ function pgStore(url) {
       await q(`CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, name TEXT NOT NULL, pass TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+      await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS prefs JSONB');
       await q(`CREATE TABLE IF NOT EXISTS sessions (
         token TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
@@ -89,6 +91,7 @@ function pgStore(url) {
     getUserById: (id) => row('SELECT * FROM users WHERE id = $1', [id]),
     async createUser(u) { await q('INSERT INTO users (id, email, name, pass) VALUES ($1, $2, $3, $4)', [u.id, u.email, u.name, u.pass]); return u; },
     async updateUser(id, f) { if (f.name) await q('UPDATE users SET name = $2 WHERE id = $1', [id, f.name]); if (f.pass) await q('UPDATE users SET pass = $2 WHERE id = $1', [id, f.pass]); },
+    async savePrefs(id, prefs) { await q('UPDATE users SET prefs = $2 WHERE id = $1', [id, JSON.stringify(prefs)]); },
     async createSession(hash, userId) { await q('INSERT INTO sessions (token, user_id) VALUES ($1, $2)', [hash, userId]); },
     async getSession(hash) { const r = await row('SELECT user_id, extract(epoch from created_at) * 1000 AS created_at FROM sessions WHERE token = $1', [hash]); return r ? { user_id: r.user_id, created_at: Number(r.created_at) } : null; },
     async deleteSession(hash) { await q('DELETE FROM sessions WHERE token = $1', [hash]); },
