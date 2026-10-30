@@ -617,11 +617,10 @@
     }
     function renderSectors() {
       const pane = d.querySelector('[data-pane="sectors"]');
-      pane.innerHTML = `<p class="sp-hint">Crie setores (por exemplo, Comercial ou Financeiro) e defina o que cada um pode ver e editar em cada página e em cada coluna. Administradores sempre veem e editam tudo; leitores nunca editam.</p>
+      pane.innerHTML = `<p class="sp-hint">Crie setores (por exemplo, Comercial ou Financeiro) e defina o que cada um pode ver e editar em cada página e em cada coluna. Os setores só preenchem valores nas colunas liberadas; formatação, regras e estrutura da planilha ficam com os administradores. Leitores nunca editam.</p>
         ${acl.sectors.map((s, i) => `<div class="sector-card">
           <div class="sector-head"><input class="input" data-sname="${i}" value="${esc(s.name)}" placeholder="Nome do setor"><button class="icon-btn" data-srm="${i}" title="Excluir setor">${icon('close', 16)}</button></div>
-          <div class="sector-row"><label class="field"><span>Acesso padrão às páginas</span><select class="input" data-sdef="${i}">${opts(LEVELS, s.default)}</select></label>
-          <label class="check"><input type="checkbox" data-smanage="${i}"${s.manage ? ' checked' : ''}> Pode criar, excluir e renomear páginas</label></div>
+          <div class="sector-row"><label class="field"><span>Acesso padrão às páginas</span><select class="input" data-sdef="${i}">${opts(LEVELS, s.default)}</select></label></div>
           <table class="sector-matrix"><thead><tr><th>Página</th><th>Acesso</th><th>Colunas</th></tr></thead><tbody>
           ${st.sheets.map((sh) => { const n = ruleCount(peekAccess(sh.id), s.id); return `<tr><td>${esc(sh.name)}</td><td><select class="input" data-sheet="${i}:${esc(sh.id)}"><option value="">Padrão (${lvName(s.default)})</option>${opts(LEVELS, s.sheets[sh.id])}</select></td>
             <td><button class="btn btn-sm" data-scols="${i}:${esc(sh.id)}">${icon('lock', 14)} Colunas${n ? ` (${n})` : ''}</button></td></tr>`; }).join('')}
@@ -630,7 +629,6 @@
       pane.querySelector('#sec-add').onclick = () => { acl.sectors.push({ id: newId('s'), name: 'Novo setor', default: 'view', sheets: {}, manage: false }); renderSectors(); const ins = pane.querySelectorAll('[data-sname]'); ins[ins.length - 1].select(); };
       pane.querySelectorAll('[data-sname]').forEach((x) => (x.oninput = () => { acl.sectors[+x.dataset.sname].name = x.value; }));
       pane.querySelectorAll('[data-sdef]').forEach((x) => (x.onchange = () => { acl.sectors[+x.dataset.sdef].default = x.value; renderSectors(); }));
-      pane.querySelectorAll('[data-smanage]').forEach((x) => (x.onchange = () => { acl.sectors[+x.dataset.smanage].manage = x.checked; }));
       pane.querySelectorAll('[data-sheet]').forEach((x) => (x.onchange = () => {
         const [i, id] = x.dataset.sheet.split(':');
         if (x.value) acl.sectors[+i].sheets[id] = x.value; else delete acl.sectors[+i].sheets[id];
