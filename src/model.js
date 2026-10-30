@@ -465,6 +465,8 @@
     return set;
   };
   App.isRowHidden = (sh, r) => !!sh.hiddenRows[r] || App.filterHidden(sh).has(r);
+  // rótulo da coluna: letra e, se houver, o nome dado a ela (ex.: "A · CLIENTE")
+  App.colLabel = (sh, c) => { const n = sh && sh.colNames && sh.colNames[c]; return n ? `${E.numToCol(c)} · ${n}` : E.numToCol(c); };
   App.isColHidden = (sh, c) => !!sh.hiddenCols[c] || !!(App.colBlocked && App.colBlocked(sh, c));
 
   // Condições usadas por filtros, formatação condicional e validação
@@ -656,6 +658,7 @@
     } else {
       sh.colW = shiftMap(sh.colW, at, count);
       sh.hiddenCols = shiftMap(sh.hiddenCols, at, count);
+      if (sh.colNames) sh.colNames = shiftMap(sh.colNames, at, count);
       if (sh.access) { const acc = {}; for (const k in sh.access) acc[k] = shiftMap(sh.access[k], at, count); sh.access = acc; }
       sh.cols = Math.max(1, sh.cols + count);
       if (sh.freeze.cols >= at) sh.freeze.cols = Math.max(0, count > 0 ? sh.freeze.cols + count : Math.max(at - 1, sh.freeze.cols + count));

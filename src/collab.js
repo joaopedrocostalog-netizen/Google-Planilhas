@@ -445,17 +445,19 @@
   // Editor de colunas: escolhe, para uma regra (setor ou pessoa), o nível de cada coluna de uma página
   function columnEditor({ title, hint, sheet, map, inheritLabel, onDone }) {
     const si = doc.sheets.indexOf(sheet);
-    const used = App.usedRange(sheet).maxC;
-    const n = Math.min(sheet.cols, Math.max(used, 8, ...Object.keys(map).map(Number)));
+    const n = sheet.cols;
     const head = (c) => { try { const v = App.value(si, 1, c); return v === null || v === undefined ? '' : String(App.fmtValue(v, App.style(sheet, 1, c).nf)); } catch (e) { return ''; } };
     const opt = (cur) => `<option value="">${esc(inheritLabel)}</option>` + COL_LEVELS.map(([k, l]) => `<option value="${k}"${cur === k ? ' selected' : ''}>${l}</option>`).join('');
     const rows = [];
-    for (let c = 1; c <= n; c++) rows.push(`<tr><td class="ce-col">${Perms.colName(c)}</td><td class="ce-head">${esc(head(c).slice(0, 40)) || '<span class="sp-hint">(vazia)</span>'}</td><td><select class="input" data-c="${c}">${opt(map[c])}</select></td></tr>`);
+    for (let c = 1; c <= n; c++) {
+      const nm = sheet.colNames && sheet.colNames[c];
+      rows.push(`<tr><td class="ce-col">${Perms.colName(c)}</td><td class="ce-head">${nm ? `<b>${esc(nm)}</b>` : esc(head(c).slice(0, 40)) || '<span class="sp-hint">(vazia)</span>'}</td><td><select class="input" data-c="${c}">${opt(map[c])}</select></td></tr>`);
+    }
     App.ui.modal({
       title, width: '560px', cls: 'modal-tall', enterSubmits: false,
       body: `<p class="sp-hint">${esc(hint)}</p>
         <div class="ce-all"><span>Aplicar a todas as colunas:</span><select class="input" id="ce-all"><option value="-">Escolher…</option>${opt(null)}</select></div>
-        <table class="sector-matrix ce-table"><thead><tr><th>Coluna</th><th>Cabeçalho (linha 1)</th><th>Acesso</th></tr></thead><tbody>${rows.join('')}</tbody></table>`,
+        <table class="sector-matrix ce-table"><thead><tr><th>Coluna</th><th>Nome / cabeçalho</th><th>Acesso</th></tr></thead><tbody>${rows.join('')}</tbody></table>`,
       buttons: [{ label: 'Cancelar' }, { label: 'Aplicar', primary: true, action: (d) => {
         const out = {};
         d.querySelectorAll('select[data-c]').forEach((x) => { if (x.value) out[x.dataset.c] = x.value; });
@@ -473,8 +475,16 @@
   const ruleCount = (access, key) => Object.keys((access && access[key]) || {}).length;
   const newId = (p) => (p || '') + Math.random().toString(36).slice(2, 8) + Math.random().toString(36).slice(2, 6);
   // Grava as regras por coluna alteradas (ficam dentro das páginas)
-  function commitAccess(draft, validKeys) {
-    const changes = [];
+  function commitAccess(draft, validKeys, names) {
+    names = names || {};
+    const changes = [], nameChanges = [];
+    for (const sh of doc.sheets) {
+      if (!names[sh.id]) continue;
+      const clean = {};
+      for (const c in names[sh.id]) { const v = String(names[sh.id][c] || '').trim().slice(0, 60); if (v) clean[c] = v; }
+      const next = Object.keys(clean).length ? clean : null;
+      if (JSON.stringify(next) !== JSON.stringify(sh.colNames && Object.keys(sh.colNames).length ? sh.colNames : null)) nameChanges.push([sh, next]);
+    }
     for (const sh of doc.sheets) {
       if (!draft[sh.id] && !sh.access) continue;
       const src = draft[sh.id] || sh.access;
@@ -483,8 +493,13 @@
       const next = Object.keys(clean).length ? clean : null;
       if (JSON.stringify(next) !== JSON.stringify(sh.access || null)) changes.push([sh, next]);
     }
-    if (changes.length) App.change('Permissões por coluna', () => { for (const [sh, next] of changes) { if (next) sh.access = next; else delete sh.access; } });
-    return changes.length;
+    if (changes.length || nameChanges.length) {
+      App.change('Permissões por coluna', () => {
+        for (const [sh, next] of changes) { if (next) sh.access = next; else delete sh.access; }
+        for (const [sh, next] of nameChanges) { if (next) sh.colNames = next; else delete sh.colNames; }
+      });
+    }
+    return changes.length + nameChanges.length;
   }
 
   async function shareDialog() {
@@ -498,13 +513,16 @@
     const sheetById = (id) => doc.sheets.find((s) => s.id === id);
     const accessOf = (sid) => draft[sid] || (draft[sid] = JSON.parse(JSON.stringify((sheetById(sid) || {}).access || {})));
     const peekAccess = (sid) => draft[sid] || (sheetById(sid) || {}).access || {};
+    // rascunho dos nomes das colunas, por página
+    const names = {};
+    const namesOf = (sid) => names[sid] || (names[sid] = Object.assign({}, (sheetById(sid) || {}).colNames || {}));
     const m = App.ui.modal({
       title: `Compartilhar "${doc.title}"`, width: '820px', cls: 'modal-tall share-modal', enterSubmits: false,
-      body: `<div class="sp-tabs share-tabs"><button class="on" data-t="people">Pessoas</button><button data-t="sectors">Setores e permissões</button><button data-t="cols">Colunas por setor</button><button data-t="link">Acesso pelo link</button></div>
+      body: `<div class="sp-tabs share-tabs"><button class="on" data-t="people">Pessoas</button><button data-t="sectors">Setores e permissões</button><button data-t="cols">Colunas</button><button data-t="link">Acesso pelo link</button></div>
         <div class="share-pane" data-pane="people"></div><div class="share-pane" data-pane="sectors" hidden></div><div class="share-pane" data-pane="cols" hidden></div><div class="share-pane" data-pane="link" hidden></div>`,
       buttons: [{ label: 'Cancelar' }, { label: 'Salvar', primary: true, action: () => {
         const valid = new Set([...acl.sectors.map((s) => s.id), ...acl.members.map((x) => x.rid), 'link']);
-        commitAccess(draft, valid);
+        commitAccess(draft, valid, names);
         api('PUT', `/api/docs/${cloud.id}/share`, { acl }).then(() => notify('Compartilhamento atualizado.')).catch((e) => notify(e.message));
       } }],
     });
@@ -648,14 +666,11 @@
     let matrixSheet = (App.sheet() && st.sheets.some((x) => x.id === App.sheet().id)) ? App.sheet().id : (st.sheets[0] && st.sheets[0].id);
     function renderMatrix() {
       const pane = d.querySelector('[data-pane="cols"]');
-      if (!acl.sectors.length) {
-        pane.innerHTML = `<p class="sp-hint">Crie os setores na aba <b>Setores e permissões</b> para escolher aqui quais colunas cada setor pode ver e editar.</p>`;
-        return;
-      }
       const sheet = sheetById(matrixSheet);
       if (!sheet) { pane.innerHTML = ''; return; }
       const si = doc.sheets.indexOf(sheet);
-      const n = Math.min(sheet.cols, Math.max(App.usedRange(sheet).maxC, 8));
+      const n = sheet.cols;
+      const nm = namesOf(sheet.id);
       const head = (c) => { try { const v = App.value(si, 1, c); return v === null || v === undefined ? '' : String(App.fmtValue(v, App.style(sheet, 1, c).nf)); } catch (e) { return ''; } };
       const acc = peekAccess(sheet.id);
       const short = [['', 'Padrão'], ['none', 'Oculta'], ['view', 'Ver'], ['edit', 'Editar']];
@@ -664,13 +679,14 @@
         return `<select class="input mx-sel lv-${cur || 'def'}" data-mx="${esc(sid)}:${c}">${short.map(([k, l]) => `<option value="${k}"${cur === k ? ' selected' : ''}>${l}</option>`).join('')}</select>`;
       };
       const rows = [];
-      for (let c = 1; c <= n; c++) rows.push(`<tr><td class="ce-col">${Perms.colName(c)}</td><td class="ce-head">${esc(head(c).slice(0, 30)) || '<span class="sp-hint">(vazia)</span>'}</td>${acl.sectors.map((sec) => `<td>${cellSel(sec.id, c)}</td>`).join('')}</tr>`);
+      for (let c = 1; c <= n; c++) rows.push(`<tr><td class="ce-col">${Perms.colName(c)}</td><td class="mx-name"><input class="input" data-nm="${c}" value="${esc(nm[c] || '')}" placeholder="${esc(head(c).slice(0, 30) || Perms.colName(c))}" maxlength="60"></td>${acl.sectors.map((sec) => `<td>${cellSel(sec.id, c)}</td>`).join('')}</tr>`);
       pane.innerHTML = `<div class="mx-top"><label class="field"><span>Página</span><select class="input" id="mx-sheet">${st.sheets.map((x) => `<option value="${esc(x.id)}"${x.id === matrixSheet ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
-          <p class="sp-hint">Escolha o que cada setor pode fazer em cada coluna. <b>Padrão</b> segue o acesso do setor à página inteira (mostrado abaixo do nome). Colunas <b>ocultas</b> não aparecem para o setor e os dados delas nem chegam ao navegador dessas pessoas. Para uma pessoa específica, use Pessoas › Permissões.</p></div>
-        <div class="mx-wrap"><table class="sector-matrix mx-table"><thead><tr><th>Coluna</th><th>Cabeçalho</th>${acl.sectors.map((sec) => `<th><b>${esc(sec.name)}</b><small>página: ${lvName(sec.sheets[sheet.id] || sec.default).toLowerCase()}</small>
+          <p class="sp-hint"><b>Nome da coluna</b> troca a letra do cabeçalho (ex.: A → CLIENTE) para todos. ${acl.sectors.length ? '' : 'Crie setores na aba <b>Setores e permissões</b> para liberar ou ocultar colunas por setor. '}Escolha o que cada setor pode fazer em cada coluna. <b>Padrão</b> segue o acesso do setor à página inteira (mostrado abaixo do nome). Colunas <b>ocultas</b> não aparecem para o setor e os dados delas nem chegam ao navegador dessas pessoas. Para uma pessoa específica, use Pessoas › Permissões.</p></div>
+        <div class="mx-wrap"><table class="sector-matrix mx-table"><thead><tr><th>Coluna</th><th>Nome da coluna</th>${acl.sectors.map((sec) => `<th><b>${esc(sec.name)}</b><small>página: ${lvName(sec.sheets[sheet.id] || sec.default).toLowerCase()}</small>
           <select class="input mx-all" data-mxall="${esc(sec.id)}"><option value="-">Todas…</option>${short.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></th>`).join('')}</tr></thead>
         <tbody>${rows.join('')}</tbody></table></div>`;
       pane.querySelector('#mx-sheet').onchange = (e) => { matrixSheet = e.target.value; renderMatrix(); };
+      pane.querySelectorAll('[data-nm]').forEach((x) => (x.oninput = () => { nm[x.dataset.nm] = x.value; }));
       const set = (sid, c, v) => {
         const a = accessOf(sheet.id);
         const rule = a[sid] || (a[sid] = {});
@@ -720,12 +736,16 @@
     };
     const label = c1 === c2 ? `coluna ${Perms.colName(c1)}` : `colunas ${Perms.colName(c1)} a ${Perms.colName(c2)}`;
     const opt = (cur) => (cur === 'mixed' ? '<option value="mixed" selected>(vários)</option>' : '') + `<option value=""${cur === '' ? ' selected' : ''}>Conforme a página</option>` + COL_LEVELS.map(([k, l]) => `<option value="${k}"${cur === k ? ' selected' : ''}>${l}</option>`).join('');
+    const single = c1 === c2;
+    const curName = (sh.colNames && sh.colNames[c1]) || '';
+    const nameField = single ? `<label class="field"><span>Nome da coluna (aparece no lugar da letra ${Perms.colName(c1)})</span><input class="input" id="ca-name" value="${esc(curName)}" placeholder="${Perms.colName(c1)}" maxlength="60"></label>` : '';
     App.ui.modal({
-      title: `Permissões da ${label}`, width: '600px', enterSubmits: false,
-      body: targets.length ? `<p class="sp-hint">Escolha quem pode ver ou editar a ${esc(label)} da página "${esc(sh.name)}". Administradores sempre veem e editam tudo. A regra de uma pessoa tem prioridade sobre a do setor dela.</p>
+      title: single ? `Nome e permissões da ${label}` : `Permissões das ${label}`, width: '600px', enterSubmits: false,
+      body: nameField + (targets.length ? `<p class="sp-hint">Escolha quem pode ver ou editar a ${esc(label)} da página "${esc(sh.name)}". Administradores sempre veem e editam tudo. A regra de uma pessoa tem prioridade sobre a do setor dela.</p>
           <div class="share-list">${targets.map((t, i) => `<div class="ca-row"><div class="sr-who"><b>${esc(t.who)}</b><small>${esc(t.sub)}</small></div><select class="input" data-t="${i}">${opt(current(t.key))}</select></div>`).join('')}</div>`
-        : '<p class="modal-text">Ainda não há setores nem pessoas nesta planilha. Use <b>Compartilhar</b> para convidar pessoas e criar setores.</p>',
-      buttons: targets.length ? [{ label: 'Cancelar' }, { label: 'Salvar', primary: true, action: (d) => {
+        : '<p class="modal-text">Ainda não há setores nem pessoas nesta planilha. Use <b>Compartilhar</b> para convidar pessoas e criar setores.</p>'),
+      buttons: targets.length || single ? [{ label: 'Cancelar' }, { label: 'Salvar', primary: true, action: (d) => {
+        const newName = single ? d.querySelector('#ca-name').value.trim().slice(0, 60) : curName;
         d.querySelectorAll('select[data-t]').forEach((x) => {
           if (x.value === 'mixed') return;
           const key = targets[+x.dataset.t].key;
@@ -734,7 +754,14 @@
           if (!Object.keys(rule).length) delete access[key];
         });
         const run = () => {
-          App.change('Permissões da coluna', () => { if (Object.keys(access).length) sh.access = access; else delete sh.access; });
+          App.change('Permissões da coluna', () => {
+            if (Object.keys(access).length) sh.access = access; else delete sh.access;
+            if (single && newName !== curName) {
+              const nm = Object.assign({}, sh.colNames || {});
+              if (newName) nm[c1] = newName; else delete nm[c1];
+              if (Object.keys(nm).length) sh.colNames = nm; else delete sh.colNames;
+            }
+          });
           notify('Permissões da coluna salvas.');
         };
         if (aclChanged) api('PUT', `/api/docs/${cloud.id}/share`, { acl }).then(run).catch((e) => notify(e.message));
@@ -798,7 +825,7 @@
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeHistory(); });
 
   // itens extras nos menus de contexto
-  const COL_CMDS = new Set(['insertColsLeft', 'insertColsRight', 'deleteCols', 'hideCols', 'unhideCols', 'resizeCols', 'autofitCols']);
+  const COL_CMDS = new Set(['renameCol', 'insertColsLeft', 'insertColsRight', 'deleteCols', 'hideCols', 'unhideCols', 'resizeCols', 'autofitCols']);
   const stripCols = (list) => {
     for (let i = list.length - 1; i >= 0; i--) {
       const x = list[i];
@@ -824,7 +851,7 @@
       items.splice(at >= 0 ? at : items.length, 0, { label: 'Mostrar histórico de edições', icon: 'history', cmd: 'cellHistory' });
     }
     if ((hit.area === 'colHdr' || hit.area === 'colEdge') && App.cloudMode && cloud.perms && cloud.perms.admin) {
-      items.push('-', { label: 'Permissões da coluna', icon: 'lock', cmd: 'columnAccess' });
+      items.push('-', { label: 'Nome e permissões da coluna', icon: 'lock', cmd: 'columnAccess' });
     }
   });
 

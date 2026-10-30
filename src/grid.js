@@ -679,7 +679,14 @@
         if (inSel) { ctx.fillStyle = fullCols ? C.hdrFullBg : C.hdrSelBg; ctx.fillRect(x, 0, w, hh); }
         ctx.fillStyle = inSel ? (fullCols ? C.hdrFullText : C.hdrSelText) : C.hdrText;
         ctx.font = `${inSel ? 'bold ' : ''}${(11 * z).toFixed(1)}px Arial, sans-serif`;
-        ctx.fillText(E.numToCol(c), x + w / 2, hh / 2 + 0.5);
+        const nm = sh.colNames && sh.colNames[c];
+        if (nm) {
+          // nome dado pelo administrador (ex.: CLIENTE) no lugar da letra
+          let t = String(nm);
+          const room = w - (App.colReadonly && App.colReadonly(sh, c) ? 26 : 10) * z;
+          if (ctx.measureText(t).width > room) { while (t.length > 1 && ctx.measureText(t + '…').width > room) t = t.slice(0, -1); t += '…'; }
+          ctx.fillText(t, x + w / 2, hh / 2 + 0.5);
+        } else ctx.fillText(E.numToCol(c), x + w / 2, hh / 2 + 0.5);
         if (App.colReadonly && w > 34 * z && App.colReadonly(sh, c)) {
           // cadeado: coluna somente para visualizar
           const lx = x + w - 13 * z, ly = hh / 2 - 1 * z;
@@ -957,6 +964,7 @@
     const h = hit(p.x, p.y);
     const sh = App.sheet();
     if (h.area === 'colEdge') { autofitCols(h.c); return; }
+    if (h.area === 'colHdr') { App.run('renameCol', h.c); return; }
     if (h.area === 'rowEdge') { App.change('Ajustar altura', () => { delete sh.rowH[h.r]; }); return; }
     if (h.area === 'cell') {
       const info = App.cellInfo(h.r, h.c);

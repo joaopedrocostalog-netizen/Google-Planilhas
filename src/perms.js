@@ -10,7 +10,7 @@
   const minLevel = (a, b) => (RANK[a] <= RANK[b] ? a : b);
   const maxLevel = (a, b) => (RANK[a] >= RANK[b] ? a : b);
   const isLevel = (x) => LEVELS.includes(x);
-  const COLS_MSG = 'Somente administradores podem inserir, excluir, ocultar ou redimensionar colunas.';
+  const COLS_MSG = 'Somente administradores podem renomear, inserir, excluir, ocultar ou redimensionar colunas.';
 
   function defaultAcl() {
     return { link: 'none', linkSector: null, sectors: [], members: [] };
@@ -144,6 +144,7 @@
         if (!perms.manage) return 'Você não tem permissão para criar páginas.';
         if (e.created.protected && e.created.protected.length) return 'Somente administradores podem proteger intervalos.';
         if (e.created.access && Object.keys(e.created.access).length) return 'Somente administradores podem definir permissões por coluna.';
+        if (e.created.colNames && Object.keys(e.created.colNames).length) return 'Somente administradores podem renomear colunas.';
         continue;
       }
       if (e.removed) {
@@ -158,6 +159,7 @@
         const resize = 'rows' in e.props || 'cols' in e.props;
         // as colunas (A, B, C…) só podem ser alteradas por administradores
         if ('cols' in e.props || 'colW' in e.props || 'hiddenCols' in e.props) return COLS_MSG;
+        if ('colNames' in e.props) return 'Somente administradores podem renomear colunas.';
         if ('access' in e.props) return 'Somente administradores podem definir permissões por coluna.';
         if ('protected' in e.props) {
           return resize
@@ -200,11 +202,22 @@
     }
     return out;
   }
+  // Nomes das colunas sem os das colunas ocultas
+  function maskNames(names, perms, sheetId) {
+    if (!names || perms.admin || !hasHiddenCols(perms, sheetId)) return names;
+    const out = {};
+    for (const c in names) if (colLevel(perms, sheetId, +c) !== 'none') out[c] = names[c];
+    return out;
+  }
+  function maskSheet(s, perms) {
+    if (!hasHiddenCols(perms, s.id)) return s;
+    const o = Object.assign({}, s, { cells: maskCells(s.cells || {}, perms, s.id) });
+    if (s.colNames) o.colNames = maskNames(s.colNames, perms, s.id);
+    return o;
+  }
   // Remove do documento as páginas e colunas que o usuário não pode ver
   function filterDoc(data, perms) {
-    return Object.assign({}, data, {
-      sheets: data.sheets.filter((s) => sheetVisible(perms, s.id)).map((s) => (hasHiddenCols(perms, s.id) ? Object.assign({}, s, { cells: maskCells(s.cells || {}, perms, s.id) }) : s)),
-    });
+    return Object.assign({}, data, { sheets: data.sheets.filter((s) => sheetVisible(perms, s.id)).map((s) => maskSheet(s, perms)) });
   }
   // Remove de uma alteração o que o destinatário não pode ver
   function filterPatch(patch, perms) {
@@ -213,9 +226,13 @@
     for (const id in patch.sheets || {}) {
       const e = patch.sheets[id];
       if (!e.removed && !sheetVisible(perms, id)) continue;
-      if (e.created) out.sheets[id] = { created: Object.assign({}, e.created, { cells: maskCells(e.created.cells || {}, perms, id) }) };
-      else if (e.cells && hasHiddenCols(perms, id)) out.sheets[id] = Object.assign({}, e, { cells: maskCells(e.cells, perms, id) });
-      else out.sheets[id] = e;
+      if (e.created) out.sheets[id] = { created: maskSheet(Object.assign({ id }, e.created), perms) };
+      else if (hasHiddenCols(perms, id) && (e.cells || (e.props && e.props.colNames))) {
+        const o = Object.assign({}, e);
+        if (e.cells) o.cells = maskCells(e.cells, perms, id);
+        if (e.props && e.props.colNames) o.props = Object.assign({}, e.props, { colNames: maskNames(e.props.colNames, perms, id) });
+        out.sheets[id] = o;
+      } else out.sheets[id] = e;
       any = true;
     }
     if (patch.order) { out.order = patch.order.filter((id) => sheetVisible(perms, id)); any = true; }

@@ -112,8 +112,9 @@ O servidor (`server/`, Node.js + Postgres) guarda as planilhas na nuvem e sincro
 
 - **Conta:** cada pessoa entra com e-mail e senha. Quem salva uma planilha na nuvem (Arquivo › Salvar na nuvem) é o dono e administrador dela.
 - **Compartilhar:** o administrador adiciona pessoas (administrador, editor ou leitor), cria setores e define, por setor ou por pessoa, o que cada um pode fazer em cada página e em cada coluna: oculta, somente ver ou editar. A regra da pessoa tem prioridade sobre a do setor.
-- **Colunas por setor:** em Compartilhar › Colunas por setor, um quadro mostra todas as colunas da página × todos os setores; o administrador escolhe em cada cruzamento: padrão, oculta, ver ou editar.
-- **Estrutura das colunas:** só administradores inserem, excluem, ocultam ou redimensionam colunas (A, B, C…).
+- **Colunas por setor:** em Compartilhar › Colunas, um quadro mostra todas as colunas da página × todos os setores; o administrador escolhe em cada cruzamento: padrão, oculta, ver ou editar.
+- **Nome das colunas:** o administrador troca a letra do cabeçalho por um nome (ex.: A → CLIENTE) com duplo clique no cabeçalho, no menu do cabeçalho (Nome e permissões da coluna) ou em Compartilhar › Colunas, que lista todas as colunas da página.
+- **Estrutura das colunas:** só administradores renomeiam, inserem, excluem, ocultam ou redimensionam colunas (A, B, C…).
 - **Permissões da coluna:** clique com o botão direito no cabeçalho de uma coluna (ou Dados › Permissões por coluna). Colunas ocultas não aparecem para a pessoa e os dados delas nem chegam ao navegador dela; fórmulas visíveis que dependem delas mostram `#OCULTO!`. Colunas somente leitura têm um cadeado no cabeçalho.
 - **Histórico de edições:** clique com o botão direito numa célula › Mostrar histórico de edições (quem alterou, quando, valor anterior e novo).
 - **Intervalos protegidos:** Dados › Proteger páginas e intervalos.
