@@ -583,6 +583,26 @@
         ctx.setLineDash([]);
       }
     }
+    // cursores de outras pessoas (edição em tempo real)
+    if (st.peers && st.peers.length) {
+      const sid = sh.id;
+      ctx.font = `500 ${(11 * z).toFixed(1)}px Arial, sans-serif`;
+      for (const p of st.peers) {
+        if (!p.sel || p.sheetId !== sid) continue;
+        const pb = box(p.sel);
+        ctx.strokeStyle = p.color; ctx.lineWidth = 2;
+        ctx.strokeRect(Math.round(pb.x) + 1, Math.round(pb.y) + 1, Math.round(pb.w) - 2, Math.round(pb.h) - 2);
+        ctx.fillStyle = p.color + '14';
+        ctx.fillRect(pb.x, pb.y, pb.w, pb.h);
+        const label = p.name + (p.editing ? ' (editando)' : '');
+        const tw = ctx.measureText(label).width + 10 * z, th = 16 * z;
+        const ly = pb.y - th >= rg.y ? pb.y - th : pb.y + pb.h;
+        ctx.fillStyle = p.color;
+        ctx.fillRect(pb.x + pb.w - tw, ly, tw, th);
+        ctx.fillStyle = '#ffffff'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+        ctx.fillText(label, pb.x + pb.w - tw + 5 * z, ly + th / 2 + 0.5);
+      }
+    }
     // seleção
     const R = App.selRect();
     const b = box(R);
@@ -1048,6 +1068,7 @@
     setMarquee: (m) => { st.marquee = m; schedule(); },
     setRefs: (refs) => { st.refs = refs || []; schedule(); },
     setFound: (set, cur) => { st.found = set; st.foundCur = cur; schedule(); },
+    setPeers: (list) => { st.peers = list; schedule(); },
     autofitCols,
     scrollBy: (dx, dy) => { scroller.scrollLeft += dx; scroller.scrollTop += dy; },
     pageRows: () => Math.max(1, Math.floor((st.vh - st.hdrH - st.FH) / ((App.DEF_H) * st.z)) - 1),

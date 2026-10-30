@@ -28,8 +28,11 @@
       </div>
     </div>
     <div class="appbar-right">
+      <div id="peers" class="peers" aria-label="Pessoas nesta planilha"></div>
+      <span id="cloud-chip" class="cloud-chip" hidden></span>
       <button id="btn-history" class="icon-btn hdr-btn" title="Histórico de versões" aria-label="Histórico de versões"><svg width="22" height="22" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.6M4 4v4h4M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <button id="btn-share" class="btn-share"><svg width="18" height="18" viewBox="0 0 24 24"><path d="M7 11V8a5 5 0 0 1 10 0v3M5.5 11h13v9.5h-13z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg><span>Compartilhar</span></button>
+      <button id="btn-account" class="account-btn" title="Sua conta">Entrar</button>
     </div>
   </header>
 
@@ -86,6 +89,9 @@
   <div id="print-area" class="print-area"></div>
   <div class="drop-overlay">Solte o arquivo para abrir como nova planilha</div>
 
+  <script src="src/config.js"></script>
+  <script src="src/patch.js"></script>
+  <script src="src/perms.js"></script>
   <script src="src/engine.js"></script>
   <script src="src/functions.js"></script>
   <script src="src/functions2.js"></script>
@@ -99,6 +105,7 @@
   <script src="src/dialogs.js"></script>
   <script src="src/charts.js"></script>
   <script src="src/io.js"></script>
+  <script src="src/collab.js"></script>
   <script src="src/app.js"></script>
 </body>
 </html>

@@ -607,8 +607,8 @@
     t.addEventListener('blur', () => { if (t.value.trim() !== doc.title) App.setTitle(t.value.trim()); sync(); });
     t.addEventListener('input', () => { t.style.width = Math.min(480, Math.max(120, t.value.length * 9 + 24)) + 'px'; });
     const status = $('save-status');
-    App.on('saving', () => { status.innerHTML = `${icon('cloud', 16)} Salvando…`; });
-    App.on('saved', () => { status.innerHTML = `${icon('cloud', 16)} Salvo no navegador`; status.title = 'Todas as alterações foram salvas neste navegador.'; });
+    App.on('saving', () => { if (App.cloudMode) return; status.innerHTML = `${icon('cloud', 16)} Salvando…`; });
+    App.on('saved', () => { if (App.cloudMode) return; status.innerHTML = `${icon('cloud', 16)} Salvo no navegador`; status.title = 'Todas as alterações foram salvas neste navegador.'; });
     App.on('saveError', () => { status.innerHTML = `${icon('cloud', 16)} Não foi possível salvar`; status.title = 'O armazenamento do navegador está cheio ou bloqueado. Baixe uma cópia em Arquivo > Fazer download.'; });
     $('btn-share').addEventListener('click', () => run('share'));
     $('btn-history').addEventListener('click', () => run('versionHistory'));

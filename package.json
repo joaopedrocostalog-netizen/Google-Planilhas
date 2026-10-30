@@ -1,0 +1,17 @@
+{
+  "name": "planilhas",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Editor de planilhas no estilo do Google Planilhas, com edição em tempo real e permissões por setor.",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node tests/engine.test.js && node tests/server.test.js"
+  },
+  "dependencies": {
+    "pg": "^8.11.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

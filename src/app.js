@@ -11,6 +11,7 @@
   App.ui.init2();
   App.charts.init();
   App.io.init();
+  App.collab.init();
 
   // Barra "Adicionar mais linhas"
   $('add-rows-btn').addEventListener('click', () => App.run('addRows', parseInt($('add-rows-n').value, 10) || 1000));
@@ -32,7 +33,7 @@
   App.emit('sheet');
   App.emit('title');
   App.emit('selection');
-  if (!/#importar=/.test(location.hash)) {
+  if (!/#(importar|nuvem)=/.test(location.hash)) {
     try { history.replaceState(null, '', '#doc=' + App.docId); } catch (e) { /* ignora */ }
   }
   App.save();
