@@ -744,3 +744,13 @@ body.executor .doc-title { pointer-events: none; }
 .mv-li[draggable] { cursor: grab; }
 .mv-li.dragging { opacity: .5; }
 .mv-grip { color: var(--text-3); }
+
+/* Ordem das colunas (visualização com filtro) */
+.co-list { max-height: 52vh; overflow: auto; display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
+.co-list .mv-li span.co-n { flex: 0 0 28px; color: var(--muted, #777); font-size: 12px; text-align: right; }
+.co-list .mv-li span.mv-grip { flex: 0 0 auto; }
+.co-list .mv-li.drop-on { border-color: var(--red, #e30613); box-shadow: inset 0 2px 0 var(--red, #e30613); }
+#vb-colorder svg { vertical-align: -3px; margin-right: 2px; }
+#vb-colorder { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+#co-reset { display: inline-block; width: auto !important; align-self: flex-start; }
+.co-list .icon-btn[data-top] { font-size: 15px; }

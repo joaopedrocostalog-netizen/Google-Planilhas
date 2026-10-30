@@ -23,6 +23,7 @@
     textColor: '<text x="12" y="16" text-anchor="middle" font-size="17" font-weight="600" font-family="Arial" fill="currentColor">A</text>',
     fill: P('m5.5 11.5 6-6 6 6-6 6zM11.5 5.5 9 3M19 14s1.5 2 1.5 3a1.5 1.5 0 0 1-3 0c0-1 1.5-3 1.5-3z'),
     borders: P('M4 4h16v16H4zM4 12h16M12 4v16', 'stroke-dasharray="0"'),
+    columns: P('M4 4h4v16H4zM10 4h4v16h-4zM16 4h4v16h-4z'),
     merge: P('M4 6v12M20 6v12M7 12h10M7 12l3-3M7 12l3 3M17 12l-3-3M17 12l-3 3'),
     alignLeft: P('M4 6h16M4 10h10M4 14h16M4 18h10'),
     alignCenter: P('M4 6h16M7 10h10M4 14h16M7 18h10'),
