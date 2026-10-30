@@ -110,7 +110,9 @@ tests/              testes do motor (node tests/engine.test.js)
 
 O servidor (`server/`, Node.js + Postgres) guarda as planilhas na nuvem e sincroniza as edições ao vivo.
 
-- **Conta:** cada pessoa entra com e-mail e senha. Quem salva uma planilha na nuvem (Arquivo › Salvar na nuvem) é o dono e administrador dela.
+- **Conta:** cada pessoa entra com e-mail e senha. Só administradores criam e salvam planilhas na nuvem (Arquivo › Salvar na nuvem); quem salva é o dono e administrador dela. Os administradores gerais ficam na variável `ADMIN_EMAILS` do servidor (separados por vírgula).
+- **Setores são executores:** quem não é administrador só preenche valores nas colunas liberadas. Formatação, regras, filtros, congelar, tamanho de linhas e colunas, páginas e estrutura são dos administradores, e essas opções nem aparecem para os setores. Cada pessoa só vê o cursor de quem é do mesmo setor; administradores veem todos.
+- **Filtro a partir da coluna:** botão direito no cabeçalho › Criar um filtro a partir da coluna. O botão do filtro fica no cabeçalho (A, B… ou o nome da coluna) e filtra desde a linha 1.
 - **Compartilhar:** o administrador adiciona pessoas (administrador, editor ou leitor), cria setores e define, por setor ou por pessoa, o que cada um pode fazer em cada página e em cada coluna: oculta, somente ver ou editar. A regra da pessoa tem prioridade sobre a do setor.
 - **Colunas por setor:** em Compartilhar › Colunas, um quadro mostra todas as colunas da página × todos os setores; o administrador escolhe em cada cruzamento: padrão, oculta, ver ou editar.
 - **Nome das colunas:** o administrador troca a letra do cabeçalho por um nome (ex.: A → CLIENTE) com duplo clique no cabeçalho, no menu do cabeçalho (Nome e permissões da coluna) ou em Compartilhar › Colunas, que lista todas as colunas da página.
@@ -119,7 +121,7 @@ O servidor (`server/`, Node.js + Postgres) guarda as planilhas na nuvem e sincro
 - **Histórico de edições:** clique com o botão direito numa célula › Mostrar histórico de edições (quem alterou, quando, valor anterior e novo).
 - **Intervalos protegidos:** Dados › Proteger páginas e intervalos.
 
-Variáveis do servidor: `DATABASE_URL` (Postgres), `PGSCHEMA` (opcional, schema próprio), `ALLOWED_ORIGINS` (sites que podem usar a API). Sem `DATABASE_URL`, os dados ficam em memória (apenas para testes). Testes: `npm test`.
+Variáveis do servidor: `DATABASE_URL` (Postgres), `ADMIN_EMAILS` (administradores gerais), `PGSCHEMA` (opcional, schema próprio), `ALLOWED_ORIGINS` (sites que podem usar a API). Sem `DATABASE_URL`, os dados ficam em memória (apenas para testes). Testes: `npm test`.
 
 ## Limitações
 

@@ -13,6 +13,8 @@ const ROOT = path.join(__dirname, '..');
 const PORT = Number(process.env.PORT) || 3000;
 const ORIGINS = (process.env.ALLOWED_ORIGINS || 'https://joaopedrocostalog-netizen.github.io').split(',').map((s) => s.trim()).filter(Boolean);
 const store = createStore();
+// administradores gerais: podem criar e salvar planilhas na nuvem (além de quem já é dono ou administrador de alguma)
+const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || 'joao.pedro@costalog.com.br').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
 
 // ---------- Utilidades ----------
 const uid = (n) => crypto.randomBytes(n || 12).toString('base64url');
@@ -30,6 +32,12 @@ function checkPass(p, stored) {
 const COLORS = ['#e30613', '#1a73e8', '#188038', '#9334e6', '#e37400', '#d01884', '#12b5cb', '#5f6368', '#b06000', '#0b8043'];
 const colorFor = (id) => COLORS[[...String(id)].reduce((a, c) => a + c.charCodeAt(0), 0) % COLORS.length];
 const publicUser = (u) => ({ id: u.id, email: u.email, name: u.name, color: colorFor(u.id) });
+async function isGlobalAdmin(u) {
+  if (ADMIN_EMAILS.includes(String(u.email).toLowerCase())) return true;
+  const rows = await store.listDocsFor(u);
+  return rows.some((r) => r.owner_id === u.id || ((r.acl && r.acl.members) || []).some((m) => m.email === u.email && m.role === 'admin'));
+}
+const meUser = async (u) => Object.assign(publicUser(u), { admin: await isGlobalAdmin(u) });
 const emailOk = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
@@ -116,13 +124,15 @@ async function saveRoom(room) {
     room.timer = setTimeout(() => saveRoom(room), 5000);
   }
 }
+// quem vê quem: administradores veem todos; os demais só veem pessoas do mesmo setor
+const seesPeer = (viewer, peer) => !!(viewer.perms && peer.perms) && (viewer.perms.admin || (!peer.perms.admin && viewer.perms.sectorId === peer.perms.sectorId));
 const peerInfo = (c) => ({ cid: c.cid, name: c.user.name, email: c.user.email, color: colorFor(c.user.id), presence: c.presence });
 function sendInit(c) {
   const room = c.room;
   c.ws.send({
     type: 'init', doc: Perms.filterDoc(room.data, c.perms), version: room.version, perms: c.perms,
     me: Object.assign(publicUser(c.user), { cid: c.cid }),
-    peers: [...room.clients].filter((x) => x !== c && x.user).map(peerInfo),
+    peers: [...room.clients].filter((x) => x !== c && x.user && seesPeer(c, x)).map(peerInfo),
   });
 }
 function broadcast(room, except, msg) { for (const c of room.clients) if (c !== except) c.ws.send(msg); }
@@ -152,7 +162,7 @@ async function onHello(c, msg) {
   c.user = user; c.room = room; c.perms = perms;
   room.clients.add(c);
   sendInit(c);
-  broadcast(room, c, { type: 'join', peer: peerInfo(c) });
+  for (const o of room.clients) if (o !== c && seesPeer(o, c)) o.ws.send({ type: 'join', peer: peerInfo(c) });
 }
 // Valores alterados (para o histórico de edições). Inserções/exclusões de linhas e colunas não entram.
 function historyEntries(room, p) {
@@ -206,7 +216,7 @@ function onPatch(c, msg) {
 function onPresence(c, msg) {
   c.presence = { sheetId: String(msg.sheetId || ''), sel: msg.sel || null, editing: !!msg.editing };
   for (const o of c.room.clients) {
-    if (o === c) continue;
+    if (o === c || !seesPeer(o, c)) continue;
     if (c.presence.sheetId && !Perms.sheetVisible(o.perms, c.presence.sheetId)) continue;
     o.ws.send({ type: 'presence', peer: peerInfo(c) });
   }
@@ -288,7 +298,7 @@ route('POST', '/api/register', async (req) => {
   if (await store.getUserByEmail(email)) throw httpError(409, 'Já existe uma conta com este e-mail. Use "Entrar".');
   const user = { id: uid(9), email, name, pass: hashPass(pass) };
   await store.createUser(user);
-  return { token: await newSession(user), user: publicUser(user) };
+  return { token: await newSession(user), user: await meUser(user) };
 });
 route('POST', '/api/login', async (req) => {
   const b = await readBody(req, 100000);
@@ -296,10 +306,10 @@ route('POST', '/api/login', async (req) => {
   if (rateLimited('login:' + email) || rateLimited('ip:' + (req.socket.remoteAddress || ''))) throw httpError(429, 'Muitas tentativas. Aguarde um minuto.');
   const user = await store.getUserByEmail(email);
   if (!user || !checkPass(b.password || '', user.pass)) throw httpError(401, 'E-mail ou senha incorretos.');
-  return { token: await newSession(user), user: publicUser(user) };
+  return { token: await newSession(user), user: await meUser(user) };
 });
 route('POST', '/api/logout', async (req) => { const t = tokenOf(req); if (t) await store.deleteSession(sha(t)); return { ok: true }; });
-route('GET', '/api/me', async (req) => publicUser(await requireUser(req)));
+route('GET', '/api/me', async (req) => meUser(await requireUser(req)));
 route('PUT', '/api/me', async (req) => {
   const user = await requireUser(req);
   const b = await readBody(req, 100000);
@@ -311,7 +321,7 @@ route('PUT', '/api/me', async (req) => {
     f.pass = hashPass(String(b.password));
   }
   await store.updateUser(user.id, f);
-  return publicUser(Object.assign(user, f));
+  return meUser(Object.assign(user, f));
 });
 route('GET', '/api/docs', async (req) => {
   const user = await requireUser(req);
@@ -325,6 +335,7 @@ route('GET', '/api/docs', async (req) => {
 });
 route('POST', '/api/docs', async (req) => {
   const user = await requireUser(req);
+  if (!(await isGlobalAdmin(user))) throw httpError(403, 'Somente administradores podem criar planilhas na nuvem.');
   const b = await readBody(req);
   const data = b.data && Array.isArray(b.data.sheets) && b.data.sheets.length ? b.data : { sheets: [{ id: uid(6), name: 'Página1', rows: 1000, cols: 26, cells: {} }] };
   for (const s of data.sheets) if (!s.id) s.id = uid(6);

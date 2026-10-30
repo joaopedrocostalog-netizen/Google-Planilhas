@@ -145,6 +145,9 @@
     return ul;
   }
   function menuPopup(anchor, items, opts) {
+    // planilhas compartilhadas: quem não é administrador só vê as opções que pode usar
+    if (App.menuFilter) items = App.menuFilter(items);
+    if (!items.some((x) => x && x !== '-' && !x.header)) return null;
     const el = popup(anchor, buildMenu(items), Object.assign({ cls: 'menu-pop' }, opts || {}));
     const prev = openPop.onClose;
     openPop.onClose = () => { document.querySelectorAll('.submenu').forEach((s) => s.remove()); if (prev) prev(); };
@@ -184,7 +187,7 @@
   const fnCats = () => {
     const cats = {};
     for (const f of E.INFO) (cats[f.cat || 'Outras'] = cats[f.cat || 'Outras'] || []).push(f);
-    return Object.keys(cats).sort().map((c) => ({ label: c, sub: () => cats[c].slice().sort((a, b) => a.pt.localeCompare(b.pt)).map((f) => ({ label: f.pt, action: () => run('insertFunction', f.pt) })) }));
+    return Object.keys(cats).sort().map((c) => ({ label: c, sub: () => cats[c].slice().sort((a, b) => a.pt.localeCompare(b.pt)).map((f) => ({ label: f.pt, need: 'insertFunction', action: () => run('insertFunction', f.pt) })) }));
   };
   const fmtItems = () => [
     { label: 'Automático', cmd: 'format', arg: 'auto', check: () => !App.style(App.sheet(), sel.ar, sel.ac).nf },
@@ -256,9 +259,9 @@
       { label: 'Tabela dinâmica', cmd: 'pivotTable' },
       { label: 'Imagem', sub: [{ label: 'Inserir imagem sobre as células', cmd: 'insertImage' }, { label: 'Inserir imagem na célula', cmd: 'insertCellImage' }] }, '-',
       { label: 'Função', icon: 'sigma', sub: () => [
-        { label: 'SOMA', action: () => run('autoSum', 'SOMA') }, { label: 'MÉDIA', action: () => run('autoSum', 'MÉDIA') },
-        { label: 'CONT.NÚM', action: () => run('autoSum', 'CONT.NÚM') }, { label: 'MÁXIMO', action: () => run('autoSum', 'MÁXIMO') },
-        { label: 'MÍNIMO', action: () => run('autoSum', 'MÍNIMO') }, '-', ...fnCats(), '-', { label: 'Lista completa de funções', cmd: 'functionList' },
+        { label: 'SOMA', need: 'autoSum', action: () => run('autoSum', 'SOMA') }, { label: 'MÉDIA', need: 'autoSum', action: () => run('autoSum', 'MÉDIA') },
+        { label: 'CONT.NÚM', need: 'autoSum', action: () => run('autoSum', 'CONT.NÚM') }, { label: 'MÁXIMO', need: 'autoSum', action: () => run('autoSum', 'MÁXIMO') },
+        { label: 'MÍNIMO', need: 'autoSum', action: () => run('autoSum', 'MÍNIMO') }, '-', ...fnCats(), '-', { label: 'Lista completa de funções', cmd: 'functionList' },
       ] }, '-',
       { label: 'Link', icon: 'link', cmd: 'insertLink', sc: 'Ctrl+K' },
       { label: 'Caixa de seleção', icon: 'checkbox', cmd: 'insertCheckbox' },
@@ -294,7 +297,7 @@
       { label: 'Intervalos nomeados', cmd: 'namedRanges' },
       { label: 'Histórico de versões', icon: 'history', cmd: 'versionHistory' },
     ] },
-    { label: 'Extensões', items: () => [{ label: 'Nenhuma extensão instalada', disabled: true }] },
+    { label: 'Extensões', items: () => [{ label: 'Nenhuma extensão instalada', disabled: true, need: 'extensions' }] },
     { label: 'Ajuda', items: () => [
       { label: 'Pesquisar nos menus', icon: 'search', cmd: 'menuSearch', sc: 'Alt+/' },
       { label: 'Lista de funções', icon: 'function', cmd: 'functionList' },
@@ -394,7 +397,7 @@
     switch (id) {
       case 'zoom': menuPopup(anchor, [50, 75, 90, 100, 125, 150, 200].map((z) => ({ label: z + '%', cmd: 'zoom', arg: z, check: doc.zoom === z }))); break;
       case 'formats': menuPopup(anchor, fmtItems()); break;
-      case 'font': menuPopup(anchor, FONTS.map((f) => ({ label: f, cmd: 'fontFamily', arg: f === 'Arial' ? null : f, check: (st.ff || 'Arial') === f }))).classList.add('font-menu'); break;
+      case 'font': { const fm = menuPopup(anchor, FONTS.map((f) => ({ label: f, cmd: 'fontFamily', arg: f === 'Arial' ? null : f, check: (st.ff || 'Arial') === f }))); if (fm) fm.classList.add('font-menu'); } break;
       case 'textColor': popup(anchor, palette((c) => run('textColor', c), st.color, 'Redefinir')); break;
       case 'fillColor': popup(anchor, palette((c) => run('fillColor', c), st.bg, 'Redefinir')); break;
       case 'borders': popup(anchor, bordersPanel()); break;
@@ -404,9 +407,9 @@
       case 'wrap': iconRow(anchor, [['wrapOverflow', 'overflow', 'Transbordar'], ['wrapWrap', 'wrap', 'Ajustar'], ['wrapClip', 'clip', 'Cortar']]); break;
       case 'rotate': menuPopup(anchor, [{ label: 'Nenhuma', cmd: 'rotNone' }, { label: 'Inclinar para cima', cmd: 'rot45' }, { label: 'Girar para cima', cmd: 'rotUp' }, { label: 'Girar para baixo', cmd: 'rotDown' }]); break;
       case 'functions': menuPopup(anchor, [
-        { label: 'SOMA', action: () => run('autoSum', 'SOMA') }, { label: 'MÉDIA', action: () => run('autoSum', 'MÉDIA') },
-        { label: 'CONT.NÚM', action: () => run('autoSum', 'CONT.NÚM') }, { label: 'MÁXIMO', action: () => run('autoSum', 'MÁXIMO') },
-        { label: 'MÍNIMO', action: () => run('autoSum', 'MÍNIMO') }, '-', ...fnCats(), '-', { label: 'Lista completa de funções', cmd: 'functionList' }]); break;
+        { label: 'SOMA', need: 'autoSum', action: () => run('autoSum', 'SOMA') }, { label: 'MÉDIA', need: 'autoSum', action: () => run('autoSum', 'MÉDIA') },
+        { label: 'CONT.NÚM', need: 'autoSum', action: () => run('autoSum', 'CONT.NÚM') }, { label: 'MÁXIMO', need: 'autoSum', action: () => run('autoSum', 'MÁXIMO') },
+        { label: 'MÍNIMO', need: 'autoSum', action: () => run('autoSum', 'MÍNIMO') }, '-', ...fnCats(), '-', { label: 'Lista completa de funções', cmd: 'functionList' }]); break;
     }
   }
   function iconRow(anchor, items) {

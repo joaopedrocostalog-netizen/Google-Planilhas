@@ -208,6 +208,7 @@
   function bindChart(el) {
     el.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return;
+      if (App.adminOnly && App.adminOnly()) return; // gráficos: só administradores mexem
       if (e.target.closest('.chart-menu')) return;
       e.preventDefault(); e.stopPropagation();
       if (App.editing()) App.commitEdit();
@@ -242,7 +243,7 @@
       window.addEventListener('mousemove', move);
       window.addEventListener('mouseup', up);
     });
-    el.addEventListener('dblclick', () => { const ch = findChart(el.dataset.id); if (ch && ch.type !== 'image') openEditor(el.dataset.id); });
+    el.addEventListener('dblclick', () => { if (App.adminOnly && App.adminOnly()) return; const ch = findChart(el.dataset.id); if (ch && ch.type !== 'image') openEditor(el.dataset.id); });
     el.querySelector('.chart-menu').addEventListener('click', (e) => {
       e.stopPropagation();
       const id = el.dataset.id;

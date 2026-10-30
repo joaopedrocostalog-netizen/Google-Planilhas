@@ -296,10 +296,24 @@
     if (R.r1 === R.r2) return notify('Selecione pelo menos duas linhas para classificar.');
     App.change('Classificar intervalo', () => App.sortRange(si(), R, [{ col: Math.min(Math.max(sel.ac, R.c1), R.c2), asc: !desc }], false));
   });
+  // Filtro a partir da coluna: o botão fica no cabeçalho (A, B, C… ou o nome da coluna) e filtra desde a linha 1
+  def('filterFromColumn', 'Criar um filtro a partir da coluna', (col) => {
+    const sh = App.sheet(), R = App.selRect();
+    const c1 = typeof col === 'number' ? col : R.c1, c2 = typeof col === 'number' ? col : R.c2;
+    const f = sh.filter;
+    if (f && f.r1 === 0) {
+      if (c1 >= f.c1 && c2 <= f.c2) { App.change('Remover filtro', () => { sh.filter = null; }); return; }
+      App.change('Filtro', () => { sh.filter = Object.assign({}, f, { c1: Math.min(f.c1, c1), c2: Math.max(f.c2, c2), r2: sh.rows }); });
+      return;
+    }
+    App.change('Criar filtro', () => { sh.filter = { r1: 0, c1, c2, r2: sh.rows, crit: {} }; });
+  });
   def('toggleFilter', 'Criar um filtro', () => {
     const sh = App.sheet();
     if (sh.filter) { App.change('Remover filtro', () => { sh.filter = null; }); return; }
     let R = App.selRect();
+    // coluna inteira selecionada: filtro a partir da coluna
+    if (R.r1 === 1 && R.r2 >= sh.rows && !(R.c1 === 1 && R.c2 >= sh.cols)) { App.run('filterFromColumn'); return; }
     if (R.r1 === R.r2 && R.c1 === R.c2) R = App.dataRegion(si(), sel.ar, sel.ac);
     if (R.r1 === 1 && R.r2 >= sh.rows) R = Object.assign({}, R, { r2: Math.max(2, App.usedRange(sh).maxR) });
     App.change('Criar filtro', () => { sh.filter = Object.assign({}, R, { crit: {} }); });

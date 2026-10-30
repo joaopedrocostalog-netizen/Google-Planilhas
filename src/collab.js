@@ -106,6 +106,7 @@
     return loginDialog(reason);
   }
   function renderAccount() {
+    setTimeout(refreshChrome, 0);
     const b = $('btn-account');
     if (!b) return;
     if (cloud.user) {
@@ -199,6 +200,7 @@
     cloud.id = null; cloud.perms = null; cloud.initialized = false; cloud.pending.clear();
     App.cloudMode = false; App.validatePatch = null; App.editGuard = null; App.colBlocked = null; App.colReadonly = null; App.colsLocked = null;
     closeHistory();
+    refreshChrome();
     renderChip();
   }
   function handle(m) {
@@ -243,7 +245,7 @@
       send({ type: 'patch', id, patch: p });
     }
     cloud.peers = new Map((m.peers || []).map((p) => [p.cid, p]));
-    App.validatePatch = (p) => { const err = Perms.validate(p, cloud.perms, doc); if (err) cloud.remask = true; return err; };
+    App.validatePatch = (p, inv) => { const err = Perms.validate(p, cloud.perms, doc, inv); if (err) cloud.remask = true; return err; };
     // colunas ocultas por permissão somem da grade; as somente leitura ganham um cadeado no cabeçalho
     App.colBlocked = cloud.perms.admin ? null : (sh, c) => Perms.colLevel(cloud.perms, sh.id, c) === 'none';
     App.colReadonly = cloud.perms.admin ? null : (sh, c) => Perms.hasColRules(cloud.perms, sh.id) && Perms.colLevel(cloud.perms, sh.id, c) === 'view';
@@ -261,7 +263,7 @@
     App.emit('change', { remote: true });
     App.emit('title');
     setStatus(cloud.pending.size ? 'saving' : 'online');
-    renderPeers(); renderChip(); sendPresence();
+    renderPeers(); renderChip(); sendPresence(); refreshChrome();
     if (first) notify(`Você entrou como ${m.me.name}${m.perms.sectorName ? ' · setor ' + m.perms.sectorName : ''} (${roleLabel(m.perms.role)}).`);
   }
   function onError(m) {
@@ -333,7 +335,14 @@
         App.grid.select(p.presence.sel.r1, p.presence.sel.c1);
       }));
     }
-    App.grid.setPeers(list.filter((p) => p.presence && p.presence.sel).map((p) => ({ name: (p.name || '').split(' ')[0], color: p.color, sheetId: p.presence.sheetId, sel: p.presence.sel, editing: p.presence.editing })));
+    const visibleSel = (p) => {
+      const sh = doc.sheets.find((x) => x.id === p.presence.sheetId);
+      if (!sh || !App.colBlocked) return true;
+      const S = p.presence.sel;
+      for (let c = S.c1; c <= Math.min(S.c2, S.c1 + 60); c++) if (!App.colBlocked(sh, c)) return true;
+      return false;
+    };
+    App.grid.setPeers(list.filter((p) => p.presence && p.presence.sel && visibleSel(p)).map((p) => ({ name: (p.name || '').split(' ')[0], color: p.color, sheetId: p.presence.sheetId, sel: p.presence.sel, editing: p.presence.editing })));
   }
   const roleLabel = (r) => ({ admin: 'administrador', editor: 'editor', viewer: 'leitor' }[r] || r);
   function renderChip() {
@@ -356,11 +365,12 @@
   App.on('sheet', renderChip);
 
   // ---------- Planilhas na nuvem ----------
+  const canCreate = () => !!(cloud.user && cloud.user.admin);
   async function openCloudDialog() {
     if (!(await ensureLogin('Entre com a sua conta para ver as planilhas na nuvem.'))) return;
     const m = App.ui.modal({
       title: 'Planilhas na nuvem', width: '760px', cls: 'modal-tall',
-      body: `<div class="cloud-actions"><button class="btn btn-primary" id="cl-new">${icon('plus', 16)} Nova planilha na nuvem</button><button class="btn" id="cl-upload">${icon('cloud', 16)} Enviar a planilha atual</button></div>
+      body: `${canCreate() ? `<div class="cloud-actions"><button class="btn btn-primary" id="cl-new">${icon('plus', 16)} Nova planilha na nuvem</button><button class="btn" id="cl-upload">${icon('cloud', 16)} Enviar a planilha atual</button></div>` : ''}
         <input class="input" id="cl-q" placeholder="Pesquisar">
         <div class="od-list" id="cl-list"><p class="sp-hint">Carregando…</p></div>`,
     });
@@ -371,7 +381,7 @@
       const q = d.querySelector('#cl-q').value.toLowerCase();
       const vis = items.filter((x) => (x.title || '').toLowerCase().includes(q));
       d.querySelector('#cl-list').innerHTML = vis.length ? vis.map((x) => `<div class="od-item${x.id === cloud.id ? ' cur' : ''}" data-id="${esc(x.id)}">${icon('sheetIcon', 26)}<div><b>${esc(x.title)}</b><small>${x.mine ? 'Sua planilha' : 'De ' + esc(x.owner || '')} · ${esc(roleLabel(x.role))} · modificada em ${fmt(x.updated)}</small></div>${x.mine ? `<button class="icon-btn od-del" title="Excluir planilha">${icon('close', 16)}</button>` : ''}</div>`).join('')
-        : '<p class="sp-hint">Nenhuma planilha na nuvem ainda. Crie uma nova ou envie a planilha atual.</p>';
+        : `<p class="sp-hint">${canCreate() ? 'Nenhuma planilha na nuvem ainda. Crie uma nova ou envie a planilha atual.' : 'Nenhuma planilha foi compartilhada com você ainda. Peça o link a um administrador.'}</p>`;
     };
     try { items = await api('GET', '/api/docs'); render(); }
     catch (e) { d.querySelector('#cl-list').innerHTML = `<p class="sp-hint">${esc(e.message)}</p>`; }
@@ -390,15 +400,16 @@
       m.close();
       openCloudDoc(x.id);
     });
-    d.querySelector('#cl-new').onclick = async () => {
+    if (d.querySelector('#cl-new')) d.querySelector('#cl-new').onclick = async () => {
       try { const r = await api('POST', '/api/docs', { title: 'Planilha sem título' }); m.close(); await openCloudDoc(r.id); }
       catch (e) { notify(e.message); }
     };
-    d.querySelector('#cl-upload').onclick = () => { m.close(); saveToCloud(); };
+    if (d.querySelector('#cl-upload')) d.querySelector('#cl-upload').onclick = () => { m.close(); saveToCloud(); };
   }
   async function saveToCloud(thenShare) {
     if (App.cloudMode) { notify('Esta planilha já está na nuvem.'); return; }
     if (!(await ensureLogin('Entre com a sua conta para salvar esta planilha na nuvem.'))) return;
+    if (!canCreate()) { notify('Somente administradores podem salvar planilhas na nuvem.'); return; }
     try {
       const data = JSON.parse(App.serialize());
       const r = await api('POST', '/api/docs', { title: doc.title, data: { title: doc.title, names: data.names || {}, sheets: data.sheets } });
@@ -414,6 +425,7 @@
   // ---------- Compartilhar ----------
   const oldShare = App.cmds.share ? App.cmds.share.run : null;
   function shareLocal() {
+    if (!canCreate()) { if (oldShare) oldShare(); return; }
     App.ui.modal({
       title: `Compartilhar "${doc.title}"`, width: '520px',
       body: `<div class="share-opts">
@@ -605,11 +617,10 @@
     }
     function renderSectors() {
       const pane = d.querySelector('[data-pane="sectors"]');
-      pane.innerHTML = `<p class="sp-hint">Crie setores (por exemplo, Comercial ou Financeiro) e defina o que cada um pode ver e editar em cada página e em cada coluna. Administradores sempre veem e editam tudo; leitores nunca editam.</p>
+      pane.innerHTML = `<p class="sp-hint">Crie setores (por exemplo, Comercial ou Financeiro) e defina o que cada um pode ver e editar em cada página e em cada coluna. Os setores só preenchem valores nas colunas liberadas; formatação, regras e estrutura da planilha ficam com os administradores. Leitores nunca editam.</p>
         ${acl.sectors.map((s, i) => `<div class="sector-card">
           <div class="sector-head"><input class="input" data-sname="${i}" value="${esc(s.name)}" placeholder="Nome do setor"><button class="icon-btn" data-srm="${i}" title="Excluir setor">${icon('close', 16)}</button></div>
-          <div class="sector-row"><label class="field"><span>Acesso padrão às páginas</span><select class="input" data-sdef="${i}">${opts(LEVELS, s.default)}</select></label>
-          <label class="check"><input type="checkbox" data-smanage="${i}"${s.manage ? ' checked' : ''}> Pode criar, excluir e renomear páginas</label></div>
+          <div class="sector-row"><label class="field"><span>Acesso padrão às páginas</span><select class="input" data-sdef="${i}">${opts(LEVELS, s.default)}</select></label></div>
           <table class="sector-matrix"><thead><tr><th>Página</th><th>Acesso</th><th>Colunas</th></tr></thead><tbody>
           ${st.sheets.map((sh) => { const n = ruleCount(peekAccess(sh.id), s.id); return `<tr><td>${esc(sh.name)}</td><td><select class="input" data-sheet="${i}:${esc(sh.id)}"><option value="">Padrão (${lvName(s.default)})</option>${opts(LEVELS, s.sheets[sh.id])}</select></td>
             <td><button class="btn btn-sm" data-scols="${i}:${esc(sh.id)}">${icon('lock', 14)} Colunas${n ? ` (${n})` : ''}</button></td></tr>`; }).join('')}
@@ -618,7 +629,6 @@
       pane.querySelector('#sec-add').onclick = () => { acl.sectors.push({ id: newId('s'), name: 'Novo setor', default: 'view', sheets: {}, manage: false }); renderSectors(); const ins = pane.querySelectorAll('[data-sname]'); ins[ins.length - 1].select(); };
       pane.querySelectorAll('[data-sname]').forEach((x) => (x.oninput = () => { acl.sectors[+x.dataset.sname].name = x.value; }));
       pane.querySelectorAll('[data-sdef]').forEach((x) => (x.onchange = () => { acl.sectors[+x.dataset.sdef].default = x.value; renderSectors(); }));
-      pane.querySelectorAll('[data-smanage]').forEach((x) => (x.onchange = () => { acl.sectors[+x.dataset.smanage].manage = x.checked; }));
       pane.querySelectorAll('[data-sheet]').forEach((x) => (x.onchange = () => {
         const [i, id] = x.dataset.sheet.split(':');
         if (x.value) acl.sectors[+i].sheets[id] = x.value; else delete acl.sectors[+i].sheets[id];
@@ -711,7 +721,7 @@
   // ---------- Permissões das colunas selecionadas (menu do cabeçalho) ----------
   async function columnAccessDialog() {
     if (!App.cloudMode) {
-      App.ui.modal({ title: 'Permissões por coluna', width: '460px', body: '<p class="modal-text">As permissões por coluna valem para planilhas na nuvem. Salve esta planilha na nuvem e convide as pessoas para escolher o que cada uma pode ver e editar.</p>', buttons: [{ label: 'Fechar' }, { label: 'Salvar na nuvem', primary: true, action: () => { saveToCloud(true); } }] });
+      App.ui.modal({ title: 'Permissões por coluna', width: '460px', body: '<p class="modal-text">As permissões por coluna valem para planilhas na nuvem. Salve esta planilha na nuvem e convide as pessoas para escolher o que cada uma pode ver e editar.</p>', buttons: [{ label: 'Fechar' }, ...(canCreate() ? [{ label: 'Salvar na nuvem', primary: true, action: () => { saveToCloud(true); } }] : [])] });
       return;
     }
     if (!cloud.perms.admin) return notify('Somente administradores podem definir permissões por coluna.');
@@ -780,7 +790,7 @@
   function histOutside(e) { if (histCard && !histCard.contains(e.target)) closeHistory(); }
   async function cellHistory() {
     if (!App.cloudMode) {
-      App.ui.modal({ title: 'Histórico de edições', width: '460px', body: '<p class="modal-text">O histórico de edições de cada célula (quem alterou, quando e o valor anterior) fica disponível nas planilhas salvas na nuvem.</p>', buttons: [{ label: 'Fechar' }, { label: 'Salvar na nuvem', primary: true, action: () => { saveToCloud(false); } }] });
+      App.ui.modal({ title: 'Histórico de edições', width: '460px', body: '<p class="modal-text">O histórico de edições de cada célula (quem alterou, quando e o valor anterior) fica disponível nas planilhas salvas na nuvem.</p>', buttons: [{ label: 'Fechar' }, ...(canCreate() ? [{ label: 'Salvar na nuvem', primary: true, action: () => { saveToCloud(false); } }] : [])] });
       return;
     }
     const sh = App.sheet(), r = App.sel.ar, c = App.sel.ac, a = App.E.addrToStr(r, c);
@@ -824,28 +834,68 @@
   App.on('sheet', closeHistory);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeHistory(); });
 
-  // itens extras nos menus de contexto
-  const COL_CMDS = new Set(['renameCol', 'insertColsLeft', 'insertColsRight', 'deleteCols', 'hideCols', 'unhideCols', 'resizeCols', 'autofitCols']);
-  const stripCols = (list) => {
-    for (let i = list.length - 1; i >= 0; i--) {
-      const x = list[i];
-      if (x && x.cmd && COL_CMDS.has(x.cmd)) list.splice(i, 1);
-      else if (x && Array.isArray(x.sub)) { stripCols(x.sub); if (!x.sub.length) list.splice(i, 1); }
+  // ---------- Quem não é administrador: só preenche valores ----------
+  // Os setores são executores: digitam as informações nas colunas liberadas. Todo o resto
+  // (formatação, regras, estrutura, filtros, congelar, tamanho de linhas e colunas) é dos administradores,
+  // e essas opções nem aparecem para eles.
+  const EXEC_OK = new Set(['undo', 'redo', 'cut', 'copy', 'paste', 'pasteValues', 'find', 'findReplace', 'clearValues',
+    'zoom', 'toggleFormulaBar', 'toggleMenus', 'fullscreen', 'toggleGridlines', 'toggleFormulas', 'switchSheet', 'nextSheet', 'prevSheet',
+    'selectAll', 'selectColumn', 'selectRow', 'insertDate', 'insertTime', 'insertDateTime', 'fillDown', 'fillRight',
+    'print', 'download', 'openCloud', 'share', 'login', 'cellHistory', 'shortcuts', 'about', 'functionList', 'columnStats']);
+  const COL_CMDS = new Set(['renameCol', 'insertColsLeft', 'insertColsRight', 'deleteCols', 'hideCols', 'unhideCols', 'resizeCols', 'autofitCols', 'addCols']);
+  const EXEC_HIDDEN_MENUS = new Set(['Inserir', 'Formatar', 'Dados', 'Extensões']);
+  App.adminOnly = () => !!(App.cloudMode && cloud.perms && !cloud.perms.admin);
+  App.valuesOnly = App.adminOnly;
+  function filterItems(list) {
+    const out = [];
+    for (const x of list || []) {
+      if (x === '-' || !x || x.header) { out.push(x); continue; }
+      const id = x.cmd || x.need;
+      if (id && !EXEC_OK.has(id)) continue;
+      if (x.sub) {
+        const fn = typeof x.sub === 'function' ? x.sub : null;
+        const sub = filterItems(fn ? fn() : x.sub);
+        if (!sub.some((y) => y && y !== '-' && !y.header)) continue;
+        out.push(Object.assign({}, x, { sub: fn ? () => filterItems(fn()) : sub }));
+        continue;
+      }
+      out.push(x);
     }
-    for (let i = list.length - 1; i > 0; i--) if (list[i] === '-' && list[i - 1] === '-') list.splice(i, 1);
-  };
-  // comandos de coluna bloqueados para quem não é administrador (também nos menus do topo)
-  function lockColumnCommands() {
-    for (const id of COL_CMDS) {
+    // remove separadores sobrando
+    const clean = [];
+    for (const x of out) { if (x === '-' && (!clean.length || clean[clean.length - 1] === '-')) continue; clean.push(x); }
+    while (clean.length && clean[clean.length - 1] === '-') clean.pop();
+    return clean;
+  }
+  App.menuFilter = (items) => (App.adminOnly() ? filterItems(items) : items);
+  // bloqueia os comandos (atalhos de teclado inclusive) que só administradores podem usar
+  function lockCommands() {
+    for (const id in App.cmds) {
       const c = App.cmds[id];
-      if (!c || c._locked) continue;
+      if (c._locked || EXEC_OK.has(id)) continue;
       const run = c.run;
-      c.run = (...args) => { if (App.colsLocked && App.colsLocked()) return notify(Perms.COLS_MSG); return run(...args); };
+      c.run = (...args) => {
+        if (App.adminOnly()) return notify(COL_CMDS.has(id) ? Perms.COLS_MSG : 'Somente administradores podem usar esta opção. Você pode preencher os valores das colunas liberadas.');
+        return run(...args);
+      };
       c._locked = true;
     }
   }
+  // esconde menus, botões e barras que a pessoa não pode usar
+  function refreshChrome() {
+    const ex = App.adminOnly();
+    document.body.classList.toggle('executor', ex);
+    const t = $('doc-title');
+    if (t) { t.readOnly = ex; t.tabIndex = ex ? -1 : 0; }
+    document.querySelectorAll('#menubar .mb').forEach((b) => {
+      let vis = true;
+      const menu = App.MENUS[+b.dataset.i];
+      if (ex && EXEC_HIDDEN_MENUS.has(menu.label)) vis = false;
+      else if (ex) { try { vis = filterItems(menu.items()).some((x) => x && x !== '-' && !x.header && !x.disabled); } catch (e) { vis = true; } }
+      b.hidden = !vis;
+    });
+  }
   App.on('contextItems', ({ hit, items }) => {
-    if (App.colsLocked && App.colsLocked()) stripCols(items);
     if (hit.area === 'cell' || hit.area === 'fill') {
       const at = items.findIndex((x) => x && x.label === 'Ver mais ações da célula');
       items.splice(at >= 0 ? at : items.length, 0, { label: 'Mostrar histórico de edições', icon: 'history', cmd: 'cellHistory' });
@@ -857,7 +907,7 @@
 
   // ---------- Proteger páginas e intervalos ----------
   function protectRanges() {
-    if (!App.cloudMode) { App.ui.modal({ title: 'Proteger intervalos', width: '460px', body: '<p class="modal-text">A proteção de intervalos vale para planilhas na nuvem, compartilhadas com setores. Salve esta planilha na nuvem para usar este recurso.</p>', buttons: [{ label: 'Fechar' }, { label: 'Salvar na nuvem', primary: true, action: () => { saveToCloud(true); } }] }); return; }
+    if (!App.cloudMode) { App.ui.modal({ title: 'Proteger intervalos', width: '460px', body: '<p class="modal-text">A proteção de intervalos vale para planilhas na nuvem, compartilhadas com setores. Salve esta planilha na nuvem para usar este recurso.</p>', buttons: [{ label: 'Fechar' }, ...(canCreate() ? [{ label: 'Salvar na nuvem', primary: true, action: () => { saveToCloud(true); } }] : [])] }); return; }
     if (!cloud.perms.admin) return notify('Somente administradores podem proteger intervalos.');
     const sh = App.sheet();
     api('GET', `/api/docs/${cloud.id}/share`).then((st) => {
@@ -895,7 +945,10 @@
   fileMenu.items = () => {
     const list = origFile();
     const at = list.findIndex((x) => x && x.cmd === 'importFile');
-    list.splice(at + 1, 0, { label: 'Planilhas na nuvem', icon: 'cloud', cmd: 'openCloud' }, { label: App.cloudMode ? 'Esta planilha está na nuvem' : 'Salvar na nuvem', icon: 'cloud', cmd: 'saveToCloud', disabled: !!App.cloudMode });
+    const extra = [{ label: 'Planilhas na nuvem', icon: 'cloud', cmd: 'openCloud' }];
+    // criar e salvar planilhas na nuvem: só administradores
+    if (canCreate()) extra.push({ label: App.cloudMode ? 'Esta planilha está na nuvem' : 'Salvar na nuvem', icon: 'cloud', cmd: 'saveToCloud', disabled: !!App.cloudMode });
+    list.splice(at + 1, 0, ...extra);
     return list;
   };
   const dataMenu = App.MENUS.find((x) => x.label === 'Dados');
@@ -916,7 +969,8 @@
   def('cellHistory', 'Mostrar histórico de edições', cellHistory);
 
   function init() {
-    lockColumnCommands();
+    lockCommands();
+    refreshChrome();
     $('btn-account').addEventListener('click', (e) => accountMenu(e.currentTarget));
     renderAccount();
     loadMe();
