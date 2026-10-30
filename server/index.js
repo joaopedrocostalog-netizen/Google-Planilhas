@@ -294,7 +294,7 @@ function sanitizeAcl(input, room) {
 const routes = [];
 const route = (method, pattern, fn) => routes.push({ method, re: new RegExp('^' + pattern.replace(/:(\w+)/g, '(?<$1>[^/]+)') + '$'), fn });
 
-route('GET', '/api/health', async () => ({ ok: true, store: store.kind, rooms: rooms.size }));
+route('GET', '/api/health', async () => ({ ok: true, store: store.kind, rooms: rooms.size, dss: !!(process.env.DSS_TOKEN || ((process.env.DSS_USUARIO || process.env.DSS_USERNAME) && (process.env.DSS_SENHA || process.env.DSS_PASSWORD))), dssMotoristas: drivers.items.length, dssErro: drivers.error || null }));
 route('POST', '/api/register', async (req) => {
   const b = await readBody(req, 100000);
   const email = String(b.email || '').trim().toLowerCase(), name = String(b.name || '').trim().slice(0, 80), pass = String(b.password || '');
