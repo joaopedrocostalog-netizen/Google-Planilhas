@@ -471,11 +471,14 @@
 
   // ---------- Filtros ----------
   // última linha filtrada (no filtro a partir da coluna, acompanha os dados preenchidos)
-  App.filterEnd = (sh) => { const f = sh.filter; return !f ? 0 : f.r1 === 0 ? Math.max(1, usedRange(sh).maxR) : f.r2; };
+  // Visualizações com filtro: pessoais (só para quem criou), não alteram a planilha dos outros
+  App.views = new Map();
+  App.activeFilter = (sh) => (sh && App.views.get(sh.id)) || (sh && sh.filter) || null;
+  App.filterEnd = (sh) => { const f = App.activeFilter(sh); return !f ? 0 : f.r1 === 0 || f.dyn ? Math.max(1, f.r1 + 1, usedRange(sh).maxR) : f.r2; };
   App.filterHidden = (sh) => {
     if (sh._fh) return sh._fh;
     const set = new Set();
-    const f = sh.filter;
+    const f = App.activeFilter(sh);
     if (f && f.crit) {
       const si = App.sheetIndex(sh);
       for (let r = f.r1 + 1, end = App.filterEnd(sh); r <= end; r++) {

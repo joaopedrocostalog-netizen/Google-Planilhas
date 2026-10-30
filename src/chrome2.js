@@ -304,8 +304,9 @@
   // ---------- Menu de filtro ----------
   function initFilterMenu() {
     App.on('filterMenu', ({ c, x, y }) => {
-      const sh = App.sheet(), si = doc.active, f = sh.filter;
+      const sh = App.sheet(), si = doc.active, f = App.activeFilter(sh);
       if (!f) return;
+      const isView = App.views.has(sh.id);
       const crit = (f.crit && f.crit[c]) || {};
       const counts = new Map();
       for (let r = f.r1 + 1, end = App.filterEnd(sh); r <= end; r++) {
@@ -326,7 +327,7 @@
       box.className = 'filter-pop';
       const condOpts = App.CONDITIONS.map(([k, label]) => `<option value="${k}"${crit.cond && crit.cond.type === k ? ' selected' : ''}>${esc(label)}</option>`).join('');
       box.innerHTML = `
-        <button class="fp-sort" data-sort="asc">Classificar de A a Z</button><button class="fp-sort" data-sort="desc">Classificar de Z a A</button>
+        ${isView || (App.adminOnly && App.adminOnly()) ? '' : '<button class="fp-sort" data-sort="asc">Classificar de A a Z</button><button class="fp-sort" data-sort="desc">Classificar de Z a A</button>'}
         <details class="fp-sec"${crit.cond ? ' open' : ''}><summary>Filtrar por condição</summary>
           <select class="input fp-cond"><option value="">Nenhuma</option>${condOpts}</select>
           <input class="input fp-a" placeholder="Valor ou fórmula" value="${esc((crit.cond && crit.cond.a) || '')}">
@@ -361,11 +362,13 @@
         box.querySelectorAll('.fp-values input').forEach((i) => { if (!i.checked) hid.push(values[+i.dataset.i]); });
         const cond = condSel.value ? { type: condSel.value, a: box.querySelector('.fp-a').value, b: box.querySelector('.fp-b').value } : null;
         App.ui.closePopup();
-        App.change('Filtrar', () => {
+        const apply = () => {
           f.crit = f.crit || {};
           if (!hid.length && !cond) delete f.crit[c];
           else f.crit[c] = { hidden: hid, cond };
-        });
+        };
+        // visualização pessoal: muda só a tela de quem está usando
+        if (isView) { apply(); App.setView(sh, f); } else App.change('Filtrar', apply);
       });
       const wr = $('grid-wrap').getBoundingClientRect();
       App.ui.popup({ x: wr.left + x - 260, y: wr.top + y + 2 }, box);

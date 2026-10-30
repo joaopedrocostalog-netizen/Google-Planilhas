@@ -315,8 +315,8 @@
       }
     }
     // ícones de filtro na linha de cabeçalho
-    const f = sh.filter;
-    if (f && f.r1 >= 1 && f.r1 >= r0 && f.r1 <= r1 && !(App.adminOnly && App.adminOnly())) {
+    const f = App.activeFilter(sh);
+    if (f && f.r1 >= 1 && f.r1 >= r0 && f.r1 <= r1 && (App.views.has(sh.id) || !(App.adminOnly && App.adminOnly()))) {
       for (let c = Math.max(f.c1, c0); c <= Math.min(f.c2, c1); c++) {
         if (!colW(c)) continue;
         const x = X(c + 1) - 18 * st.z, y = Y(f.r1) + (rowH(f.r1) - 14 * st.z) / 2, s = 14 * st.z;
@@ -644,8 +644,9 @@
       ctx.strokeRect(m.x + 1, m.y + 1, m.w - 2, m.h - 2); ctx.setLineDash([]);
     }
     // contorno do filtro
-    if (sh.filter) {
-      const f = box(sh.filter);
+    const af = App.activeFilter(sh);
+    if (af) {
+      const f = box(Object.assign({}, af, { r1: Math.max(1, af.r1), r2: Math.min(sh.rows, App.filterEnd(sh)) }));
       ctx.strokeStyle = C.sel; ctx.lineWidth = 1.5;
       ctx.strokeRect(f.x + 0.5, f.y + 0.5, f.w - 1, f.h - 1);
     }
@@ -660,7 +661,9 @@
     ctx.font = `${(11 * z).toFixed(1)}px Arial, sans-serif`;
     ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
     // cabeçalho de colunas
-    ctx.fillStyle = C.hdrBg; ctx.fillRect(hw, 0, W - hw, hh);
+    const viewOn = App.views.has(sh.id);
+    const hdrBg = viewOn ? '#3c4043' : C.hdrBg, hdrText = viewOn ? '#e8eaed' : C.hdrText;
+    ctx.fillStyle = hdrBg; ctx.fillRect(hw, 0, W - hw, hh);
     const drawCols = (from, to, sx, clipX, clipW) => {
       if (clipW <= 0) return;
       ctx.save(); ctx.beginPath(); ctx.rect(clipX, 0, clipW, hh); ctx.clip();
@@ -677,7 +680,7 @@
         }
         const inSel = c >= R.c1 && c <= R.c2;
         if (inSel) { ctx.fillStyle = fullCols ? C.hdrFullBg : C.hdrSelBg; ctx.fillRect(x, 0, w, hh); }
-        ctx.fillStyle = inSel ? (fullCols ? C.hdrFullText : C.hdrSelText) : C.hdrText;
+        ctx.fillStyle = inSel ? (fullCols ? C.hdrFullText : C.hdrSelText) : hdrText;
         ctx.font = `${inSel ? 'bold ' : ''}${(11 * z).toFixed(1)}px Arial, sans-serif`;
         const nm = sh.colNames && sh.colNames[c];
         if (nm) {
@@ -694,12 +697,12 @@
           ctx.fillRect(lx - 3.5 * z, ly, 7 * z, 5.5 * z);
           ctx.beginPath(); ctx.arc(lx, ly, 2.4 * z, Math.PI, 0); ctx.stroke();
         }
-        const hf = sh.filter;
+        const hf = App.activeFilter(sh);
         if (hf && hf.r1 === 0 && c >= hf.c1 && c <= hf.c2 && w > 24 * z) {
           // botão de filtro no cabeçalho da coluna
           const s = 14 * z, bx = x + w - 18 * z, by = (hh - s) / 2;
           const active = hf.crit && hf.crit[c] && ((hf.crit[c].hidden && hf.crit[c].hidden.length) || hf.crit[c].cond);
-          const showBtn = !(App.adminOnly && App.adminOnly());
+          const showBtn = (App.views.has(sh.id) || !(App.adminOnly && App.adminOnly()));
           if (showBtn || active) {
             ctx.fillStyle = active ? C.sel : '#ffffff'; ctx.strokeStyle = active ? C.sel : '#9a9a9a'; ctx.lineWidth = 1;
             roundRect(bx, by, s, s, 3 * z); ctx.fill(); ctx.stroke();
@@ -716,7 +719,7 @@
     drawCols(1, st.Fc, 0, hw, st.FW);
     ctx.fillStyle = C.hdrLine; ctx.fillRect(hw, hh - 1, W - hw, 1);
     // cabeçalho de linhas
-    ctx.fillStyle = C.hdrBg; ctx.fillRect(0, hh, hw, H - hh);
+    ctx.fillStyle = hdrBg; ctx.fillRect(0, hh, hw, H - hh);
     const drawRows = (from, to, sy, clipY, clipH) => {
       if (clipH <= 0) return;
       ctx.save(); ctx.beginPath(); ctx.rect(0, clipY, hw, clipH); ctx.clip();
@@ -731,7 +734,7 @@
         }
         const inSel = r >= R.r1 && r <= R.r2;
         if (inSel) { ctx.fillStyle = fullRows ? C.hdrFullBg : C.hdrSelBg; ctx.fillRect(0, y, hw, h); }
-        ctx.fillStyle = inSel ? (fullRows ? C.hdrFullText : C.hdrSelText) : C.hdrText;
+        ctx.fillStyle = inSel ? (fullRows ? C.hdrFullText : C.hdrSelText) : hdrText;
         ctx.font = `${inSel ? 'bold ' : ''}${(11 * z).toFixed(1)}px Arial, sans-serif`;
         ctx.fillText(String(r), hw / 2, y + h / 2 + 0.5);
         ctx.fillStyle = C.hdrLine; ctx.fillRect(0, Math.round(y + h) - 1, hw, 1);
@@ -742,7 +745,7 @@
     drawRows(1, st.Fr, 0, hh, st.FH);
     ctx.fillStyle = C.hdrLine; ctx.fillRect(hw - 1, hh, 1, H - hh);
     // canto
-    ctx.fillStyle = C.hdrBg; ctx.fillRect(0, 0, hw, hh);
+    ctx.fillStyle = hdrBg; ctx.fillRect(0, 0, hw, hh);
     ctx.fillStyle = C.hdrLine; ctx.fillRect(hw - 1, 0, 1, hh); ctx.fillRect(0, hh - 1, hw, 1);
     // barras de congelamento no canto (arrastáveis)
     ctx.fillStyle = '#b8b8b8';
@@ -774,8 +777,8 @@
     if (y < st.hdrH) {
       const c = colAtScreen(x);
       // filtro criado a partir da coluna: botão no próprio cabeçalho
-      const hf = sh.filter;
-      if (hf && hf.r1 === 0 && c >= hf.c1 && c <= hf.c2 && colW(c) && !locked && x > colX(c) + colW(c) - 22 * st.z && x < colX(c) + colW(c) - 4) return { area: 'filterHdr', c };
+      const hf = App.activeFilter(sh);
+      if (hf && hf.r1 === 0 && c >= hf.c1 && c <= hf.c2 && colW(c) && (App.views.has(sh.id) || !(App.adminOnly && App.adminOnly())) && x > colX(c) + colW(c) - 22 * st.z && x < colX(c) + colW(c) - 4) return { area: 'filterHdr', c };
       // planilha compartilhada: só administradores mexem na estrutura das colunas
       if (locked || (App.colsLocked && App.colsLocked())) return { area: 'colHdr', c };
       const right = colX(c) + colW(c);
@@ -865,8 +868,8 @@
           return;
         }
         // clique na seta do filtro
-        const f = sh.filter;
-        if (f && h.r === f.r1 && h.c >= f.c1 && h.c <= f.c2 && !(App.adminOnly && App.adminOnly())) {
+        const f = App.activeFilter(sh);
+        if (f && h.r === f.r1 && h.c >= f.c1 && h.c <= f.c2 && (App.views.has(sh.id) || !(App.adminOnly && App.adminOnly()))) {
           const right = colX(h.c) + colW(h.c);
           if (p.x > right - 22 * st.z) { select(h.r, h.c, false, true); App.emit('filterMenu', { c: h.c, x: right, y: rowY(h.r) + rowH(h.r) }); return; }
         }
