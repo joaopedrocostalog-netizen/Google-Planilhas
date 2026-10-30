@@ -154,6 +154,19 @@
   const isFullCols = (R, sh) => R.r1 === 1 && R.r2 >= sh.rows;
   def('insertRowsAbove', 'Inserir linhas acima', () => { const R = App.selRect(), n = R.r2 - R.r1 + 1; App.change('Inserir linhas', () => App.structural(si(), 'row', R.r1, n)); App.grid.selectRows(R.r1, R.r1 + n - 1); });
   def('insertRowsBelow', 'Inserir linhas abaixo', () => { const R = App.selRect(), n = R.r2 - R.r1 + 1; App.change('Inserir linhas', () => App.structural(si(), 'row', R.r2 + 1, n)); App.grid.selectRows(R.r2 + 1, R.r2 + n); });
+  def('renameCol', 'Renomear coluna', (col) => {
+    const sh = App.sheet(), c = typeof col === 'number' ? col : App.selRect().c1;
+    const cur = (sh.colNames && sh.colNames[c]) || '';
+    App.ui.prompt(`Renomear coluna ${E.numToCol(c)}`, 'Nome da coluna (deixe vazio para voltar à letra)', cur, (v) => {
+      const name = String(v || '').trim().slice(0, 60);
+      if (name === cur) return;
+      App.change('Renomear coluna', () => {
+        const names = Object.assign({}, sh.colNames || {});
+        if (name) names[c] = name; else delete names[c];
+        if (Object.keys(names).length) sh.colNames = names; else delete sh.colNames;
+      });
+    }, 'Renomear');
+  });
   def('insertColsLeft', 'Inserir colunas à esquerda', () => { const R = App.selRect(), n = R.c2 - R.c1 + 1; App.change('Inserir colunas', () => App.structural(si(), 'col', R.c1, n)); App.grid.selectCols(R.c1, R.c1 + n - 1); });
   def('insertColsRight', 'Inserir colunas à direita', () => { const R = App.selRect(), n = R.c2 - R.c1 + 1; App.change('Inserir colunas', () => App.structural(si(), 'col', R.c2 + 1, n)); App.grid.selectCols(R.c2 + 1, R.c2 + n); });
   def('deleteRows', 'Excluir linhas', () => {

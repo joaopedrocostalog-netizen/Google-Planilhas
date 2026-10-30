@@ -236,6 +236,7 @@
       let items;
       if (hit.area === 'colHdr' || hit.area === 'colEdge') {
         items = [...base,
+          { label: `Renomear coluna ${E.numToCol(R.c1)}`, cmd: 'renameCol', arg: R.c1 },
           { label: `Inserir ${colsTxt(nc)} à esquerda`, cmd: 'insertColsLeft' }, { label: `Inserir ${colsTxt(nc)} à direita`, cmd: 'insertColsRight' },
           { label: `Excluir ${cl}`, cmd: 'deleteCols' }, { label: `Limpar ${cl}`, cmd: 'clearValues' }, { label: `Ocultar ${cl}`, cmd: 'hideCols' },
           { label: `Redimensionar ${cl}`, cmd: 'resizeCols' }, { label: 'Ajustar ao conteúdo', cmd: 'autofitCols' }, '-',
