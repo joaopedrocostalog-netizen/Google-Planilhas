@@ -190,7 +190,8 @@
         <select class="vb-sel" id="vb-group">${opt(allCols.filter((c) => !groups.includes(c)), groups.length ? '+ Agrupar dentro…' : '+ Agrupar por…')}</select></span>
       <span class="vb-sort"><select class="vb-sel" id="vb-sort"><option value="">Classificar por status…</option>${allCols.map((c) => `<option value="${c}"${v.sort && v.sort.col === c ? ' selected' : ''}>Status: ${esc(colLabel(sh, c))}</option>`).join('')}</select>
         ${v.sort && v.sort.col ? '<button class="vb-btn" id="vb-order">Ordem dos status</button>' : ''}</span>
-      ${v.order && v.order.length ? '<button class="vb-btn" id="vb-cols">Restaurar ordem das colunas</button>' : '<span class="vb-note">Arraste o cabeçalho de uma coluna selecionada para mudar a ordem. Só você vê.</span>'}
+      <button class="vb-btn" id="vb-colorder" title="Segure o cabeçalho de uma coluna e arraste, ou escolha a ordem numa lista">${icon('columns', 16)} Ordem das colunas</button>
+      ${v.order && v.order.length ? '<button class="vb-btn" id="vb-cols">Restaurar ordem</button>' : '<span class="vb-note">ou segure o cabeçalho da coluna e arraste. Só você vê.</span>'}
       ${nFilters ? `<button class="vb-btn" id="vb-clear">Limpar filtros (${nFilters})</button>` : ''}
       <button class="vb-x" id="vb-close" title="Fechar visualização" aria-label="Fechar visualização">${icon('close', 18)}</button>`;
     bar.hidden = false;
@@ -198,6 +199,7 @@
     const q = (id) => bar.querySelector(id);
     if (q('#vb-clear')) q('#vb-clear').onclick = () => App.run('clearViewFilters');
     if (q('#vb-cols')) q('#vb-cols').onclick = () => { v.order = []; App.setView(sh, v); };
+    q('#vb-colorder').onclick = colOrderDialog;
     q('#vb-group').onchange = (e) => { const c = +e.target.value; if (c) create('group', c); };
     bar.querySelectorAll('[data-ungroup]').forEach((b) => (b.onclick = () => { v.groups = groups.filter((c) => c !== +b.dataset.ungroup); v.collapsed = []; App.setView(sh, v); }));
     q('#vb-sort').onchange = (e) => { const c = +e.target.value; v.sort = c ? { col: c, order: (v.sort && v.sort.col === c && v.sort.order) || [] } : null; App.setView(sh, v); };
@@ -227,6 +229,53 @@
       });
     };
     m.el.querySelector('#so-final').onclick = () => { items.sort((a, b) => isFinal(b) - isFinal(a)); draw(); };
+    draw();
+  }
+
+  // Ordem das colunas numa lista: segurar e arrastar, ou usar as setas (bom para planilhas com muitas colunas)
+  function colOrderDialog() {
+    const sh = App.sheet(), v = cur();
+    if (!v) return;
+    const fc = Math.min((sh.freeze && sh.freeze.cols) || 0, sh.cols);
+    const used = App.usedRange(sh), last = Math.max(1, used.maxC, ...Object.keys(sh.colNames || {}).map(Number));
+    const shown = App.vm ? App.vm.cols.slice(1) : Array.from({ length: sh.cols }, (_, i) => i + 1);
+    const ok = (c) => c > fc && c <= last && !(App.colBlocked && App.colBlocked(sh, c));
+    let items = shown.filter(ok);
+    const natural = () => Array.from({ length: last }, (_, i) => i + 1).filter(ok);
+    const m = App.ui.modal({
+      title: 'Ordem das colunas', width: '460px', cls: 'modal-tall', enterSubmits: false,
+      body: `<p class="sp-hint">Segure uma coluna e arraste para cima ou para baixo (ou use as setas). As de cima aparecem primeiro, da esquerda para a direita. Só você vê esta ordem.${fc ? ` As colunas congeladas (${E.numToCol(1)}${fc > 1 ? '–' + E.numToCol(fc) : ''}) ficam fixas.` : ''}</p>
+        <input class="input" id="co-find" placeholder="Procurar coluna…" autocomplete="off"><div class="mv-list co-list"></div>
+        <button class="btn btn-sm" id="co-reset">Ordem original</button>`,
+      buttons: [{ label: 'Cancelar' }, { label: 'Salvar', primary: true, action: () => {
+        const nat = natural();
+        v.order = items.join(',') === nat.join(',') ? [] : items.slice();
+        App.setView(sh, v);
+      } }],
+    });
+    const list = m.el.querySelector('.co-list'), find = m.el.querySelector('#co-find');
+    let from = null;
+    const draw = () => {
+      const f = find.value.trim().toLowerCase();
+      list.innerHTML = items.map((c, i) => {
+        const lbl = colLabel(sh, c);
+        if (f && !lbl.toLowerCase().includes(f)) return '';
+        return `<div class="mv-li" draggable="true" data-i="${i}"><span class="mv-grip">⠿</span><span class="co-n">${i + 1 + fc}</span><span class="co-lbl">${esc(lbl)}</span>
+          <button class="icon-btn" data-top="${i}" title="Levar para o início"${i === 0 ? ' disabled' : ''}>⤒</button><button class="icon-btn" data-up="${i}" title="Subir"${i === 0 ? ' disabled' : ''}>▲</button><button class="icon-btn" data-down="${i}" title="Descer"${i === items.length - 1 ? ' disabled' : ''}>▼</button></div>`;
+      }).join('');
+      const mv = (a, b) => { if (b < 0 || b >= items.length) return; const [x] = items.splice(a, 1); items.splice(b, 0, x); draw(); };
+      list.querySelectorAll('[data-up]').forEach((b) => (b.onclick = () => mv(+b.dataset.up, +b.dataset.up - 1)));
+      list.querySelectorAll('[data-down]').forEach((b) => (b.onclick = () => mv(+b.dataset.down, +b.dataset.down + 1)));
+      list.querySelectorAll('[data-top]').forEach((b) => (b.onclick = () => mv(+b.dataset.top, 0)));
+      list.querySelectorAll('.mv-li').forEach((el) => {
+        el.addEventListener('dragstart', (e) => { from = +el.dataset.i; el.classList.add('dragging'); try { e.dataTransfer.setData('text/plain', String(from)); e.dataTransfer.effectAllowed = 'move'; } catch (er) { /* ignora */ } });
+        el.addEventListener('dragend', () => { el.classList.remove('dragging'); list.querySelectorAll('.drop-on').forEach((x) => x.classList.remove('drop-on')); });
+        el.addEventListener('dragover', (e) => { e.preventDefault(); list.querySelectorAll('.drop-on').forEach((x) => x !== el && x.classList.remove('drop-on')); el.classList.add('drop-on'); });
+        el.addEventListener('drop', (e) => { e.preventDefault(); const to = +el.dataset.i; if (from === null || from === to) return; mv(from, to); from = null; });
+      });
+    };
+    find.oninput = draw;
+    m.el.querySelector('#co-reset').onclick = () => { items = natural(); draw(); };
     draw();
   }
 

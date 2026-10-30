@@ -247,16 +247,34 @@
     }
     drawGroupRows(sh);
     drawHeaders(sh);
-    if (st.drag && st.drag.kind === 'colMove' && st.drag.active && st.drag.to) {
-      const x = Math.round(colX(st.drag.to)) - 1;
-      ctx.fillStyle = C.sel; ctx.fillRect(x - 1, 0, 3, H);
-    }
     // linhas de congelamento
     ctx.fillStyle = C.freeze;
     if (st.Fr > 0) ctx.fillRect(0, hh + st.FH - 2, W, 4);
     if (st.Fc > 0) ctx.fillRect(hw + st.FW - 2, 0, 4, H);
+    if (st.drag && st.drag.kind === 'colMove' && st.drag.active) drawColMove(st.drag, H);
     positionAddRows(sh);
     App.emit('viewport');
+  }
+
+  // arrastar coluna na visualização: a coluna "fantasma" acompanha o mouse e uma linha mostra onde ela vai ficar
+  function drawColMove(d, H) {
+    let w = 0;
+    for (let c = d.d1; c <= d.d2; c++) w += colW(c);
+    w = Math.max(40, Math.min(w, 320));
+    const gx = Math.round(d.px - w / 2);
+    ctx.save();
+    ctx.globalAlpha = 0.22; ctx.fillStyle = d.frozen ? '#888' : C.sel; ctx.fillRect(gx, 0, w, H);
+    const g0 = st.gut || 0;
+    ctx.globalAlpha = 1; ctx.fillStyle = d.frozen ? '#666' : C.sel; ctx.fillRect(gx, g0, w, st.hdrH - g0);
+    ctx.fillStyle = '#fff'; ctx.font = `600 ${Math.round(12 * st.z)}px Inter, Arial, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const sh = App.sheet(), real = App.vm ? App.vm.cols[d.d1] : d.d1;
+    const nm = (sh.colNames && sh.colNames[real]) || E.numToCol(real);
+    ctx.fillText((d.d2 > d.d1 ? `${d.d2 - d.d1 + 1} colunas` : nm).slice(0, 28), gx + w / 2, g0 + (st.hdrH - g0) / 2 + 0.5);
+    if (!d.frozen && d.to) {
+      const x = Math.round(colX(d.to)) - 1;
+      ctx.fillStyle = C.sel; ctx.fillRect(x - 2, 0, 4, H);
+    }
+    ctx.restore();
   }
 
   function drawRegion(sh, si, rg) {
@@ -1009,9 +1027,12 @@
       case 'freezeColBar': st.drag = { kind: 'freezeCols' }; bindDrag(); return;
       case 'colHdr': {
         // visualização de filtro: segurar a coluna selecionada e arrastar muda a ordem (só para você)
-        const Rs = App.selRect();
-        if (!e.shiftKey && App.views.has(sh.id) && Rs.r1 === 1 && Rs.r2 >= st.nR && h.c >= Rs.c1 && h.c <= Rs.c2 && Rs.c1 > st.Fc) {
-          st.drag = { kind: 'colMove', d1: Rs.c1, d2: Rs.c2, x0: p.x, to: null, active: false }; bindDrag(); return;
+        // basta segurar o cabeçalho e arrastar; Shift+clique seleciona várias colunas para mover juntas
+        if (!e.shiftKey && !e.ctrlKey && !e.metaKey && App.views.has(sh.id)) {
+          let Rs = App.selRect();
+          if (!(Rs.r1 === 1 && Rs.r2 >= st.nR && h.c >= Rs.c1 && h.c <= Rs.c2)) { selectCols(h.c, h.c); Rs = App.selRect(); }
+          st.drag = { kind: 'colMove', d1: Rs.c1, d2: Rs.c2, x0: p.x, px: p.x, to: null, active: false, frozen: Rs.c1 <= st.Fc };
+          bindDrag(); return;
         }
       }
         if (e.shiftKey) { sel.ec = h.c; sel.er = st.nR; sel.ar = 1; App.emit('selection'); schedule(); }
@@ -1089,6 +1110,9 @@
       }
       case 'colMove': {
         if (Math.abs(p.x - d.x0) > 6) d.active = true;
+        d.px = p.x;
+        scroller.style.cursor = d.frozen ? 'not-allowed' : 'grabbing';
+        if (d.frozen) { schedule(); break; }
         const cc = colAtScreen(px);
         d.to = p.x > colX(cc) + colW(cc) / 2 ? cc + 1 : cc;
         if (d.to <= st.Fc) d.to = st.Fc + 1;
@@ -1107,6 +1131,11 @@
       }
     }
     // rolagem automática ao arrastar para fora
+    if (d.kind === 'colMove' && d.active && !d.frozen) {
+      const out = p.x > st.vw - 30 || (st.sx > 0 && p.x < st.hdrW + st.FW + 30);
+      if (out && !autoTimer) autoTimer = setInterval(autoScroll, 40);
+      if (!out && autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+    }
     if (['cells', 'cols', 'rows', 'point', 'fill'].includes(d.kind)) {
       // só rola quando o mouse sai da área da grade (antes, passar pelas linhas/colunas congeladas fazia a planilha andar sozinha)
       const out = p.x > st.vw - 8 || p.y > st.vh - 8 || (p.x < st.hdrW + 6 && d.kind !== 'rows') || (p.y < st.hdrH + 6 && d.kind !== 'cols');
@@ -1117,6 +1146,12 @@
   function autoScroll() {
     if (!st.drag || !lastMouse) { clearInterval(autoTimer); autoTimer = null; return; }
     const p = pos(lastMouse);
+    if (st.drag.kind === 'colMove') {
+      if (p.x > st.vw - 30) scroller.scrollLeft += 30;
+      else if (p.x < st.hdrW + st.FW + 30 && st.sx > 0) scroller.scrollLeft -= 30;
+      onMove(lastMouse);
+      return;
+    }
     if (p.x > st.vw - 8) scroller.scrollLeft += 30;
     if (p.y > st.vh - 8) scroller.scrollTop += 30;
     if (p.x < st.hdrW + 6 && st.sx > 0) scroller.scrollLeft -= 30;
@@ -1131,6 +1166,8 @@
     if (!d) return;
     if (d.kind === 'colMove') {
       schedule();
+      scroller.style.cursor = '';
+      if (d.active && d.frozen) { App.emit('notify', 'Colunas congeladas ficam fixas. Para mudar a ordem delas, descongele em Ver › Congelar.'); return; }
       if (!d.active || d.to === null) return;
       const res = App.moveViewCols(d.d1, d.d2, d.to);
       if (res) setTimeout(() => selectCols(res.from, res.to), 0);
@@ -1240,6 +1277,7 @@
     const p = pos(e);
     const h = hit(p.x, p.y);
     scroller.style.cursor = h.area === 'cell' && GROUP(h.r) ? 'pointer' : h.area === 'colEdge' ? 'col-resize' : h.area === 'rowEdge' ? 'row-resize' : h.area === 'fill' ? 'crosshair'
+      : h.area === 'colHdr' && App.views.has(App.sheet().id) ? 'grab'
       : h.area === 'colHdr' || h.area === 'filterHdr' || h.area === 'colGroup' || h.area === 'rowHdr' || h.area === 'unhideCols' || h.area === 'unhideRows' || h.area === 'corner' ? 'pointer'
         : h.area === 'freezeRowBar' ? 'row-resize' : h.area === 'freezeColBar' ? 'col-resize' : 'default';
     const key = h.area === 'cell' ? h.r + ':' + h.c : null;
