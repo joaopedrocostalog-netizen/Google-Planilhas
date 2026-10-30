@@ -232,6 +232,14 @@
       const rowsTxt = (n) => `${n} ${n === 1 ? 'linha' : 'linhas'}`, colsTxt = (n) => `${n} ${n === 1 ? 'coluna' : 'colunas'}`;
       const rl = nr === 1 ? `linha ${R.r1}` : `linhas ${R.r1} - ${R.r2}`;
       const cl = nc === 1 ? `coluna ${E.numToCol(R.c1)}` : `colunas ${E.numToCol(R.c1)} - ${E.numToCol(R.c2)}`;
+      // container crítico (coluna T): marcar ou desmarcar as linhas selecionadas
+      const critItem = () => {
+        const col = sh.critCol || 20;
+        let all = true;
+        for (let r = R.r1; r <= Math.min(R.r2, R.r1 + 500); r++) { const p = App.realCell ? App.realCell(r, 1) : { r }; if (!p) continue; const x = sh.cells[E.addrToStr(p.r, col)]; if (!(x && x.crit)) { all = false; break; } }
+        return all ? { label: `Remover alerta de crítico (${nr === 1 ? 'linha ' + R.r1 : nr + ' linhas'})`, cmd: 'markCritical', arg: false }
+          : { label: `Marcar container como crítico (${nr === 1 ? 'linha ' + R.r1 : nr + ' linhas'})`, icon: 'star', cmd: 'markCritical', arg: true };
+      };
       const base = [{ cmd: 'cut' }, { cmd: 'copy' }, { cmd: 'paste' },
         { label: 'Colar especial', sub: [{ label: 'Somente valores', cmd: 'pasteValues' }, { label: 'Somente a formatação', cmd: 'pasteFormat' }, { label: 'Somente a fórmula', cmd: 'pasteFormula' }, { label: 'Transposto', cmd: 'pasteTranspose' }] }, '-'];
       let items;
@@ -249,6 +257,7 @@
           { label: 'Estatísticas da coluna', cmd: 'columnStats' }, { label: 'Validação de dados', cmd: 'dataValidation' }, { label: 'Formatação condicional', cmd: 'condFormat' }];
       } else if (hit.area === 'rowHdr' || hit.area === 'rowEdge') {
         items = [...base,
+          critItem(),
           { label: `Inserir ${rowsTxt(nr)} acima`, cmd: 'insertRowsAbove' }, { label: `Inserir ${rowsTxt(nr)} abaixo`, cmd: 'insertRowsBelow' },
           { label: `Excluir ${rl}`, cmd: 'deleteRows' }, { label: `Limpar ${rl}`, cmd: 'clearValues' }, { label: `Ocultar ${rl}`, cmd: 'hideRows' },
           { label: `Redimensionar ${rl}`, cmd: 'resizeRows' }, '-',
@@ -256,6 +265,7 @@
           { label: 'Formatação condicional', cmd: 'condFormat' }, { label: 'Validação de dados', cmd: 'dataValidation' }];
       } else if (hit.area === 'cell' || hit.area === 'fill') {
         items = [...base,
+          critItem(),
           { label: `Inserir ${rowsTxt(nr)} acima`, cmd: 'insertRowsAbove' }, { label: `Inserir ${colsTxt(nc)} à esquerda`, cmd: 'insertColsLeft' },
           { label: 'Inserir células', sub: [{ label: `Inserir ${rowsTxt(nr)} abaixo`, cmd: 'insertRowsBelow' }, { label: `Inserir ${colsTxt(nc)} à direita`, cmd: 'insertColsRight' }] },
           { label: `Excluir ${rl}`, cmd: 'deleteRows' }, { label: `Excluir ${cl}`, cmd: 'deleteCols' }, '-',

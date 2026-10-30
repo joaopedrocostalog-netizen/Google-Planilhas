@@ -273,7 +273,7 @@
         { label: `Até a coluna atual (${E.numToCol(sel.ac)})`, cmd: 'freezeCols', arg: 'current', check: () => sheetFrozen().cols > 2 && sheetFrozen().cols === sel.ac }, '-',
         { label: 'Personalizado…', cmd: 'freezeCustom' },
       ] }, '-',
-      { label: 'Minha visualização', icon: 'filterViews', cmd: 'myView' },
+      { label: 'Visualização com filtro', icon: 'filterViews', cmd: 'createFilterView' },
       { label: 'Zoom', sub: () => [50, 75, 90, 100, 125, 150, 200].map((z) => ({ label: z + '%', cmd: 'zoom', arg: z, check: () => doc.zoom === z })) },
       { label: 'Ocultar menus', cmd: 'toggleMenus' },
       { label: 'Tela cheia', cmd: 'fullscreen' },
@@ -313,7 +313,7 @@
       { label: 'Classificar intervalo', sub: () => [{ label: `Classificar intervalo por coluna ${E.numToCol(sel.ac)} (A a Z)`, cmd: 'sortRange', arg: false }, { label: `Classificar intervalo por coluna ${E.numToCol(sel.ac)} (Z a A)`, cmd: 'sortRange', arg: true }, { label: 'Opções avançadas de classificação de intervalo', cmd: 'sortAdvanced' }] }, '-',
       { label: () => (App.sheet().filter ? 'Remover filtro' : 'Criar um filtro'), icon: 'filter', cmd: 'toggleFilter' },
       { label: 'Visualizações de filtro', icon: 'filterViews', sub: () => App.viewMenuItems() },
-      { label: 'Mostrar só os últimos dias…', cmd: 'recentRows' }, '-',
+      { label: 'Ocultar linhas (com +)…', cmd: 'recentRows' }, '-',
       { label: 'Validação de dados', cmd: 'dataValidation' },
       { label: 'Estatísticas da coluna', cmd: 'columnStats' },
       { label: 'Intervalos nomeados', cmd: 'namedRanges' }, '-',
@@ -511,7 +511,7 @@
     const sh = App.sheet();
     const named = Object.keys(doc.names).find((n) => { const p = App.parseRange(doc.names[n]); return p && p.si === doc.active && p.R.r1 === R.r1 && p.R.r2 === R.r2 && p.R.c1 === R.c1 && p.R.c2 === R.c2; });
     if (named) nb.value = named;
-    else if (App.selIsCell()) nb.value = E.addrToStr(sel.ar, sel.ac);
+    else if (App.selIsCell()) { const p = App.realCell ? App.realCell(sel.ar, sel.ac) : null; nb.value = p ? E.addrToStr(p.r, p.c) : App.vm ? '' : E.addrToStr(sel.ar, sel.ac); }
     else if (R.r1 === 1 && R.r2 >= sh.rows && R.c1 === 1 && R.c2 >= sh.cols) nb.value = 'Tudo';
     else if (R.r1 === 1 && R.r2 >= sh.rows) nb.value = E.numToCol(R.c1) + ':' + E.numToCol(R.c2);
     else if (R.c1 === 1 && R.c2 >= sh.cols) nb.value = R.r1 + ':' + R.r2;

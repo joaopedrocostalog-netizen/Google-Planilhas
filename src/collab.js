@@ -42,14 +42,54 @@
     cloud.token = t; cloud.user = user;
     try { if (t) localStorage.setItem(TOKEN_KEY, t); else localStorage.removeItem(TOKEN_KEY); } catch (e) { /* ignora */ }
     renderAccount();
+    if (t && user) setTimeout(() => { if (App.checkGate) App.checkGate(); }, 0);
   }
   async function loadMe() {
     if (!cloud.token) { renderAccount(); return null; }
-    try { cloud.user = await api('GET', '/api/me'); }
-    catch (e) { if (e.status === 401) setToken(null, null); }
+    try { cloud.user = await api('GET', '/api/me'); cloud.offline = false; }
+    catch (e) { if (e.status === 401) setToken(null, null); else cloud.offline = true; }
     renderAccount();
     return cloud.user;
   }
+
+  // ---------- Acesso: login obrigatório; quem não é administrador só entra nas planilhas liberadas ----------
+  let gateEl = null, gateTimer = null;
+  function gate(kind, docs) {
+    if (!gateEl) { gateEl = document.createElement('div'); gateEl.className = 'gate'; document.body.appendChild(gateEl); }
+    clearTimeout(gateTimer);
+    if (!kind) { gateEl.hidden = true; document.body.classList.remove('gated'); return; }
+    gateEl.hidden = false;
+    document.body.classList.add('gated');
+    const logo = (document.querySelector('.app-logo') || {}).innerHTML || '';
+    const fmt = (t) => new Date(t).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+    let html;
+    if (kind === 'login') html = `<h1>Planilhas</h1><p>Entre com a sua conta para acessar as planilhas da empresa.</p><button class="btn btn-primary" data-g="login">Entrar ou criar conta</button>`;
+    else if (kind === 'connecting') html = `<h1>Planilhas</h1><p>Conectando ao servidor… Na primeira vez do dia ele pode levar até 1 minuto para acordar.</p>`;
+    else if (docs && docs.length) html = `<h1>Olá, ${esc(cloud.user.name)}</h1><p>Escolha a planilha:</p><div class="gate-list">${docs.map((d) => `<button class="od-item" data-open="${esc(d.id)}">${icon('sheetIcon', 24)}<div><b>${esc(d.title)}</b><small>${esc(d.owner ? 'De ' + d.owner : '')} · modificada em ${fmt(d.updated)}</small></div></button>`).join('')}</div><button class="btn" data-g="logout">Sair</button>`;
+    else html = `<h1>Olá, ${esc(cloud.user.name)}</h1><p>Sua conta foi criada. <b>Aguarde um administrador liberar o seu acesso</b> a uma planilha.</p><p class="sp-hint">Conta: ${esc(cloud.user.email)}</p><div class="gate-actions"><button class="btn btn-primary" data-g="check">Verificar novamente</button><button class="btn" data-g="logout">Sair</button></div>`;
+    gateEl.innerHTML = `<div class="gate-card"><div class="gate-logo">${logo}</div>${html}</div>`;
+    gateEl.querySelectorAll('[data-g]').forEach((b) => (b.onclick = () => {
+      if (b.dataset.g === 'login') loginDialog().then(() => checkGate());
+      if (b.dataset.g === 'check') checkGate();
+      if (b.dataset.g === 'logout') logout();
+    }));
+    gateEl.querySelectorAll('[data-open]').forEach((b) => (b.onclick = () => { gate(null); openCloudDoc(b.dataset.open); }));
+    if (kind === 'connecting') gateTimer = setTimeout(checkGate, 5000);
+    if (kind === 'wait' && !(docs && docs.length)) gateTimer = setTimeout(checkGate, 30000);
+  }
+  async function checkGate() {
+    if (!cloud.user) {
+      if (cloud.token) await loadMe();
+      if (!cloud.user) return gate(cloud.token && cloud.offline ? 'connecting' : 'login');
+    }
+    if (cloud.user.admin || App.cloudMode || cloud.id) return gate(null);
+    let docs = [];
+    try { docs = await api('GET', '/api/docs'); } catch (e) { return gate('connecting'); }
+    if (App.cloudMode || cloud.id) return gate(null);
+    if (docs.length === 1 && !cloud.autoOpened) { cloud.autoOpened = true; gate(null); openCloudDoc(docs[0].id); return; }
+    gate('wait', docs);
+  }
+  App.checkGate = checkGate;
   function loginDialog(reason) {
     return new Promise((resolve) => {
       let mode = 'login', done = false;
@@ -150,6 +190,7 @@
     if (App.cloudMode) { leaveCloud(); App.newDocument(); }
     setToken(null, null);
     notify('Você saiu da sua conta.');
+    gate('login');
   }
 
   // ---------- Preferências salvas na conta (cores personalizadas, visualizações) ----------
@@ -167,6 +208,58 @@
     return api('PUT', '/api/me/prefs', patch).catch(() => {});
   };
   App.userPrefs = () => (cloud.user && cloud.user.prefs) || {};
+
+  // ---------- DSS: motoristas (sugestões ao digitar e CPF/CNPJ automático) ----------
+  const drv = { list: null, at: 0, loading: false, warned: false };
+  App.lookupList = (lk, onReady) => {
+    if (drv.list && Date.now() - drv.at < 10 * 60e3) return drv.list;
+    if (!drv.loading && cloud.token) {
+      drv.loading = true;
+      api('GET', '/api/dss/motoristas').then((r) => {
+        drv.list = r.motoristas || []; drv.at = Date.now(); drv.loading = false;
+        if (onReady) onReady();
+      }).catch((e) => {
+        drv.loading = false; drv.list = drv.list || []; drv.at = Date.now() - 9 * 60e3; // tenta de novo em 1 minuto
+        if (!drv.warned) { drv.warned = true; notify('Motoristas do DSS indisponíveis: ' + e.message); }
+      });
+    }
+    return drv.list;
+  };
+  App.lookupMatch = (sh, r, c, text, isReal) => {
+    const lk = sh && sh.lookup;
+    if (!lk || !drv.list) return null;
+    const real = isReal ? { r, c } : App.realCell ? App.realCell(r, c) : { r, c };
+    if (real.c !== lk.col) return null;
+    const t = String(text).trim().toUpperCase();
+    return drv.list.find((d) => d.nome.toUpperCase() === t) || null;
+  };
+  function dssLookupDialog() {
+    const sh = App.sheet();
+    const cur = sh.lookup || { col: 25, cpfCol: 64 };
+    const colOpts = (sel) => { let o = ''; for (let c = 1; c <= Math.max(sh.cols, 64); c++) { const n = sh.colNames && sh.colNames[c]; o += `<option value="${c}"${c === sel ? ' selected' : ''}>${Perms.colName(c)}${n ? ' · ' + esc(n) : ''}</option>`; } return o; };
+    const m = App.ui.modal({
+      title: 'Motoristas do DSS', width: '480px',
+      body: `<p class="sp-hint">Ao digitar na coluna do motorista aparecem os nomes cadastrados no DSS. Escolhendo um nome, o CPF/CNPJ é preenchido automaticamente.</p>
+        <div class="field-row"><label class="field"><span>Coluna do nome do motorista</span><select class="input" id="dl-col">${colOpts(cur.col)}</select></label>
+        <label class="field"><span>Coluna do CPF/CNPJ</span><select class="input" id="dl-cpf">${colOpts(cur.cpfCol)}</select></label></div>
+        <p class="sp-hint" id="dl-status">Verificando a conexão com o DSS…</p>`,
+      buttons: [
+        ...(sh.lookup ? [{ label: 'Desativar', action: () => { App.change('Motoristas do DSS', () => { delete sh.lookup; }); } }] : []),
+        { label: 'Cancelar' },
+        { label: 'Salvar', primary: true, action: (d) => {
+          const col = +d.querySelector('#dl-col').value, cpfCol = +d.querySelector('#dl-cpf').value;
+          if (col === cpfCol) { notify('Escolha colunas diferentes para o nome e o CPF/CNPJ.'); return false; }
+          App.change('Motoristas do DSS', () => { sh.lookup = { source: 'dss_motoristas', col, cpfCol }; });
+          notify('Motoristas do DSS ativados nesta página.');
+        } },
+      ],
+    });
+    api('GET', '/api/dss/motoristas?atualizar=1').then((r) => {
+      drv.list = r.motoristas || []; drv.at = Date.now();
+      const el = m.el.querySelector('#dl-status');
+      if (el) el.textContent = `Conectado ao DSS: ${drv.list.length} motoristas disponíveis.` + (r.aviso ? ' Aviso: ' + r.aviso : '');
+    }).catch((e) => { const el = m.el.querySelector('#dl-status'); if (el) { el.textContent = e.message; el.classList.add('auth-err'); } });
+  }
 
   // ---------- Conexão em tempo real ----------
   function send(obj) { if (cloud.ws && cloud.ws.readyState === 1) cloud.ws.send(JSON.stringify(obj)); }
@@ -217,6 +310,7 @@
     App.cloudMode = false; App.validatePatch = null; App.editGuard = null; App.colBlocked = null; App.colReadonly = null; App.colsLocked = null;
     closeHistory();
     refreshChrome();
+    setTimeout(checkGate, 0);
     renderChip();
   }
   function handle(m) {
@@ -261,12 +355,25 @@
       send({ type: 'patch', id, patch: p });
     }
     cloud.peers = new Map((m.peers || []).map((p) => [p.cid, p]));
+    cloud.realPerms = m.perms; cloud.simulating = null; renderSimBar();
+    applyPermHooks();
+    App.emit('sheet');
+    App.emit('change', { remote: true });
+    App.emit('title');
+    setStatus(cloud.pending.size ? 'saving' : 'online');
+    renderPeers(); renderChip(); sendPresence(); refreshChrome(); gate(null);
+    if (first) notify(`Você entrou como ${m.me.name}${m.perms.sectorName ? ' · setor ' + m.perms.sectorName : ''} (${roleLabel(m.perms.role)}).`);
+  }
+  // Ganchos de permissão usados pela grade, pelo editor e pela validação das alterações
+  function applyPermHooks() {
     App.validatePatch = (p, inv) => { const err = Perms.validate(p, cloud.perms, doc, inv); if (err) cloud.remask = true; return err; };
     // colunas ocultas por permissão somem da grade; as somente leitura ganham um cadeado no cabeçalho
     App.colBlocked = cloud.perms.admin ? null : (sh, c) => Perms.colLevel(cloud.perms, sh.id, c) === 'none';
     App.colReadonly = cloud.perms.admin ? null : (sh, c) => Perms.hasColRules(cloud.perms, sh.id) && Perms.colLevel(cloud.perms, sh.id, c) === 'view';
     App.colsLocked = () => !!(App.cloudMode && cloud.perms && !cloud.perms.admin);
-    App.editGuard = (sh, r, c) => {
+    // r, c: posição na tela (com a visualização de filtro, pode ser diferente da posição real); isReal: já é a real
+    App.editGuard = (sh, r, c, isReal) => {
+      if (!isReal && App.realCell) { const p = App.realCell(r, c); if (!p) return 'Esta linha é o título de um grupo.'; r = p.r; c = p.c; }
       const lv = Perms.colLevel(cloud.perms, sh.id, c);
       if (lv !== 'edit') {
         if (lv === 'none') return 'Você não tem acesso a esta coluna.';
@@ -275,13 +382,50 @@
       const pr = Perms.blockingProtection(cloud.perms, sh, App.E.addrToStr(r, c));
       return pr ? `Esta célula está protegida${pr.desc ? ' (' + pr.desc + ')' : ''}. Peça acesso a um administrador.` : null;
     };
-    App.emit('sheet');
-    App.emit('change', { remote: true });
-    App.emit('title');
-    setStatus(cloud.pending.size ? 'saving' : 'online');
-    renderPeers(); renderChip(); sendPresence(); refreshChrome();
-    if (first) notify(`Você entrou como ${m.me.name}${m.perms.sectorName ? ' · setor ' + m.perms.sectorName : ''} (${roleLabel(m.perms.role)}).`);
   }
+
+  // ---------- Ver como (administrador): simula a tela de um setor, sem mudar permissões ----------
+  async function viewAs(sectorId) {
+    if (!cloud.realPerms || !cloud.realPerms.admin) return;
+    if (!sectorId) {
+      cloud.perms = cloud.realPerms; cloud.simulating = null;
+    } else {
+      let st;
+      try { st = await api('GET', `/api/docs/${cloud.id}/share`); } catch (e) { return notify(e.message); }
+      const sec = st.acl.sectors.find((s) => s.id === sectorId);
+      if (!sec) return notify('Setor não encontrado.');
+      const acl = Object.assign({}, st.acl, { members: [{ email: '__simulacao@planilhas', role: 'editor', sector: sectorId, rid: '__sim' }] });
+      cloud.perms = Perms.compute({ ownerId: '__ninguem', acl, data: { sheets: doc.sheets } }, { id: '__sim', email: '__simulacao@planilhas' });
+      cloud.simulating = { id: sectorId, name: sec.name };
+    }
+    applyPermHooks();
+    App.invalidate();
+    App.emit('sheet'); App.emit('change', { view: true });
+    renderChip(); refreshChrome(); renderSimBar();
+    notify(cloud.simulating ? `Vendo como o setor ${cloud.simulating.name}. Nada muda para as outras pessoas.` : 'De volta ao modo administrador.');
+  }
+  function renderSimBar() {
+    let bar = $('sim-bar');
+    if (!cloud.simulating) { if (bar) bar.hidden = true; return; }
+    if (!bar) {
+      bar = document.createElement('div'); bar.id = 'sim-bar'; bar.className = 'sim-bar';
+      const vb = $('view-bar'); vb.parentNode.insertBefore(bar, vb);
+    }
+    bar.hidden = false;
+    bar.innerHTML = `${icon('lock', 16)} <span>Você está vendo a planilha como o setor <b>${esc(cloud.simulating.name)}</b> (só na sua tela).</span><button class="btn btn-sm" id="sim-exit">Voltar ao modo administrador</button>`;
+    bar.querySelector('#sim-exit').onclick = () => viewAs(null);
+  }
+  async function viewAsMenu(anchor) {
+    if (!cloud.realPerms || !cloud.realPerms.admin) return;
+    let st;
+    try { st = await api('GET', `/api/docs/${cloud.id}/share`); } catch (e) { return notify(e.message); }
+    App.ui.menuPopup(anchor, [
+      { header: 'Ver a planilha como…' },
+      { label: 'Administrador (tudo)', check: !cloud.simulating, action: () => viewAs(null) },
+      ...(st.acl.sectors.length ? st.acl.sectors.map((s) => ({ label: 'Setor ' + s.name, check: cloud.simulating && cloud.simulating.id === s.id, action: () => viewAs(s.id) })) : [{ label: 'Crie setores em Compartilhar para simular', disabled: true }]),
+    ], { right: true });
+  }
+
   function onError(m) {
     cloud.closing = true;
     if (m.code === 'auth') {
@@ -331,7 +475,9 @@
     if (!cloud.connected) return;
     clearTimeout(presTimer);
     presTimer = setTimeout(() => {
-      const R = App.selRect();
+      let R = App.selRect();
+      // na visualização reordenada, envia a célula real (os outros veem a planilha na ordem normal)
+      if (App.vm) { const p = App.realCell(App.sel.ar, App.sel.ac); if (!p) return; R = { r1: p.r, c1: p.c, r2: p.r, c2: p.c }; }
       send({ type: 'presence', sheetId: App.sheet().id, sel: { r1: R.r1, c1: R.c1, r2: Math.min(R.r2, R.r1 + 5000), c2: R.c2 }, editing: App.editing() });
     }, 120);
   }
@@ -358,7 +504,12 @@
       for (let c = S.c1; c <= Math.min(S.c2, S.c1 + 60); c++) if (!App.colBlocked(sh, c)) return true;
       return false;
     };
-    App.grid.setPeers(list.filter((p) => p.presence && p.presence.sel && visibleSel(p)).map((p) => ({ name: (p.name || '').split(' ')[0], color: p.color, sheetId: p.presence.sheetId, sel: p.presence.sel, editing: p.presence.editing })));
+    const toScreen = (p) => {
+      if (!App.vm || !App.dispCell) return p;
+      const S = p.presence.sel, a = App.dispCell(S.r1, S.c1);
+      return a ? Object.assign({}, p, { presence: Object.assign({}, p.presence, { sel: { r1: a.r, c1: a.c, r2: a.r, c2: a.c } }) }) : null;
+    };
+    App.grid.setPeers(list.filter((p) => p.presence && p.presence.sel && visibleSel(p)).map(toScreen).filter(Boolean).map((p) => ({ name: (p.name || '').split(' ')[0], color: p.color, sheetId: p.presence.sheetId, sel: p.presence.sel, editing: p.presence.editing })));
   }
   const roleLabel = (r) => ({ admin: 'administrador', editor: 'editor', viewer: 'leitor' }[r] || r);
   function renderChip() {
@@ -370,7 +521,9 @@
     chip.hidden = false;
     chip.className = 'cloud-chip' + (best !== 'edit' ? ' readonly' : '');
     chip.textContent = best !== 'edit' ? 'Somente visualização' : partial || page !== 'edit' ? 'Acesso por coluna' : P.sectorName ? 'Setor ' + P.sectorName : roleLabel(P.role)[0].toUpperCase() + roleLabel(P.role).slice(1);
-    let title = P.admin ? 'Você é administrador desta planilha.' : `Seu acesso: ${roleLabel(P.role)}${P.sectorName ? ', setor ' + P.sectorName : ''}.`;
+    if (cloud.realPerms && cloud.realPerms.admin) chip.textContent = cloud.simulating ? `Vendo como: ${cloud.simulating.name} ▾` : 'Administrador ▾';
+    let title = P.admin ? 'Você é administrador desta planilha. Clique para ver a planilha como um setor.' : `Seu acesso: ${roleLabel(P.role)}${P.sectorName ? ', setor ' + P.sectorName : ''}.`;
+    if (cloud.simulating) title = 'Simulação: clique para trocar o setor ou voltar ao modo administrador.';
     if (partial) {
       const m = P.cols[id] || {};
       const by = (l) => Object.keys(m).filter((c) => m[c] === l).map((c) => Perms.colName(+c)).join(', ');
@@ -536,6 +689,7 @@
     catch (e) { notify(e.message); return; }
     const acl = JSON.parse(JSON.stringify(st.acl));
     acl.members.forEach((mb) => { if (!mb.rid) mb.rid = newId('m'); });
+    api('GET', '/api/users/pending').then((list) => { st.pending = list; if (d.isConnected) renderPeople(); }).catch(() => {});
     // rascunho das regras por coluna, por página
     const draft = {};
     const sheetById = (id) => doc.sheets.find((s) => s.id === id);
@@ -607,6 +761,7 @@
       const pane = d.querySelector('[data-pane="people"]');
       pane.innerHTML = `<div class="share-add"><input class="input" id="sh-email" type="email" placeholder="E-mail da pessoa"><select class="input" id="sh-role">${opts(ROLES, 'editor')}</select><select class="input" id="sh-sector">${sectorOpts(null)}</select><button class="btn btn-primary" id="sh-add">Adicionar</button></div>
         <p class="sp-hint">A pessoa precisa entrar com este e-mail. Se ainda não tiver conta, o acesso fica reservado até ela se cadastrar. Em <b>Permissões</b> você escolhe as páginas e colunas que cada pessoa pode ver ou editar.</p>
+        ${(st.pending || []).filter((u) => !acl.members.some((x) => x.email === u.email)).length ? `<div class="pending"><b>Aguardando acesso:</b> ${(st.pending || []).filter((u) => !acl.members.some((x) => x.email === u.email)).map((u) => `<button class="chip-btn" data-pend="${esc(u.email)}" title="${esc(u.email)}">${icon('plus', 14)} ${esc(u.name)}</button>`).join('')}</div>` : ''}
         <div class="share-list">
           ${st.owner ? `<div class="share-row"><span class="avatar" style="background:${st.owner.color}">${esc(st.owner.name[0].toUpperCase())}</span><div class="sr-who"><b>${esc(st.owner.name)}</b><small>${esc(st.owner.email)}</small></div><span class="sr-fixed">Dono · administrador</span></div>` : ''}
           ${acl.members.map((mb, i) => {
@@ -625,6 +780,7 @@
         acl.members.push({ email, role: pane.querySelector('#sh-role').value, sector: pane.querySelector('#sh-sector').value || null, name: null, rid: newId('m') });
         renderPeople();
       };
+      pane.querySelectorAll('[data-pend]').forEach((b) => (b.onclick = () => { pane.querySelector('#sh-email').value = b.dataset.pend; pane.querySelector('#sh-sector').focus(); }));
       pane.querySelector('#sh-email').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); pane.querySelector('#sh-add').click(); } });
       pane.querySelectorAll('[data-role]').forEach((s) => (s.onchange = () => { acl.members[+s.dataset.role].role = s.value; renderPeople(); }));
       pane.querySelectorAll('[data-sector]').forEach((s) => (s.onchange = () => { acl.members[+s.dataset.sector].sector = s.value || null; }));
@@ -809,7 +965,10 @@
       App.ui.modal({ title: 'Histórico de edições', width: '460px', body: '<p class="modal-text">O histórico de edições de cada célula (quem alterou, quando e o valor anterior) fica disponível nas planilhas salvas na nuvem.</p>', buttons: [{ label: 'Fechar' }, ...(canCreate() ? [{ label: 'Salvar na nuvem', primary: true, action: () => { saveToCloud(false); } }] : [])] });
       return;
     }
-    const sh = App.sheet(), r = App.sel.ar, c = App.sel.ac, a = App.E.addrToStr(r, c);
+    const sh = App.sheet(), r = App.sel.ar, c = App.sel.ac;
+    const rp = App.realCell ? App.realCell(r, c) : { r, c };
+    if (!rp) return;
+    const a = App.E.addrToStr(rp.r, rp.c);
     let list;
     try { list = await api('GET', `/api/docs/${cloud.id}/history?sheet=${encodeURIComponent(sh.id)}&addr=${a}`); }
     catch (e) { return notify(e.message); }
@@ -862,7 +1021,7 @@
     'menuSearch', 'paintFormat', 'format', 'customFormat', 'fmt_number', 'fmt_time', 'fmt_date', 'fmt_currency', 'fmt_percent', 'fmt_scientific',
     'decDec', 'decInc', 'fontFamily', 'fontSize', 'fontSizeInc', 'fontSizeDec', 'bold', 'italic', 'strike', 'textColor', 'fillColor',
     // visualizações de filtro (pessoais, não mudam a planilha dos outros)
-    'createFilterView', 'createGroupedView', 'closeFilterView', 'clearViewFilters', 'toggleOldRows', 'myView']);
+    'createFilterView', 'createGroupedView', 'closeFilterView', 'clearViewFilters', 'toggleOldRows', 'myView', 'markCritical']);
   const COL_CMDS = new Set(['renameCol', 'insertColsLeft', 'insertColsRight', 'deleteCols', 'hideCols', 'unhideCols', 'resizeCols', 'autofitCols', 'addCols']);
   const EXEC_HIDDEN_MENUS = new Set(['Inserir', 'Formatar', 'Dados', 'Extensões']);
   App.adminOnly = () => !!(App.cloudMode && cloud.perms && !cloud.perms.admin);
@@ -977,7 +1136,7 @@
   dataMenu.items = () => {
     const list = origData();
     const at = list.findIndex((x) => x && x.cmd === 'namedRanges');
-    list.splice(at + 1, 0, { label: 'Proteger páginas e intervalos', icon: 'lock', cmd: 'protectRanges' }, { label: 'Permissões por coluna', icon: 'lock', cmd: 'columnAccess' });
+    list.splice(at + 1, 0, { label: 'Proteger páginas e intervalos', icon: 'lock', cmd: 'protectRanges' }, { label: 'Permissões por coluna', icon: 'lock', cmd: 'columnAccess' }, { label: 'Motoristas do DSS…', cmd: 'dssLookup' });
     return list;
   };
 
@@ -987,15 +1146,21 @@
   def('share', 'Compartilhar', () => { if (!App.cloudMode) shareLocal(); else if (cloud.perms && cloud.perms.admin) shareDialog(); else shareInfo(); });
   def('login', 'Entrar', () => loginDialog());
   def('columnAccess', 'Permissões por coluna', columnAccessDialog);
+  def('viewAs', 'Ver como (setor)', () => viewAsMenu($('cloud-chip')));
+  def('dssLookup', 'Motoristas do DSS', () => { if (!cloud.token) return loginDialog('Entre para usar a integração com o DSS.'); dssLookupDialog(); });
   def('cellHistory', 'Mostrar histórico de edições', cellHistory);
 
   function init() {
     lockCommands();
     refreshChrome();
     $('btn-account').addEventListener('click', (e) => accountMenu(e.currentTarget));
+    $('cloud-chip').addEventListener('click', (e) => { if (cloud.realPerms && cloud.realPerms.admin) viewAsMenu(e.currentTarget); });
+    // o ícone da planilha leva às planilhas na nuvem disponíveis para a pessoa
+    const logo = document.querySelector('.app-logo');
+    if (logo) logo.addEventListener('click', (e) => { e.preventDefault(); App.run('openCloud'); });
     renderAccount();
-    loadMe();
     const m = /#nuvem=([\w-]+)/.exec(location.hash);
+    loadMe().then(() => { if (!m) checkGate(); });
     if (m) openCloudDoc(m[1]);
     window.addEventListener('hashchange', () => {
       const h = /#nuvem=([\w-]+)/.exec(location.hash);

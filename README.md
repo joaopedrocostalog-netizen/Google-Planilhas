@@ -113,9 +113,13 @@ O servidor (`server/`, Node.js + Postgres) guarda as planilhas na nuvem e sincro
 - **Conta:** cada pessoa entra com e-mail e senha. Só administradores criam e salvam planilhas na nuvem (Arquivo › Salvar na nuvem); quem salva é o dono e administrador dela. Os administradores gerais ficam na variável `ADMIN_EMAILS` do servidor (separados por vírgula).
 - **Setores são executores:** quem não é administrador preenche valores nas colunas liberadas e usa só esta parte da barra: pesquisa nos menus, desfazer/refazer, imprimir, pintar formatação, zoom, formatos de número (R$, %, casas decimais, 123), fonte, tamanho, negrito, itálico, tachado, cor do texto e cor de preenchimento. Bordas, alinhamento, mesclagem, notas, links, regras, filtros, congelar, tamanho de linhas e colunas, páginas e estrutura são dos administradores, e essas opções nem aparecem para os setores. Cada pessoa só vê o cursor de quem é do mesmo setor; administradores veem todos.
 - **Visualizações de filtro (para todos):** botão de visualizações na barra de ferramentas (ou Dados › Visualizações de filtro) › Criar visualização com filtro ou Criar visualização agrupada. Só quem criou vê o resultado; a planilha e a tela das outras pessoas não mudam.
-- **Minha visualização (para todos):** Ver › Minha visualização. Cada pessoa escolhe quais colunas ver (entre as liberadas) e em que ordem, agrupa por qualquer coluna (com + e −) e ordena por status (ex.: finalizados sobem), ao vivo. Edita com duplo clique. Só ela vê; as escolhas ficam salvas na conta.
-- **Grupos de colunas com +:** botão direito no cabeçalho › Agrupar colunas (ex.: Entrega 1, Entrega 2). Ficam recolhidos para todos; abrir vale só para quem clicou.
-- **Últimos N dias:** Dados › Mostrar só os últimos dias. Linhas mais antigas ficam recolhidas atrás de um botão +, que abre só para quem clicou.
+- **Visualização com filtro (para todos):** botão de visualizações › Criar visualização com filtro. Na própria grade, cada pessoa filtra, agrupa por qualquer coluna (e agrupa dentro do agrupamento, ex.: Status › Cliente), classifica por status (finalizados sobem, ao vivo) e arrasta os cabeçalhos para mudar a ordem das colunas. Edita normalmente. Só ela vê; a visualização volta quando ela abrir a página de novo.
+- **Motoristas do DSS:** Dados › Motoristas do DSS (administrador) liga a coluna do nome (padrão Y) à do CPF/CNPJ (padrão BL). Ao digitar no nome aparecem os motoristas do DSS; escolhendo um, o CPF/CNPJ é preenchido. Precisa das variáveis `DSS_USUARIO` e `DSS_SENHA` no servidor (opcional `DSS_BASE_URL`, padrão `https://costalog.dssinformatica.com.br/wsdss`).
+- **Container crítico:** botão direito numa ou em várias linhas › Marcar container como crítico (coluna T). A célula pisca em vermelho para todos.
+- **Acesso:** é preciso entrar com a conta. Quem não é administrador vê só as planilhas liberadas; uma conta nova fica aguardando até um administrador dar acesso (os pendentes aparecem em Compartilhar).
+- **Ver como (administrador):** clique em "Administrador ▾" no topo para ver a planilha como um setor (só na sua tela).
+- **Grupos de colunas com +:** botão direito no cabeçalho › Agrupar colunas (ex.: Entrega 1, Entrega 2). Ficam recolhidos para todos; abrir vale só para quem clicou. O cadeado trava o grupo aberto; sem travar, ele recolhe ao clicar fora.
+- **Ocultar linhas (com +):** Dados › Ocultar linhas. Regras: datas com mais de N dias, linhas acima de uma linha e/ou valores de uma coluna (ex.: status FINALIZADO). Ficam recolhidas atrás de um botão +, que abre só para quem clicou.
 - **Cabeçalho personalizado:** botão direito no cabeçalho › Personalizar cabeçalho da coluna (nome, fundo, cor do texto, negrito).
 - **Caixa de seleção:** pede confirmação ao marcar/desmarcar, aceita valores personalizados (ex.: SIM/NÃO, em Validação de dados) e o administrador pode removê-la (botão direito › Remover caixa de seleção).
 - **Paleta de cores:** cores padrão de status e cores personalizadas salvas na conta.
@@ -128,7 +132,7 @@ O servidor (`server/`, Node.js + Postgres) guarda as planilhas na nuvem e sincro
 - **Histórico de edições:** clique com o botão direito numa célula › Mostrar histórico de edições (quem alterou, quando, valor anterior e novo).
 - **Intervalos protegidos:** Dados › Proteger páginas e intervalos.
 
-Variáveis do servidor: `DATABASE_URL` (Postgres), `ADMIN_EMAILS` (administradores gerais), `PGSCHEMA` (opcional, schema próprio), `ALLOWED_ORIGINS` (sites que podem usar a API). Sem `DATABASE_URL`, os dados ficam em memória (apenas para testes). Testes: `npm test`.
+Variáveis do servidor: `DATABASE_URL` (Postgres), `ADMIN_EMAILS` (administradores gerais), `DSS_USUARIO`/`DSS_SENHA` (motoristas do DSS), `PGSCHEMA` (opcional, schema próprio), `ALLOWED_ORIGINS` (sites que podem usar a API). Sem `DATABASE_URL`, os dados ficam em memória (apenas para testes). Testes: `npm test`.
 
 ## Limitações
 

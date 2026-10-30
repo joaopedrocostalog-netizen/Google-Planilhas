@@ -169,7 +169,9 @@
   // Célula resultante quando um setor altera "before" para "after": só o valor e a formatação liberada mudam
   function execMerge(before, after) {
     const out = {}, s = {};
-    if (before) for (const k in before) if (k !== 'v' && k !== 's' && k[0] !== '_') out[k] = before[k];
+    if (before) for (const k in before) if (k !== 'v' && k !== 's' && k !== 'crit' && k[0] !== '_') out[k] = before[k];
+    // marcação de container crítico também é liberada para os setores
+    if (after && after.crit) out.crit = true;
     if (before && before.s) for (const k in before.s) if (!EXEC_STYLE.includes(k)) s[k] = before.s[k];
     if (after && after.s) for (const k of EXEC_STYLE) if (after.s[k] !== undefined && after.s[k] !== null) s[k] = after.s[k];
     if (Object.keys(s).length) out.s = s;

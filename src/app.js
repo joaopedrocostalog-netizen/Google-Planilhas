@@ -12,6 +12,7 @@
   App.charts.init();
   App.io.init();
   App.collab.init();
+  App.viewsInit();
 
   // Barra "Adicionar mais linhas"
   $('add-rows-btn').addEventListener('click', () => App.run('addRows', parseInt($('add-rows-n').value, 10) || 1000));

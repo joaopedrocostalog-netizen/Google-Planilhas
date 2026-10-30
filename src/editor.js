@@ -18,10 +18,15 @@
   function start(opts) {
     opts = opts || {};
     if (ed.active) return;
+    ed.pick = null;
     const sh = App.sheet();
     const g = App.mergeAt(sh, App.sel.ar, App.sel.ac);
     const er = g ? g.r1 : App.sel.ar, ec = g ? g.c1 : App.sel.ac;
     if (App.editGuard) { const err = App.editGuard(sh, er, ec); if (err) { App.emit('notify', err); if (opts.from === 'bar') bar.blur(); App.grid.focus(); return; } }
+    // posição real da célula (na visualização de filtro reordenada a posição de tela pode mudar enquanto se digita)
+    const realPos = App.realCell ? App.realCell(er, ec) : { r: er, c: ec };
+    if (!realPos) return;
+    ed.real = realPos;
     ed.r = er; ed.c = ec;
     ed.si = doc.active;
     ed.mode = opts.mode || 'enter';
@@ -42,6 +47,7 @@
   }
   function place() {
     if (!ed.active) return;
+    if (ed.real && App.dispCell && doc.active === ed.si) { const p = App.dispCell(ed.real.r, ed.real.c); if (p) { ed.r = p.r; ed.c = p.c; } }
     if (doc.active !== ed.si) { box.style.visibility = 'hidden'; return; }
     const rc = App.grid.cellRect(ed.r, ed.c);
     const st = App.gridState;
@@ -115,22 +121,32 @@
     const sh = App.doc.sheets[ed.si];
     if (text !== ed.original) {
       if (text[0] === '=') text = normalizeFormula(text);
-      const dv = App.dvAt(sh, ed.r, ed.c);
-      if (dv && dv.reject && !App.validate(sh, ed.r, ed.c, text)) {
+      const R0 = ed.real || { r: ed.r, c: ed.c };
+      const real = App.withReal ? (fn) => App.withReal(fn) : (fn) => fn();
+      const dv = real(() => App.dvAt(sh, R0.r, R0.c));
+      if (dv && dv.reject && !real(() => App.validate(sh, R0.r, R0.c, text))) {
         App.emit('notify', dv.help || 'Entrada inválida: o conteúdo não atende à regra de validação desta célula.');
         return false;
       }
-      const r = ed.r, c = ed.c;
-      App.change('Editar célula', () => {
+      const r = R0.r, c = R0.c;
+      const pick = ed.pick && ed.pick.nome === text ? ed.pick : (App.lookupMatch ? App.lookupMatch(sh, r, c, text, true) : null);
+      App.change('Editar célula', () => real(() => {
         App.setRaw(sh, r, c, text);
+        // motorista do DSS: completa o CPF/CNPJ na coluna configurada (quando a pessoa pode editá-la; senão o servidor completa)
+        if (pick && pick.cpf && sh.lookup && sh.lookup.cpfCol) {
+          const tc = sh.lookup.cpfCol;
+          if (!(App.editGuard && App.editGuard(sh, r, tc, true))) App.setRaw(sh, r, tc, pick.cpf);
+        }
         const st = App.style(sh, r, c);
         if (!st.nf) { const f = App.autoFormatFor(text); if (f) App.setStyle(sh, r, c, (s) => { s.nf = f; }); }
         if (r > sh.rows) sh.rows = r;
         // linhas com quebra de texto crescem automaticamente
         if (text.includes('\n') || st.wrap === 'wrap' || (sh.rowH[r] && sh.rowH[r] > App.DEF_H)) App.autoFitRows(sh, [r]);
-      });
+      }));
     }
-    const { r, c } = ed;
+    // a linha pode ter mudado de lugar (ex.: visualização classificada por status)
+    const at = ed.real && App.dispCell ? App.dispCell(ed.real.r, ed.real.c) : null;
+    const r = at ? at.r : ed.r, c = at ? at.c : ed.c;
     close();
     if (dr || dc) App.moveAfterCommit(r, c, dr, dc);
     return true;
@@ -308,7 +324,25 @@
     if (/^[A-Za-z]{1,3}\d+$/.test(m[1])) return null;
     return { word: m[1], start: before.length - m[1].length, end: caret };
   }
+  // Sugestões de uma lista externa (ex.: motoristas do DSS) ao digitar na coluna configurada
+  function lookupAc() {
+    const sh = doc.sheets[ed.si];
+    const real = ed.real || { r: ed.r, c: ed.c };
+    const lk = sh && sh.lookup;
+    if (!lk || !lk.col || real.c !== lk.col || ta.value[0] === '=' || !App.lookupList) return false;
+    const list = App.lookupList(lk, () => { if (ed.active) update(); });
+    const q = fold(ta.value.trim());
+    if (!list || !q) { hideAc(); return true; }
+    const starts = [], has = [];
+    for (const d of list) { const n = fold(d.nome); if (n.startsWith(q)) starts.push(d); else if (n.includes(q)) has.push(d); if (starts.length >= 8) break; }
+    ed.ac = starts.concat(has).slice(0, 8).map((d) => ({ show: d.nome, args: null, desc: d.cpf ? 'CPF/CNPJ ' + d.cpf : 'Sem CPF/CNPJ no DSS', lookup: d }));
+    if (!ed.ac.length || (ed.ac.length === 1 && fold(ed.ac[0].show) === q && ed.pick === ed.ac[0].lookup)) { hideAc(); return true; }
+    ed.acIndex = Math.min(ed.acIndex, ed.ac.length - 1);
+    renderAc();
+    return true;
+  }
   function updateAc() {
+    if (lookupAc()) return;
     const w = currentWord();
     if (!w || w.word.length < 1) { hideAc(); return; }
     const q = fold(w.word);
@@ -340,6 +374,14 @@
   function acceptAc() {
     const it = ed.ac[ed.acIndex];
     if (!it) return false;
+    if (it.lookup) {
+      // escolheu o motorista: grava o nome e completa o CPF/CNPJ
+      ed.pick = it.lookup;
+      setText(it.show, it.show.length);
+      hideAc();
+      commit(1, 0);
+      return true;
+    }
     const w = ed.acWord;
     const text = ta.value;
     const ins = it.named ? it.show : it.show + '(';

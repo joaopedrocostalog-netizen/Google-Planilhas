@@ -29,19 +29,28 @@
   function layout() {
     const sh = App.sheet();
     const z = (st.z = doc.zoom / 100);
-    const L = new Float64Array(sh.cols + 2), T = new Float64Array(sh.rows + 2);
-    for (let c = 1; c <= sh.cols; c++) L[c + 1] = L[c] + (App.isColHidden(sh, c) ? 0 : (sh.colW[c] || App.DEF_W) * z);
-    for (let r = 1; r <= sh.rows; r++) T[r + 1] = T[r] + (App.isRowHidden(sh, r) ? 0 : (sh.rowH[r] || App.DEF_H) * z);
+    // visualização de filtro com ordem própria: a grade desenha posições de tela (ver App.buildVmap)
+    if (App.buildVmap) App.buildVmap();
+    const vm = App.vm && App.vm.sheetId === sh.id ? App.vm : null;
+    st.vm = vm;
+    st.nR = vm ? vm.nRows : sh.rows; st.nC = vm ? vm.nCols : sh.cols;
+    const L = new Float64Array(st.nC + 2), T = new Float64Array(st.nR + 2);
+    for (let d = 1; d <= st.nC; d++) { const c = vm ? vm.cols[d] : d; L[d + 1] = L[d] + (App.isColHidden(sh, c) ? 0 : (sh.colW[c] || App.DEF_W) * z); }
+    for (let d = 1; d <= st.nR; d++) {
+      const e = vm ? vm.rows[d] : null;
+      const h = e && e.group ? Math.round(26 * z) : (() => { const r = e ? e.r : d; return App.isRowHidden(sh, r) ? 0 : (sh.rowH[r] || App.DEF_H) * z; })();
+      T[d + 1] = T[d] + h;
+    }
     st.left = L; st.top = T;
-    st.Fr = Math.min(sh.freeze.rows || 0, sh.rows);
-    st.Fc = Math.min(sh.freeze.cols || 0, sh.cols);
+    st.Fr = Math.min(sh.freeze.rows || 0, st.nR);
+    st.Fc = Math.min(sh.freeze.cols || 0, st.nC);
     st.FW = L[st.Fc + 1]; st.FH = T[st.Fr + 1];
-    st.hdrW = Math.round(Math.max(46, 14 + 8 * String(sh.rows).length) * z);
+    st.hdrW = Math.round(Math.max(46, 14 + 8 * String(st.nR).length) * z);
     // faixa acima dos cabeçalhos para os grupos de colunas (botões + e −)
     st.gut = sh.colGroups && sh.colGroups.length ? Math.round(18 * z) : 0;
     st.hdrH = Math.round(24 * z) + st.gut;
-    spacer.style.width = st.hdrW + L[sh.cols + 1] + 'px';
-    spacer.style.height = st.hdrH + T[sh.rows + 1] + 64 + 'px';
+    spacer.style.width = st.hdrW + L[st.nC + 1] + 'px';
+    spacer.style.height = st.hdrH + T[st.nR + 1] + 64 + 'px';
     resize();
   }
   function resize() {
@@ -54,6 +63,10 @@
     st.vw = scroller.clientWidth; st.vh = scroller.clientHeight;
     schedule();
   }
+  // posição de tela -> coluna/linha real
+  const RC = (c) => (st.vm ? st.vm.cols[c] || c : c);
+  const RR = (r) => (st.vm ? (st.vm.rows[r] && st.vm.rows[r].r) || null : r);
+  const GROUP = (r) => (st.vm && st.vm.rows[r] && st.vm.rows[r].group) || null;
   const colX = (c) => st.hdrW + st.left[c] - (c > st.Fc ? st.sx : 0);
   const rowY = (r) => st.hdrH + st.top[r] - (r > st.Fr ? st.sy : 0);
   const colW = (c) => st.left[c + 1] - st.left[c];
@@ -90,7 +103,7 @@
   App.selIsCell = () => { const R = App.selRect(), g = App.mergeAt(App.sheet(), sel.ar, sel.ac); return g ? R.r1 === g.r1 && R.r2 === g.r2 && R.c1 === g.c1 && R.c2 === g.c2 : R.r1 === R.r2 && R.c1 === R.c2; };
   function clampCell(r, c) {
     const sh = App.sheet();
-    return [Math.max(1, Math.min(sh.rows, r)), Math.max(1, Math.min(sh.cols, c))];
+    return [Math.max(1, Math.min(st.nR, r)), Math.max(1, Math.min(st.nC, c))];
   }
   function select(r, c, extend, noReveal) {
     [r, c] = clampCell(r, c);
@@ -110,7 +123,7 @@
     sel.er = sel.ar === R.r1 ? R.r2 : R.r1; sel.ec = sel.ac === R.c1 ? R.c2 : R.c1;
     if (sel.ar !== R.r1 && sel.ar !== R.r2) { sel.ar = R.r1; sel.er = R.r2; }
     if (sel.ac !== R.c1 && sel.ac !== R.c2) { sel.ac = R.c1; sel.ec = R.c2; }
-    sel.er = Math.min(sel.er, sh.rows); sel.ec = Math.min(sel.ec, sh.cols);
+    sel.er = Math.min(sel.er, st.nR); sel.ec = Math.min(sel.ec, st.nC);
     reveal(sel.ar, sel.ac);
     App.emit('selection');
     schedule();
@@ -121,17 +134,17 @@
     const g = App.mergeAt(sh, r, c);
     if (g) { if (dr > 0) r = g.r2; if (dr < 0) r = g.r1; if (dc > 0) c = g.c2; if (dc < 0) c = g.c1; }
     let nr = r + dr, nc = c + dc;
-    while (nr >= 1 && nr <= sh.rows && dr && App.isRowHidden(sh, nr)) nr += dr;
-    while (nc >= 1 && nc <= sh.cols && dc && App.isColHidden(sh, nc)) nc += dc;
-    if (nr < 1 || nr > sh.rows) nr = r;
-    if (nc < 1 || nc > sh.cols) nc = c;
+    while (nr >= 1 && nr <= st.nR && dr && !rowH(nr) && !(st.vm && st.vm.rows[nr] && st.vm.rows[nr].group)) nr += dr;
+    while (nc >= 1 && nc <= st.nC && dc && !colW(nc)) nc += dc;
+    if (nr < 1 || nr > st.nR) nr = r;
+    if (nc < 1 || nc > st.nC) nc = c;
     return [nr, nc];
   }
   function jump(r, c, dr, dc) {
     const sh = App.sheet();
-    const filled = (rr, cc) => rr >= 1 && cc >= 1 && rr <= sh.rows && cc <= sh.cols && App.raw(sh, rr, cc) !== '';
+    const filled = (rr, cc) => rr >= 1 && cc >= 1 && rr <= st.nR && cc <= st.nC && App.raw(sh, rr, cc) !== '';
     let nr = r, nc = c;
-    const inb = (rr, cc) => rr >= 1 && cc >= 1 && rr <= sh.rows && cc <= sh.cols;
+    const inb = (rr, cc) => rr >= 1 && cc >= 1 && rr <= st.nR && cc <= st.nC;
     if (filled(r, c) && filled(r + dr, c + dc)) {
       while (filled(nr + dr, nc + dc)) { nr += dr; nc += dc; }
     } else {
@@ -148,7 +161,7 @@
 
   function reveal(r, c) {
     const sh = App.sheet();
-    if (r > sh.rows || c > sh.cols) return;
+    if (r > st.nR || c > st.nC) return;
     let sx = st.sx, sy = st.sy;
     const availW = st.vw - st.hdrW, availH = st.vh - st.hdrH;
     if (c > st.Fc) {
@@ -177,12 +190,23 @@
   App.fontFor = fontFor;
 
   // Informações de exibição de uma célula (texto, alinhamento, decorações)
+  const EMPTY_INFO = { cell: null, raw: '', v: null, s: {}, text: '', align: 'l', dv: null, link: null, isErr: false };
   function cellInfo(sh, si, r, c) {
+    const [rr, cc] = App.mapRC(sh, r, c);
+    if (!rr) return EMPTY_INFO;
+    return App.withReal(() => cellInfoReal(sh, si, rr, cc));
+  }
+  function cellInfoReal(sh, si, r, c) {
     const cell = sh.cells[E.addrToStr(r, c)];
     const raw = cell && cell.v !== undefined && cell.v !== null ? cell.v : '';
     const base = (cell && cell.s) || {};
     const v = App.value(si, r, c);
-    const s = App.effectiveStyle(sh, si, r, c, base);
+    let s = App.effectiveStyle(sh, si, r, c, base);
+    // container crítico: a célula pisca em vermelho
+    if (cell && cell.crit) {
+      st.hasCrit = true;
+      s = Object.assign({}, s, Math.floor(Date.now() / 550) % 2 ? { bg: '#d93025', color: '#ffffff', b: true } : { bg: '#fce8e6', color: '#b3261e', b: true });
+    }
     const isFormula = typeof raw === 'string' && raw[0] === '=';
     let nf = base.nf;
     if (nf === undefined && isFormula) nf = App.inferFormat(si, raw);
@@ -208,9 +232,9 @@
     ctx.fillRect(0, 0, canvas.width / dpr, canvas.height / dpr);
     const W = st.vw, H = st.vh, hw = st.hdrW, hh = st.hdrH;
     const regions = [
-      { rows: [st.Fr + 1, sh.rows], cols: [st.Fc + 1, sh.cols], sx: st.sx, sy: st.sy, x: hw + st.FW, y: hh + st.FH, w: W - hw - st.FW, h: H - hh - st.FH },
-      { rows: [1, st.Fr], cols: [st.Fc + 1, sh.cols], sx: st.sx, sy: 0, x: hw + st.FW, y: hh, w: W - hw - st.FW, h: st.FH },
-      { rows: [st.Fr + 1, sh.rows], cols: [1, st.Fc], sx: 0, sy: st.sy, x: hw, y: hh + st.FH, w: st.FW, h: H - hh - st.FH },
+      { rows: [st.Fr + 1, st.nR], cols: [st.Fc + 1, st.nC], sx: st.sx, sy: st.sy, x: hw + st.FW, y: hh + st.FH, w: W - hw - st.FW, h: H - hh - st.FH },
+      { rows: [1, st.Fr], cols: [st.Fc + 1, st.nC], sx: st.sx, sy: 0, x: hw + st.FW, y: hh, w: W - hw - st.FW, h: st.FH },
+      { rows: [st.Fr + 1, st.nR], cols: [1, st.Fc], sx: 0, sy: st.sy, x: hw, y: hh + st.FH, w: st.FW, h: H - hh - st.FH },
       { rows: [1, st.Fr], cols: [1, st.Fc], sx: 0, sy: 0, x: hw, y: hh, w: st.FW, h: st.FH },
     ];
     for (const rg of regions) {
@@ -221,7 +245,12 @@
       drawOverlays(sh, rg);
       ctx.restore();
     }
+    drawGroupRows(sh);
     drawHeaders(sh);
+    if (st.drag && st.drag.kind === 'colMove' && st.drag.active && st.drag.to) {
+      const x = Math.round(colX(st.drag.to)) - 1;
+      ctx.fillStyle = C.sel; ctx.fillRect(x - 1, 0, 3, H);
+    }
     // linhas de congelamento
     ctx.fillStyle = C.freeze;
     if (st.Fr > 0) ctx.fillRect(0, hh + st.FH - 2, W, 4);
@@ -295,7 +324,7 @@
       const goRight = inf.align === 'l' || inf.align === 'c';
       const goLeft = inf.align === 'r' || inf.align === 'c';
       const extra = inf.align === 'c' ? (need - it.w) / 2 : need - it.w;
-      if (goRight) { let c = it.c + 1; while (x1 - it.x - (inf.align === 'c' ? 0 : 0) < it.w + extra && c <= Math.min(sh.cols, c1 + 20) && (colW(c) === 0 || emptyAt(it.r, c))) { if (colW(c)) { occupied.add(it.r + ':' + c); x1 += colW(c); } c++; } }
+      if (goRight) { let c = it.c + 1; while (x1 - it.x - (inf.align === 'c' ? 0 : 0) < it.w + extra && c <= Math.min(st.nC, c1 + 20) && (colW(c) === 0 || emptyAt(it.r, c))) { if (colW(c)) { occupied.add(it.r + ':' + c); x1 += colW(c); } c++; } }
       if (goLeft) { let c = it.c - 1; while (it.x - x0 < extra && c >= Math.max(1, rg.cols[0]) && (colW(c) === 0 || emptyAt(it.r, c))) { if (colW(c)) { occupied.add(it.r + ':' + c); x0 -= colW(c); } c--; } }
       it.tx = x0; it.tw = x1 - x0;
       if (showGrid && (x0 < it.x || x1 > it.x + it.w)) {
@@ -319,10 +348,11 @@
     // ícones de filtro na linha de cabeçalho
     const f = App.activeFilter(sh);
     if (f && f.r1 >= 1 && f.r1 >= r0 && f.r1 <= r1 && (App.views.has(sh.id) || !(App.adminOnly && App.adminOnly()))) {
-      for (let c = Math.max(f.c1, c0); c <= Math.min(f.c2, c1); c++) {
-        if (!colW(c)) continue;
+      for (let c = c0; c <= c1; c++) {
+        const rc = RC(c);
+        if (!colW(c) || rc < f.c1 || rc > f.c2) continue;
         const x = X(c + 1) - 18 * st.z, y = Y(f.r1) + (rowH(f.r1) - 14 * st.z) / 2, s = 14 * st.z;
-        const active = f.crit && f.crit[c] && ((f.crit[c].hidden && f.crit[c].hidden.length) || f.crit[c].cond);
+        const active = f.crit && f.crit[rc] && ((f.crit[rc].hidden && f.crit[rc].hidden.length) || f.crit[rc].cond);
         ctx.fillStyle = active ? C.sel : '#ffffff';
         ctx.strokeStyle = active ? C.sel : '#9a9a9a';
         roundRect(x, y, s, s, 3 * st.z); ctx.fill(); ctx.stroke();
@@ -334,36 +364,110 @@
   }
 
   // Grupos de colunas: faixa com + (recolhido) e − (aberto). Abrir vale só para quem clicou.
+  // Cada grupo fica na região das suas colunas (congeladas ou não) e os rótulos não se sobrepõem.
   function drawColGroups(sh, hw, W, z) {
     st.groupBoxes = [];
     if (!st.gut) return;
     const g = st.gut, s = Math.round(12 * z);
     ctx.save();
-    ctx.beginPath(); ctx.rect(hw, 0, W - hw, g); ctx.clip();
     ctx.fillStyle = '#ffffff'; ctx.fillRect(hw, 0, W - hw, g);
     ctx.fillStyle = C.hdrLine; ctx.fillRect(hw, g - 1, W - hw, 1);
     ctx.font = `${(10.5 * z).toFixed(1)}px Arial, sans-serif`; ctx.textBaseline = 'middle';
-    for (const grp of sh.colGroups) {
-      const open = App.isGroupOpen(sh, grp);
-      const x1 = colX(grp.c1), x2 = colX(grp.c2) + colW(grp.c2);
-      const by = Math.round((g - s) / 2);
-      let bx;
-      if (open) {
-        bx = Math.round(x2 - s - 3 * z);
-        ctx.strokeStyle = '#9aa0a6'; ctx.lineWidth = 1.5 * z;
-        ctx.beginPath(); ctx.moveTo(x1 + 4 * z, g / 2); ctx.lineTo(bx - 3 * z, g / 2); ctx.moveTo(x1 + 4 * z, g / 2 - 3 * z); ctx.lineTo(x1 + 4 * z, g / 2 + 3 * z); ctx.stroke();
-        if (grp.label) { const tw = ctx.measureText(grp.label).width + 8 * z; ctx.fillStyle = '#ffffff'; ctx.fillRect(x1 + 10 * z, 1, tw, g - 3); ctx.fillStyle = '#3c4043'; ctx.textAlign = 'left'; ctx.fillText(grp.label, x1 + 14 * z, g / 2); }
-      } else {
-        bx = Math.round(x1 + 2 * z);
-        if (grp.label) { ctx.fillStyle = '#3c4043'; ctx.textAlign = 'left'; ctx.fillText(grp.label, bx + s + 4 * z, g / 2); }
+    const regions = [{ clipX: hw, clipW: st.FW, frozen: true }, { clipX: hw + st.FW, clipW: W - hw - st.FW, frozen: false }];
+    const groups = sh.colGroups.slice().sort((p, q) => p.c1 - q.c1);
+    for (const rg of regions) {
+      if (rg.clipW <= 0) continue;
+      ctx.save();
+      ctx.beginPath(); ctx.rect(rg.clipX, 0, rg.clipW, g); ctx.clip();
+      let minX = rg.clipX;
+      const box = (bx, by, kind) => {
+        // kind: plus | minus | lock | unlock
+        const red = kind === 'plus' || kind === 'lock';
+        ctx.fillStyle = red ? C.sel : '#ffffff'; ctx.strokeStyle = red ? C.sel : '#5f6368'; ctx.lineWidth = 1;
+        roundRect(bx + 0.5, by + 0.5, s, s, 2 * z); ctx.fill(); ctx.stroke();
+        ctx.strokeStyle = red ? '#ffffff' : '#3c4043'; ctx.fillStyle = ctx.strokeStyle; ctx.lineWidth = 1.5 * z;
+        ctx.beginPath();
+        if (kind === 'plus' || kind === 'minus') {
+          ctx.moveTo(bx + 3 * z, by + s / 2 + 0.5); ctx.lineTo(bx + s - 2 * z, by + s / 2 + 0.5);
+          if (kind === 'plus') { ctx.moveTo(bx + s / 2 + 0.5, by + 3 * z); ctx.lineTo(bx + s / 2 + 0.5, by + s - 2 * z); }
+          ctx.stroke();
+        } else {
+          // cadeado (travado: fechado em vermelho; destravado: aberto)
+          ctx.fillRect(bx + 3 * z, by + s / 2, s - 5 * z, s / 2 - 2 * z);
+          ctx.beginPath(); ctx.arc(bx + s / 2 + 0.5, by + s / 2, 2.6 * z, Math.PI, kind === 'lock' ? 0 : -0.3 * Math.PI); ctx.stroke();
+        }
+      };
+      for (const grp of groups) {
+        const inFrozen = grp.c1 <= st.Fc;
+        if (inFrozen !== rg.frozen) continue;
+        const open = App.isGroupOpen(sh, grp), locked = open && App.isGroupLocked(sh, grp);
+        const x1 = colX(grp.c1), x2 = colX(grp.c2) + colW(grp.c2);
+        const by = Math.round((g - s) / 2);
+        const label = grp.label || '';
+        if (open) {
+          const lockX = Math.round(x2 - 2 * s - 6 * z), minusX = Math.round(x2 - s - 3 * z);
+          const start = Math.max(x1, minX) + 4 * z;
+          ctx.strokeStyle = '#9aa0a6'; ctx.lineWidth = 1.5 * z;
+          ctx.beginPath(); ctx.moveTo(start, g / 2); ctx.lineTo(lockX - 3 * z, g / 2); ctx.moveTo(start, g / 2 - 3 * z); ctx.lineTo(start, g / 2 + 3 * z); ctx.stroke();
+          if (label) {
+            const room = lockX - start - 14 * z;
+            let t = label;
+            while (t.length > 1 && ctx.measureText(t).width > room) t = t.slice(0, -1);
+            if (t !== label && t.length > 1) t = t.slice(0, -1) + '…';
+            if (room > 12 * z) { const tw = ctx.measureText(t).width + 8 * z; ctx.fillStyle = '#ffffff'; ctx.fillRect(start + 6 * z, 1, tw, g - 3); ctx.fillStyle = '#3c4043'; ctx.textAlign = 'left'; ctx.fillText(t, start + 10 * z, g / 2); }
+          }
+          box(lockX, by, locked ? 'lock' : 'unlock');
+          box(minusX, by, 'minus');
+          st.groupBoxes.push({ x: lockX - 1, w: s + 2, id: grp.id, act: 'lock' }, { x: minusX - 1, w: s + 2, id: grp.id, act: 'toggle' });
+          minX = x2;
+        } else {
+          const bx = Math.round(Math.max(x1 + 2 * z, minX + 4 * z));
+          box(bx, by, 'plus');
+          let w = s;
+          if (label) { ctx.fillStyle = '#3c4043'; ctx.textAlign = 'left'; ctx.fillText(label, bx + s + 4 * z, g / 2); w += 6 * z + ctx.measureText(label).width; }
+          st.groupBoxes.push({ x: bx - 2, w: w + 4, id: grp.id, act: 'toggle', clipX: rg.clipX, clipW: rg.clipW });
+          minX = bx + w + 2 * z;
+        }
       }
-      ctx.fillStyle = open ? '#ffffff' : C.sel; ctx.strokeStyle = open ? '#5f6368' : C.sel; ctx.lineWidth = 1;
-      roundRect(bx + 0.5, by + 0.5, s, s, 2 * z); ctx.fill(); ctx.stroke();
-      ctx.strokeStyle = open ? '#3c4043' : '#ffffff'; ctx.lineWidth = 1.6 * z;
-      ctx.beginPath(); ctx.moveTo(bx + 3 * z, by + s / 2 + 0.5); ctx.lineTo(bx + s - 2 * z, by + s / 2 + 0.5);
-      if (!open) { ctx.moveTo(bx + s / 2 + 0.5, by + 3 * z); ctx.lineTo(bx + s / 2 + 0.5, by + s - 2 * z); }
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  // Títulos dos grupos da visualização agrupada (cores fortes; grupos dentro de grupos ficam recuados)
+  const GROUP_COLORS = [['#c5221f', '#ffffff'], ['#f28b82', '#3c0a08'], ['#fce8e6', '#5a0006']];
+  function drawGroupRows(sh) {
+    if (!st.vm) return;
+    const z = st.z, hw = st.hdrW, W = st.vw;
+    const r0 = Math.max(st.Fr + 1, rowAtContent(st.FH + st.sy)), r1 = Math.min(st.nR, rowAtContent(st.vh - st.hdrH + st.sy));
+    ctx.save();
+    ctx.beginPath(); ctx.rect(hw, st.hdrH + st.FH, W - hw, st.vh - st.hdrH - st.FH); ctx.clip();
+    for (let r = r0; r <= r1; r++) {
+      const g = GROUP(r);
+      if (!g) continue;
+      const y = rowY(r), h = rowH(r);
+      const [bg, fg] = GROUP_COLORS[Math.min(g.level, 2)];
+      ctx.fillStyle = bg; ctx.fillRect(hw, y, W - hw, h);
+      ctx.fillStyle = 'rgba(0,0,0,.18)'; ctx.fillRect(hw, y + h - 1, W - hw, 1);
+      const x0 = hw + 8 * z + g.level * 22 * z, s = Math.round(14 * z), by = Math.round(y + (h - s) / 2);
+      ctx.fillStyle = '#ffffff'; ctx.strokeStyle = g.level === 0 ? '#ffffff' : '#c5221f'; ctx.lineWidth = 1;
+      roundRect(x0 + 0.5, by + 0.5, s, s, 3 * z); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = '#c5221f'; ctx.lineWidth = 1.8 * z;
+      ctx.beginPath(); ctx.moveTo(x0 + 3.5 * z, by + s / 2 + 0.5); ctx.lineTo(x0 + s - 2.5 * z, by + s / 2 + 0.5);
+      if (g.closed) { ctx.moveTo(x0 + s / 2 + 0.5, by + 3.5 * z); ctx.lineTo(x0 + s / 2 + 0.5, by + s - 2.5 * z); }
       ctx.stroke();
-      st.groupBoxes.push({ x: bx - 2, y: 0, w: s + 4 + (open ? 0 : (grp.label ? ctx.measureText(grp.label).width + 6 * z : 0)), h: g, id: grp.id });
+      ctx.fillStyle = fg; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+      const name = App.colLabelOf ? App.colLabelOf(sh, g.col) : E.numToCol(g.col);
+      ctx.font = `${(11 * z).toFixed(1)}px Arial, sans-serif`;
+      const lbl = name + ': ';
+      ctx.fillText(lbl, x0 + s + 8 * z, y + h / 2);
+      const lw = ctx.measureText(lbl).width;
+      ctx.font = `bold ${(12.5 * z).toFixed(1)}px Arial, sans-serif`;
+      const val = g.value === '' ? '(Vazio)' : g.value;
+      ctx.fillText(val, x0 + s + 8 * z + lw, y + h / 2);
+      const vw = ctx.measureText(val).width;
+      ctx.font = `${(11 * z).toFixed(1)}px Arial, sans-serif`;
+      ctx.fillText(`  ·  ${g.count} ${g.count === 1 ? 'linha' : 'linhas'}`, x0 + s + 8 * z + lw + vw, y + h / 2);
     }
     ctx.restore();
   }
@@ -683,7 +787,7 @@
     // contorno do filtro
     const af = App.activeFilter(sh);
     if (af) {
-      const f = box(Object.assign({}, af, { r1: Math.max(1, af.r1), r2: Math.min(sh.rows, App.filterEnd(sh)) }));
+      const f = box(Object.assign({}, af, { r1: Math.max(1, af.r1), r2: Math.min(st.nR, App.filterEnd(sh)) }));
       ctx.strokeStyle = C.sel; ctx.lineWidth = 1.5;
       ctx.strokeRect(f.x + 0.5, f.y + 0.5, f.w - 1, f.h - 1);
     }
@@ -693,8 +797,8 @@
   function drawHeaders(sh) {
     const W = st.vw, H = st.vh, hw = st.hdrW, hh = st.hdrH, z = st.z;
     const R = App.selRect();
-    const fullCols = R.r1 === 1 && R.r2 >= sh.rows;
-    const fullRows = R.c1 === 1 && R.c2 >= sh.cols;
+    const fullCols = R.r1 === 1 && R.r2 >= st.nR;
+    const fullRows = R.c1 === 1 && R.c2 >= st.nC;
     ctx.font = `${(11 * z).toFixed(1)}px Arial, sans-serif`;
     ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
     // cabeçalho de colunas
@@ -719,20 +823,21 @@
         }
         const inSel = c >= R.c1 && c <= R.c2;
         // cabeçalho personalizado (fundo, cor do texto, negrito)
-        const hs = sh.colHdr && sh.colHdr[c];
+        const rc = RC(c);
+        const hs = sh.colHdr && sh.colHdr[rc];
         if (hs && hs.bg) { ctx.fillStyle = hs.bg; ctx.fillRect(x, 0, w, hh); }
         if (inSel) { ctx.fillStyle = fullCols ? C.hdrFullBg : C.hdrSelBg; if (hs && hs.bg) ctx.globalAlpha = 0.45; ctx.fillRect(x, 0, w, hh); ctx.globalAlpha = 1; }
         ctx.fillStyle = inSel && !(hs && hs.bg) ? (fullCols ? C.hdrFullText : C.hdrSelText) : (hs && hs.color) || (hs && hs.bg ? '#000000' : inSel ? C.hdrSelText : hdrText);
         ctx.font = `${inSel || (hs && hs.b) ? 'bold ' : ''}${(11 * z).toFixed(1)}px Arial, sans-serif`;
-        const nm = sh.colNames && sh.colNames[c];
+        const nm = sh.colNames && sh.colNames[rc];
         if (nm) {
           // nome dado pelo administrador (ex.: CLIENTE) no lugar da letra
           let t = String(nm);
           const room = w - (App.colReadonly && App.colReadonly(sh, c) ? 26 : 10) * z;
           if (ctx.measureText(t).width > room) { while (t.length > 1 && ctx.measureText(t + '…').width > room) t = t.slice(0, -1); t += '…'; }
           ctx.fillText(t, x + w / 2, hh / 2 + 0.5);
-        } else ctx.fillText(E.numToCol(c), x + w / 2, hh / 2 + 0.5);
-        if (App.colReadonly && w > 34 * z && App.colReadonly(sh, c)) {
+        } else ctx.fillText(E.numToCol(rc), x + w / 2, hh / 2 + 0.5);
+        if (App.colReadonly && w > 34 * z && App.colReadonly(sh, rc)) {
           // cadeado: coluna somente para visualizar
           const lx = x + w - 13 * z, ly = hh / 2 - 1 * z;
           ctx.fillStyle = '#8a8a8a'; ctx.strokeStyle = '#8a8a8a'; ctx.lineWidth = 1.2 * z;
@@ -740,10 +845,10 @@
           ctx.beginPath(); ctx.arc(lx, ly, 2.4 * z, Math.PI, 0); ctx.stroke();
         }
         const hf = App.activeFilter(sh);
-        if (hf && hf.r1 === 0 && c >= hf.c1 && c <= hf.c2 && w > 24 * z) {
+        if (hf && hf.r1 === 0 && rc >= hf.c1 && rc <= hf.c2 && w > 24 * z) {
           // botão de filtro no cabeçalho da coluna
           const s = 14 * z, bx = x + w - 18 * z, by = (hh - s) / 2;
-          const active = hf.crit && hf.crit[c] && ((hf.crit[c].hidden && hf.crit[c].hidden.length) || hf.crit[c].cond);
+          const active = hf.crit && hf.crit[rc] && ((hf.crit[rc].hidden && hf.crit[rc].hidden.length) || hf.crit[rc].cond);
           const showBtn = (App.views.has(sh.id) || !(App.adminOnly && App.adminOnly()));
           if (showBtn || active) {
             ctx.fillStyle = active ? C.sel : '#ffffff'; ctx.strokeStyle = active ? C.sel : '#9a9a9a'; ctx.lineWidth = 1;
@@ -758,7 +863,7 @@
       ctx.restore();
       ctx.restore();
     };
-    drawCols(st.Fc + 1, sh.cols, st.sx, hw + st.FW, W - hw - st.FW);
+    drawCols(st.Fc + 1, st.nC, st.sx, hw + st.FW, W - hw - st.FW);
     drawCols(1, st.Fc, 0, hw, st.FW);
     drawColGroups(sh, hw, W, z);
     ctx.fillStyle = C.hdrLine; ctx.fillRect(hw, hh - 1, W - hw, 1);
@@ -780,12 +885,14 @@
         if (inSel) { ctx.fillStyle = fullRows ? C.hdrFullBg : C.hdrSelBg; ctx.fillRect(0, y, hw, h); }
         ctx.fillStyle = inSel ? (fullRows ? C.hdrFullText : C.hdrSelText) : hdrText;
         ctx.font = `${inSel ? 'bold ' : ''}${(11 * z).toFixed(1)}px Arial, sans-serif`;
-        ctx.fillText(String(r), hw / 2, y + h / 2 + 0.5);
+        const gr = GROUP(r);
+        if (gr) { ctx.fillStyle = GROUP_COLORS[Math.min(gr.level, 2)][0]; ctx.fillRect(0, y, hw - 1, h); continue; }
+        ctx.fillText(String(RR(r)), hw / 2, y + h / 2 + 0.5);
         ctx.fillStyle = C.hdrLine; ctx.fillRect(0, Math.round(y + h) - 1, hw, 1);
       }
       ctx.restore();
     };
-    drawRows(st.Fr + 1, sh.rows, st.sy, hh + st.FH, H - hh - st.FH);
+    drawRows(st.Fr + 1, st.nR, st.sy, hh + st.FH, H - hh - st.FH);
     drawRows(1, st.Fr, 0, hh, st.FH);
     ctx.fillStyle = C.hdrLine; ctx.fillRect(hw - 1, hh, 1, H - hh);
     // canto
@@ -799,7 +906,7 @@
 
   // Barra "Adicionar mais linhas" ao chegar no fim
   function positionAddRows(sh) {
-    const y = st.hdrH + st.top[sh.rows + 1] - st.sy;
+    const y = st.hdrH + st.top[st.nR + 1] - st.sy;
     if (y < st.vh && y > st.hdrH) {
       addRowsBar.hidden = false;
       addRowsBar.style.top = y + 10 + 'px';
@@ -821,12 +928,12 @@
     if (y < st.hdrH) {
       if (st.gut && y < st.gut) {
         const b = (st.groupBoxes || []).find((q) => x >= q.x && x <= q.x + q.w);
-        return b ? { area: 'colGroup', id: b.id } : { area: 'gutter' };
+        return b ? { area: 'colGroup', id: b.id, act: b.act } : { area: 'gutter' };
       }
       const c = colAtScreen(x);
       // filtro criado a partir da coluna: botão no próprio cabeçalho
       const hf = App.activeFilter(sh);
-      if (hf && hf.r1 === 0 && c >= hf.c1 && c <= hf.c2 && colW(c) && (App.views.has(sh.id) || !(App.adminOnly && App.adminOnly())) && x > colX(c) + colW(c) - 22 * st.z && x < colX(c) + colW(c) - 4) return { area: 'filterHdr', c };
+      if (hf && hf.r1 === 0 && RC(c) >= hf.c1 && RC(c) <= hf.c2 && colW(c) && (App.views.has(sh.id) || !(App.adminOnly && App.adminOnly())) && x > colX(c) + colW(c) - 22 * st.z && x < colX(c) + colW(c) - 4) return { area: 'filterHdr', c };
       // planilha compartilhada: só administradores mexem na estrutura das colunas
       if (locked || (App.colsLocked && App.colsLocked())) return { area: 'colHdr', c };
       const right = colX(c) + colW(c);
@@ -852,7 +959,7 @@
       }
       return { area: 'rowHdr', r };
     }
-    const r = Math.min(sh.rows, rowAtScreen(y)), c = Math.min(sh.cols, colAtScreen(x));
+    const r = Math.min(st.nR, rowAtScreen(y)), c = Math.min(st.nC, colAtScreen(x));
     const R = App.selRect();
     const sb = cellRectRange(R);
     if (!(App.editing && App.editing()) && Math.abs(x - (sb.x + sb.w)) <= 5 && Math.abs(y - (sb.y + sb.h)) <= 5) return { area: 'fill', r, c };
@@ -874,8 +981,8 @@
       // botão direito: seleciona a célula se estiver fora da seleção
       const R = App.selRect();
       if (h.area === 'cell' && !App.inRect(R, h.r, h.c)) { if (App.editing && App.editing()) App.commitEdit(); select(h.r, h.c, false, true); }
-      if (h.area === 'colHdr' && !(h.c >= R.c1 && h.c <= R.c2 && R.r1 === 1 && R.r2 >= App.sheet().rows)) selectCols(h.c, h.c);
-      if (h.area === 'rowHdr' && !(h.r >= R.r1 && h.r <= R.r2 && R.c1 === 1 && R.c2 >= App.sheet().cols)) selectRows(h.r, h.r);
+      if (h.area === 'colHdr' && !(h.c >= R.c1 && h.c <= R.c2 && R.r1 === 1 && R.r2 >= st.nR)) selectCols(h.c, h.c);
+      if (h.area === 'rowHdr' && !(h.r >= R.r1 && h.r <= R.r2 && R.c1 === 1 && R.c2 >= st.nC)) selectRows(h.r, h.r);
       return;
     }
     e.preventDefault();
@@ -890,26 +997,35 @@
     if (App.editing && App.editing()) App.commitEdit();
     focusGrid();
     switch (h.area) {
-      case 'corner': selectRange({ r1: 1, c1: 1, r2: sh.rows, c2: sh.cols }); return;
-      case 'colEdge': st.drag = { kind: 'colResize', c: h.c, x0: p.x, w0: sh.colW[h.c] || App.DEF_W }; bindDrag(); return;
-      case 'rowEdge': st.drag = { kind: 'rowResize', r: h.r, y0: p.y, h0: sh.rowH[h.r] || App.DEF_H }; bindDrag(); return;
+      case 'corner': selectRange({ r1: 1, c1: 1, r2: st.nR, c2: st.nC }); return;
+      case 'colEdge': st.drag = { kind: 'colResize', c: RC(h.c), x0: p.x, w0: sh.colW[RC(h.c)] || App.DEF_W }; bindDrag(); return;
+      case 'rowEdge': if (!RR(h.r)) return; st.drag = { kind: 'rowResize', r: RR(h.r), y0: p.y, h0: sh.rowH[RR(h.r)] || App.DEF_H }; bindDrag(); return;
       case 'unhideCols': App.change('Reexibir colunas', () => { let c = h.c - 1; while (c >= 1 && sh.hiddenCols[c]) { delete sh.hiddenCols[c]; c--; } }); return;
       case 'unhideRows': App.change('Reexibir linhas', () => { let r = h.r - 1; while (r >= 1 && sh.hiddenRows[r]) { delete sh.hiddenRows[r]; r--; } }); return;
       case 'freezeRowBar': st.drag = { kind: 'freezeRows' }; bindDrag(); return;
-      case 'colGroup': App.toggleGroup(sh, h.id); return;
+      case 'colGroup': if (h.act === 'lock') App.toggleGroupLock(sh, h.id); else App.toggleGroup(sh, h.id); return;
       case 'gutter': return;
-      case 'filterHdr': App.emit('filterMenu', { c: h.c, x: colX(h.c) + colW(h.c), y: st.hdrH }); return;
+      case 'filterHdr': App.emit('filterMenu', { c: RC(h.c), x: colX(h.c) + colW(h.c), y: st.hdrH }); return;
       case 'freezeColBar': st.drag = { kind: 'freezeCols' }; bindDrag(); return;
-      case 'colHdr':
-        if (e.shiftKey) { sel.ec = h.c; sel.er = sh.rows; sel.ar = 1; App.emit('selection'); schedule(); }
+      case 'colHdr': {
+        // visualização de filtro: segurar a coluna selecionada e arrastar muda a ordem (só para você)
+        const Rs = App.selRect();
+        if (!e.shiftKey && App.views.has(sh.id) && Rs.r1 === 1 && Rs.r2 >= st.nR && h.c >= Rs.c1 && h.c <= Rs.c2 && Rs.c1 > st.Fc) {
+          st.drag = { kind: 'colMove', d1: Rs.c1, d2: Rs.c2, x0: p.x, to: null, active: false }; bindDrag(); return;
+        }
+      }
+        if (e.shiftKey) { sel.ec = h.c; sel.er = st.nR; sel.ar = 1; App.emit('selection'); schedule(); }
         else selectCols(h.c, h.c);
         st.drag = { kind: 'cols', c0: sel.ac }; bindDrag(); return;
       case 'rowHdr':
-        if (e.shiftKey) { sel.er = h.r; sel.ec = sh.cols; sel.ac = 1; App.emit('selection'); schedule(); }
+        if (e.shiftKey) { sel.er = h.r; sel.ec = st.nC; sel.ac = 1; App.emit('selection'); schedule(); }
         else selectRows(h.r, h.r);
         st.drag = { kind: 'rows', r0: sel.ar }; bindDrag(); return;
       case 'fill': st.drag = { kind: 'fill', R: App.selRect() }; bindDrag(); return;
       case 'cell': {
+        // linha de título de grupo (visualização agrupada): abre/fecha o grupo
+        const grp = GROUP(h.r);
+        if (grp) { App.toggleViewGroup(grp.key); return; }
         const info = App.cellInfo(h.r, h.c);
         // clique na caixa de seleção
         if (info.dv && info.dv.type === 'checkbox' && !e.shiftKey) {
@@ -919,9 +1035,9 @@
         }
         // clique na seta do filtro
         const f = App.activeFilter(sh);
-        if (f && h.r === f.r1 && h.c >= f.c1 && h.c <= f.c2 && (App.views.has(sh.id) || !(App.adminOnly && App.adminOnly()))) {
+        if (f && h.r === f.r1 && RC(h.c) >= f.c1 && RC(h.c) <= f.c2 && (App.views.has(sh.id) || !(App.adminOnly && App.adminOnly()))) {
           const right = colX(h.c) + colW(h.c);
-          if (p.x > right - 22 * st.z) { select(h.r, h.c, false, true); App.emit('filterMenu', { c: h.c, x: right, y: rowY(h.r) + rowH(h.r) }); return; }
+          if (p.x > right - 22 * st.z) { select(h.r, h.c, false, true); App.emit('filterMenu', { c: RC(h.c), x: right, y: rowY(h.r) + rowH(h.r) }); return; }
         }
         select(h.r, h.c, e.shiftKey, true);
         // lista suspensa
@@ -938,12 +1054,12 @@
   }
   function selectCols(c1, c2) {
     const sh = App.sheet();
-    sel.ar = 1; sel.ac = c1; sel.er = sh.rows; sel.ec = c2;
+    sel.ar = 1; sel.ac = c1; sel.er = st.nR; sel.ec = c2;
     App.emit('selection'); schedule();
   }
   function selectRows(r1, r2) {
     const sh = App.sheet();
-    sel.ar = r1; sel.ac = 1; sel.er = r2; sel.ec = sh.cols;
+    sel.ar = r1; sel.ac = 1; sel.er = r2; sel.ec = st.nC;
     App.emit('selection'); schedule();
   }
   function bindDrag() {
@@ -957,7 +1073,7 @@
     const p = pos(e);
     const sh = App.sheet();
     const px = Math.max(st.hdrW + 1, Math.min(st.vw - 1, p.x)), py = Math.max(st.hdrH + 1, Math.min(st.vh - 1, p.y));
-    const r = Math.min(sh.rows, rowAtScreen(py)), c = Math.min(sh.cols, colAtScreen(px));
+    const r = Math.min(st.nR, rowAtScreen(py)), c = Math.min(st.nC, colAtScreen(px));
     switch (d.kind) {
       case 'cells': if (r !== sel.er || c !== sel.ec) { sel.er = r; sel.ec = c; App.emit('selection'); schedule(); } break;
       case 'cols': if (c !== sel.ec) { sel.ec = c; App.emit('selection'); schedule(); } break;
@@ -970,6 +1086,13 @@
       case 'rowResize': {
         const hgt = Math.max(5, d.h0 + (p.y - d.y0) / st.z);
         sh.rowH[d.r] = hgt; d.changed = true; layout(); break;
+      }
+      case 'colMove': {
+        if (Math.abs(p.x - d.x0) > 6) d.active = true;
+        const cc = colAtScreen(px);
+        d.to = p.x > colX(cc) + colW(cc) / 2 ? cc + 1 : cc;
+        if (d.to <= st.Fc) d.to = st.Fc + 1;
+        schedule(); break;
       }
       case 'freezeRows': d.to = p.y < st.hdrH + 4 ? 0 : rowAtScreen(p.y); schedule(); break;
       case 'freezeCols': d.to = p.x < st.hdrW + 4 ? 0 : colAtScreen(p.x); schedule(); break;
@@ -1006,6 +1129,13 @@
     const d = st.drag;
     st.drag = null;
     if (!d) return;
+    if (d.kind === 'colMove') {
+      schedule();
+      if (!d.active || d.to === null) return;
+      const res = App.moveViewCols(d.d1, d.d2, d.to);
+      if (res) setTimeout(() => selectCols(res.from, res.to), 0);
+      return;
+    }
     const sh = App.sheet(), si = doc.active;
     if (d.kind === 'colResize' || d.kind === 'rowResize') {
       if (d.changed) {
@@ -1014,7 +1144,7 @@
         sh[key][idx] = d.kind === 'colResize' ? d.w0 : d.h0;
         const R = App.selRect();
         App.change('Redimensionar', () => {
-          const full = d.kind === 'colResize' ? R.r1 === 1 && R.r2 >= sh.rows && idx >= R.c1 && idx <= R.c2 : R.c1 === 1 && R.c2 >= sh.cols && idx >= R.r1 && idx <= R.r2;
+          const full = d.kind === 'colResize' ? R.r1 === 1 && R.r2 >= st.nR && idx >= R.c1 && idx <= R.c2 : R.c1 === 1 && R.c2 >= st.nC && idx >= R.r1 && idx <= R.r2;
           if (full) { const [a, b] = d.kind === 'colResize' ? [R.c1, R.c2] : [R.r1, R.r2]; for (let i = a; i <= b; i++) sh[key][i] = val; }
           else sh[key][idx] = val;
         });
@@ -1051,9 +1181,9 @@
   function autofitCols(c) {
     const sh = App.sheet(), si = doc.active;
     const R = App.selRect();
-    const cols = R.r1 === 1 && R.r2 >= sh.rows && c >= R.c1 && c <= R.c2 ? range(R.c1, R.c2) : [c];
+    const cols = (R.r1 === 1 && R.r2 >= st.nR && c >= R.c1 && c <= R.c2 ? range(R.c1, R.c2) : [c]).map(RC);
     const used = App.usedRange(sh);
-    App.change('Ajustar ao conteúdo', () => {
+    App.change('Ajustar ao conteúdo', () => App.withReal(() => {
       for (const col of cols) {
         let maxW = 0;
         for (let r = 1; r <= Math.max(1, used.maxR); r++) {
@@ -1067,7 +1197,7 @@
         if (maxW) sh.colW[col] = Math.min(1000, Math.max(30, Math.ceil(maxW)));
         else delete sh.colW[col];
       }
-    });
+    }));
   }
   const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
 
@@ -1094,10 +1224,13 @@
     if (App.adminOnly && App.adminOnly()) return; // tamanho das linhas: só administradores
     const si = App.sheetIndex(sh);
     App.invalidate();
-    for (const r of rows) {
-      const h = autoRowHeight(sh, si, r);
-      if (h > (sh.rowH[r] || App.DEF_H)) sh.rowH[r] = h;
-    }
+    // rows: linhas reais
+    App.withReal(() => {
+      for (const r of rows) {
+        const h = autoRowHeight(sh, si, r);
+        if (h > (sh.rowH[r] || App.DEF_H)) sh.rowH[r] = h;
+      }
+    });
   };
 
   // Dicas ao passar o mouse (notas, comentários, erros)
@@ -1106,7 +1239,7 @@
     if (st.drag) return;
     const p = pos(e);
     const h = hit(p.x, p.y);
-    scroller.style.cursor = h.area === 'colEdge' ? 'col-resize' : h.area === 'rowEdge' ? 'row-resize' : h.area === 'fill' ? 'crosshair'
+    scroller.style.cursor = h.area === 'cell' && GROUP(h.r) ? 'pointer' : h.area === 'colEdge' ? 'col-resize' : h.area === 'rowEdge' ? 'row-resize' : h.area === 'fill' ? 'crosshair'
       : h.area === 'colHdr' || h.area === 'filterHdr' || h.area === 'colGroup' || h.area === 'rowHdr' || h.area === 'unhideCols' || h.area === 'unhideRows' || h.area === 'corner' ? 'pointer'
         : h.area === 'freezeRowBar' ? 'row-resize' : h.area === 'freezeColBar' ? 'col-resize' : 'default';
     const key = h.area === 'cell' ? h.r + ':' + h.c : null;
@@ -1145,11 +1278,12 @@
     if (document.fonts) document.fonts.addEventListener('loadingdone', schedule);
     // anima o contorno de cópia
     setInterval(() => { if (st.marquee) schedule(); }, 120);
+    setInterval(() => { if (st.hasCrit) { st.hasCrit = false; schedule(); } }, 550);
     App.on('change', () => { layout(); App.emit('selection'); });
     App.on('sheet', () => {
       const sh = App.sheet();
-      sel.ar = Math.min(sel.ar, sh.rows); sel.er = Math.min(sel.er, sh.rows);
-      sel.ac = Math.min(sel.ac, sh.cols); sel.ec = Math.min(sel.ec, sh.cols);
+      sel.ar = Math.min(sel.ar, st.nR); sel.er = Math.min(sel.er, st.nR);
+      sel.ac = Math.min(sel.ac, st.nC); sel.ec = Math.min(sel.ec, st.nC);
       scroller.scrollLeft = 0; scroller.scrollTop = 0; st.sx = 0; st.sy = 0;
       layout(); App.emit('selection');
     });

@@ -66,7 +66,7 @@
         forSel((s) => { if (val === null) delete s.wrap; else s.wrap = val; });
         const used = App.usedRange(sh);
         const rows = [];
-        for (let r = R.r1; r <= Math.min(R.r2, Math.max(used.maxR, R.r1)); r++) rows.push(r);
+        for (let r = R.r1; r <= Math.min(R.r2, Math.max(used.maxR, R.r1)); r++) { const p = App.realCell(r, R.c1); if (p) rows.push(p.r); }
         App.autoFitRows(sh, rows);
       }), sc);
     } else def(id, label, () => setKey(key, label)(val), sc);
@@ -183,8 +183,26 @@
   });
   def('insertSmart', 'Inserir linhas/colunas', () => { const sh = App.sheet(), R = App.selRect(); App.run(isFullCols(R, sh) && !isFullRows(R, sh) ? 'insertColsLeft' : 'insertRowsAbove'); }, 'Ctrl+Alt+=');
   def('deleteSmart', 'Excluir linhas/colunas', () => { const sh = App.sheet(), R = App.selRect(); App.run(isFullCols(R, sh) && !isFullRows(R, sh) ? 'deleteCols' : 'deleteRows'); }, 'Ctrl+Alt+-');
+  // visualização reordenada: percorre as células da seleção na tela (já traduzidas para as reais)
+  const viewCells = (sh, R, fn) => {
+    const used = App.usedRange(sh);
+    for (let r = R.r1; r <= Math.min(R.r2, (App.vm ? App.vm.nRows : sh.rows)); r++) {
+      const p0 = App.realCell(r, R.c1);
+      if (!p0 || p0.r > used.maxR) continue;
+      for (let c = R.c1; c <= Math.min(R.c2, App.vm ? App.vm.nCols : sh.cols); c++) { const p = App.realCell(r, c); if (p) fn(p.r, p.c, E.addrToStr(p.r, p.c)); }
+    }
+  };
   def('clearValues', 'Excluir valores', () => {
     const sh = App.sheet(), R = App.selRect();
+    if (App.vm) {
+      App.change('Excluir valores', () => App.withReal(() => viewCells(sh, R, (r, c, a) => {
+        if (!sh.cells[a]) return;
+        const dv = App.dvAt(sh, r, c);
+        sh.cells[a].v = dv && dv.type === 'checkbox' ? App.cbValues(dv).off : '';
+        App.cleanup(sh, a);
+      })));
+      return;
+    }
     App.change('Excluir valores', () => {
       for (const a of Object.keys(sh.cells)) {
         const p = E.parseAddr(a);
@@ -198,6 +216,7 @@
   }, 'Delete');
   def('clearAll', 'Limpar tudo (valores e formatação)', () => {
     const sh = App.sheet(), R = App.selRect();
+    if (App.vm) { App.change('Limpar', () => viewCells(sh, R, (r, c, a) => { delete sh.cells[a]; })); return; }
     App.change('Limpar', () => { for (const a of Object.keys(sh.cells)) { const p = E.parseAddr(a); if (App.inRect(R, p.row, p.col)) delete sh.cells[a]; } });
   });
   def('hideRows', 'Ocultar linhas', () => { const sh = App.sheet(), R = App.selRect(); App.change('Ocultar linhas', () => { for (let r = R.r1; r <= R.r2; r++) sh.hiddenRows[r] = true; }); }, 'Ctrl+Alt+9');
@@ -314,29 +333,65 @@
       if (list.length) sh.colGroups = list; else delete sh.colGroups;
     });
   });
-  // Mostrar só os últimos N dias: linhas mais antigas ficam recolhidas atrás de um botão +
-  def('recentRows', 'Mostrar só os últimos dias', () => {
+  // Ocultar linhas com +: datas antigas, acima de uma linha e/ou valores de uma coluna (ex.: status FINALIZADO).
+  // Ficam recolhidas para todos; o botão + mostra as linhas só para quem clicou.
+  def('recentRows', 'Ocultar linhas (com +)', () => {
     const sh = App.sheet(), used = App.usedRange(sh), si = App.sheetIndex(sh);
-    const cur = sh.recent || { col: App.sel.ac, days: 30 };
+    const cur = App.foldRules(sh) || {};
     const head = (c) => { const n = sh.colNames && sh.colNames[c]; if (n) return n; const v = App.value(si, 1, c); return v === null || v === undefined ? '' : String(App.fmtValue(v, App.style(sh, 1, c).nf)); };
-    const opts = [];
-    for (let c = 1; c <= Math.max(1, used.maxC); c++) opts.push(`<option value="${c}"${cur.col === c ? ' selected' : ''}>${E.numToCol(c)}${head(c) ? ' · ' + App.esc(String(head(c)).slice(0, 30)) : ''}</option>`);
-    App.ui.modal({
-      title: 'Mostrar só os últimos dias', width: '440px',
-      body: `<p class="sp-hint">As linhas com data mais antiga ficam recolhidas para todos. Um botão <b>+</b> mostra as antigas, e abrir vale só para quem clicou.</p>
-        <label class="field"><span>Coluna com a data</span><select class="input" id="rc-col">${opts.join('')}</select></label>
-        <label class="field"><span>Mostrar os últimos (dias)</span><input class="input" id="rc-days" type="number" min="1" max="3650" value="${cur.days || 30}"></label>`,
+    const colOpts = (sel) => { let o = ''; for (let c = 1; c <= Math.max(1, used.maxC); c++) o += `<option value="${c}"${sel === c ? ' selected' : ''}>${E.numToCol(c)}${head(c) ? ' · ' + App.esc(String(head(c)).slice(0, 30)) : ''}</option>`; return o; };
+    const distinct = (c) => { const m = new Map(); for (let r = 2; r <= used.maxR; r++) { const t = String(App.fmtValue(App.value(si, r, c), App.style(sh, r, c).nf)).trim(); if (t) m.set(t, (m.get(t) || 0) + 1); } return [...m.keys()].sort((x, y) => x.localeCompare(y, 'pt-BR')); };
+    const m = App.ui.modal({
+      title: 'Ocultar linhas (com +)', width: '520px', enterSubmits: false,
+      body: `<p class="sp-hint">As linhas que atenderem a qualquer regra marcada ficam recolhidas para todos. Um botão <b>+</b> mostra essas linhas, e abrir vale só para quem clicou.</p>
+        <div class="fold-rule"><label class="check"><input type="checkbox" id="fd-days-on"${cur.days ? ' checked' : ''}> Datas com mais de</label>
+          <input class="input fd-n" id="fd-days" type="number" min="1" max="3650" value="${(cur.days && cur.days.n) || 30}"> dias na coluna <select class="input" id="fd-days-col">${colOpts((cur.days && cur.days.col) || App.sel.ac)}</select></div>
+        <div class="fold-rule"><label class="check"><input type="checkbox" id="fd-above-on"${cur.above ? ' checked' : ''}> Linhas acima da linha</label>
+          <input class="input fd-n" id="fd-above" type="number" min="2" value="${cur.above || App.sel.ar}"><span class="sp-hint">(as linhas congeladas continuam visíveis)</span></div>
+        <div class="fold-rule"><label class="check"><input type="checkbox" id="fd-val-on"${cur.values ? ' checked' : ''}> Linhas em que a coluna</label>
+          <select class="input" id="fd-val-col">${colOpts((cur.values && cur.values.col) || App.sel.ac)}</select> for:</div>
+        <div class="fd-vals" id="fd-vals"></div>`,
       buttons: [
-        ...(sh.recent ? [{ label: 'Desativar', action: () => { App.change('Últimos dias', () => { delete sh.recent; }); } }] : []),
+        ...(App.foldRules(sh) ? [{ label: 'Desativar tudo', action: () => { App.change('Ocultar linhas', () => { delete sh.fold; delete sh.recent; }); } }] : []),
         { label: 'Cancelar' },
         { label: 'Aplicar', primary: true, action: (d) => {
-          const col = +d.querySelector('#rc-col').value, days = Math.max(1, Math.min(3650, parseInt(d.querySelector('#rc-days').value, 10) || 30));
-          App.change('Últimos dias', () => { sh.recent = { col, days }; });
+          const rule = {};
+          if (d.querySelector('#fd-days-on').checked) rule.days = { col: +d.querySelector('#fd-days-col').value, n: Math.max(1, parseInt(d.querySelector('#fd-days').value, 10) || 30) };
+          if (d.querySelector('#fd-above-on').checked) rule.above = Math.max(2, parseInt(d.querySelector('#fd-above').value, 10) || 2);
+          const list = [...d.querySelectorAll('#fd-vals input:checked')].map((x) => x.value);
+          if (d.querySelector('#fd-val-on').checked && list.length) rule.values = { col: +d.querySelector('#fd-val-col').value, list };
+          App.change('Ocultar linhas', () => { delete sh.recent; if (Object.keys(rule).length) sh.fold = rule; else delete sh.fold; });
         } },
       ],
     });
+    const drawVals = () => {
+      const c = +m.el.querySelector('#fd-val-col').value;
+      const chosen = new Set(cur.values && cur.values.col === c ? cur.values.list : []);
+      const vals = distinct(c);
+      m.el.querySelector('#fd-vals').innerHTML = vals.length ? vals.slice(0, 200).map((v) => `<label class="check"><input type="checkbox" value="${App.esc(v)}"${chosen.has(v) ? ' checked' : ''}> ${App.esc(v)}</label>`).join('') : '<span class="sp-hint">Coluna sem valores.</span>';
+      m.el.querySelectorAll('#fd-vals input').forEach((x) => (x.onchange = () => { if (x.checked) m.el.querySelector('#fd-val-on').checked = true; }));
+    };
+    m.el.querySelector('#fd-val-col').onchange = drawVals;
+    drawVals();
   });
   def('toggleOldRows', 'Mostrar/ocultar linhas antigas', () => App.toggleOld(App.sheet()));
+  // Container crítico (coluna T por padrão): a célula fica piscando como alerta. Funciona em lote (várias linhas).
+  def('markCritical', 'Marcar container como crítico', (on) => {
+    const sh = App.sheet(), R = App.selRect(), col = sh.critCol || 20;
+    const rows = [];
+    const real = (r) => { const p = App.realCell ? App.realCell(r, 1) : { r }; return p ? { r: p.r, c: col } : null; };
+    for (let r = R.r1; r <= Math.min(R.r2, R.r1 + 5000); r++) { const p = real(r); if (p && !App.isRowHidden(sh, p.r)) rows.push(r); }
+    const isOn = (r) => { const p = real(r); const x = p && sh.cells[E.addrToStr(p.r, p.c)]; return !!(x && x.crit); };
+    const mark = typeof on === 'boolean' ? on : !rows.every(isOn);
+    App.change(mark ? 'Marcar como crítico' : 'Remover alerta de crítico', () => {
+      for (const r of rows) {
+        const p = real(r); if (!p) continue;
+        const a = E.addrToStr(p.r, p.c);
+        if (mark) { sh.cells[a] = sh.cells[a] || { v: '' }; sh.cells[a].crit = true; } else if (sh.cells[a]) { delete sh.cells[a].crit; App.cleanup(sh, a); }
+      }
+    });
+    notify(mark ? `${rows.length} ${rows.length === 1 ? 'container marcado' : 'containers marcados'} como crítico (coluna ${E.numToCol(col)}).` : 'Alerta de crítico removido.');
+  });
   def('freezeRows', 'Congelar linhas', (n) => { const sh = App.sheet(); App.change('Congelar', () => { sh.freeze.rows = n === 'current' ? sel.ar : n; }); });
   def('freezeCols', 'Congelar colunas', (n) => { const sh = App.sheet(); App.change('Congelar', () => { sh.freeze.cols = n === 'current' ? sel.ac : n; }); });
   def('zoom', 'Zoom', (z) => { doc.zoom = Math.max(25, Math.min(400, +z || 100)); App.scheduleSave(); App.grid.layout(); App.emit('zoom'); });
@@ -499,19 +554,19 @@
     const R = App.selRect();
     if (R.r1 === R.r2) {
       if (R.r1 <= 1) return;
-      App.change('Preencher para baixo', () => App.fill(si(), { r1: R.r1 - 1, c1: R.c1, r2: R.r1 - 1, c2: R.c2 }, Object.assign({}, R, { r1: R.r1 - 1 }), 'down'));
+      App.change('Preencher para baixo', () => App.fill(si(), { r1: R.r1 - 1, c1: R.c1, r2: R.r1 - 1, c2: R.c2 }, Object.assign({}, R, { r1: R.r1 - 1 }), 'down', true));
       return;
     }
-    App.change('Preencher para baixo', () => App.fill(si(), { r1: R.r1, c1: R.c1, r2: R.r1, c2: R.c2 }, R, 'down'));
+    App.change('Preencher para baixo', () => App.fill(si(), { r1: R.r1, c1: R.c1, r2: R.r1, c2: R.c2 }, R, 'down', true));
   }, 'Ctrl+D');
   def('fillRight', 'Preencher para a direita', () => {
     const R = App.selRect();
     if (R.c1 === R.c2) {
       if (R.c1 <= 1) return;
-      App.change('Preencher para a direita', () => App.fill(si(), { r1: R.r1, c1: R.c1 - 1, r2: R.r2, c2: R.c1 - 1 }, Object.assign({}, R, { c1: R.c1 - 1 }), 'right'));
+      App.change('Preencher para a direita', () => App.fill(si(), { r1: R.r1, c1: R.c1 - 1, r2: R.r2, c2: R.c1 - 1 }, Object.assign({}, R, { c1: R.c1 - 1 }), 'right', true));
       return;
     }
-    App.change('Preencher para a direita', () => App.fill(si(), { r1: R.r1, c1: R.c1, r2: R.r2, c2: R.c1 }, R, 'right'));
+    App.change('Preencher para a direita', () => App.fill(si(), { r1: R.r1, c1: R.c1, r2: R.r2, c2: R.c1 }, R, 'right', true));
   }, 'Ctrl+R');
   def('selectAll', 'Selecionar tudo', () => {
     const sh = App.sheet(), R = App.selRect();
@@ -754,6 +809,9 @@
       'Shift+F11': 'newSheet', 'Ctrl+PageDown': 'nextSheet', 'Ctrl+PageUp': 'prevSheet', 'Alt+ArrowDown': 'nextSheet', 'Alt+ArrowUp': 'prevSheet',
       'Ctrl+Shift+KeyF': 'toggleMenus', 'Ctrl+Alt+KeyR': 'insertChart', 'Ctrl+Shift+Digit7': 'borderOuter',
     };
+    // Alt+/ (pesquisar nos menus): no teclado brasileiro (ABNT2) a barra fica na tecla IntlRo ou no teclado numérico
+    const slash = e.key === '/' || e.key === '?' || e.code === 'Slash' || e.code === 'IntlRo' || e.code === 'NumpadDivide';
+    if (e.altKey && !ctrl && slash) { e.preventDefault(); App.run('menuSearch'); return; }
     if (MAP[code] && cmds[MAP[code]]) {
       e.preventDefault();
       if (MAP[code] === 'borderOuter') App.run('border', { type: 'outer' });
@@ -829,7 +887,7 @@
       if (ctrl && e.code === 'KeyP') { e.preventDefault(); App.run('print'); }
       else if (ctrl && e.code === 'KeyS') { e.preventDefault(); App.save(); notify('Todas as alterações foram salvas no navegador.'); }
       else if (ctrl && (e.code === 'KeyF' || e.code === 'KeyH') && !App.editing() && !/input|textarea/i.test(e.target.tagName)) { e.preventDefault(); App.run(e.code === 'KeyF' ? 'find' : 'findReplace'); }
-      else if (e.altKey && e.code === 'Slash') { e.preventDefault(); App.run('menuSearch'); }
+      else if (e.altKey && !ctrl && (e.key === '/' || e.key === '?' || e.code === 'Slash' || e.code === 'IntlRo' || e.code === 'NumpadDivide')) { e.preventDefault(); App.run('menuSearch'); }
       else if (ctrl && e.code === 'Slash') { e.preventDefault(); App.run('shortcuts'); }
     });
     App.on('gridMouseDown', () => { sel.tabOrigin = null; if (App.paint) App._paintArmed = true; });
