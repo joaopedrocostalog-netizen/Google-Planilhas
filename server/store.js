@@ -48,6 +48,7 @@ function pgStore(url) {
     connectionString: url, ssl: noSsl ? false : { rejectUnauthorized: false }, max: 8,
     options: schema ? `-c search_path=${schema}` : undefined,
   });
+  pool.on('error', (e) => console.error('Erro na conexão com o banco:', e.code || '', e.message));
   const q = (text, params) => pool.query(text, params);
   const row = async (text, params) => { const r = await q(text, params); return r.rows[0] || null; };
   return {

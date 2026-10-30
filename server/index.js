@@ -391,8 +391,30 @@ async function shutdown() {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-store.init().then(() => {
+// Descreve o erro de conexão sem expor a senha
+function describeDbError(e) {
+  const parts = [];
+  if (e.code) parts.push('código ' + e.code);
+  if (e.message) parts.push(e.message);
+  for (const sub of e.errors || []) parts.push((sub.code ? sub.code + ' ' : '') + (sub.message || ''));
+  if (!parts.length) parts.push(String(e));
+  try {
+    const u = new URL(process.env.DATABASE_URL || '');
+    parts.push(`(servidor ${u.hostname}${u.port ? ':' + u.port : ''}, banco ${u.pathname.slice(1)}, usuário ${u.username})`);
+  } catch (err) { parts.push('(DATABASE_URL não é um endereço válido: confira se colou o "Internal Database URL" inteiro)'); }
+  return parts.join(' | ');
+}
+
+(async function start() {
+  for (let attempt = 1; ; attempt++) {
+    try { await store.init(); break; }
+    catch (e) {
+      console.error(`Não foi possível iniciar o banco de dados (tentativa ${attempt}/6): ${describeDbError(e)}`);
+      if (attempt >= 6) process.exit(1);
+      await new Promise((r) => setTimeout(r, attempt * 3000));
+    }
+  }
   server.listen(PORT, () => console.log(`Planilhas no ar na porta ${PORT} (armazenamento: ${store.kind})`));
-}).catch((e) => { console.error('Não foi possível iniciar o banco de dados:', e.message); process.exit(1); });
+})();
 
 module.exports = { server };
