@@ -111,14 +111,18 @@
   App.cloneCell = (x) => (x ? JSON.parse(JSON.stringify(x)) : null);
 
   // ---------- Histórico ----------
+  // O histórico guarda alterações (patches) e suas inversas: desfazer só mexe no que você alterou,
+  // sem apagar edições feitas ao mesmo tempo por outras pessoas.
   const hist = { undo: [], redo: [] };
   const replacer = (k, v) => (k[0] === '_' ? undefined : v);
-  function snapshot() { return JSON.stringify({ sheets: doc.sheets, active: doc.active, names: doc.names }, replacer); }
+  const docView = () => ({ title: doc.title, names: doc.names, sheets: doc.sheets });
+  function snapshot() { return JSON.stringify({ title: doc.title, sheets: doc.sheets, active: doc.active, names: doc.names }, replacer); }
   function restore(snap) {
     const d = JSON.parse(snap);
     doc.sheets = d.sheets.map(normalizeSheet);
     doc.active = Math.min(d.active || 0, doc.sheets.length - 1);
     doc.names = d.names || {};
+    if (d.title !== undefined) doc.title = d.title;
     invalidate();
     App.emit('sheet');
     App.emit('change', { undo: true });
@@ -131,32 +135,76 @@
     App._cfCache = new Map();
   }
   App.invalidate = invalidate;
+  // Aplica uma alteração ao documento mantendo a página ativa
+  function applyPatch(p) {
+    const activeId = doc.sheets[doc.active] && doc.sheets[doc.active].id;
+    const view = docView();
+    window.Patch.apply(view, p, normalizeSheet);
+    doc.title = view.title; doc.names = view.names || {};
+    let idx = doc.sheets.findIndex((s) => s.id === activeId);
+    if (idx < 0) idx = Math.min(doc.active, doc.sheets.length - 1);
+    doc.active = Math.max(0, idx);
+    invalidate();
+  }
+  App.applyPatch = applyPatch;
   // Executa uma alteração com registro no histórico. fn pode retornar false para cancelar.
   App.change = (label, fn) => {
     const snap = snapshot();
     let res;
     try { res = fn(); } catch (e) { console.error(e); restore(snap); App.emit('notify', 'Não foi possível concluir a operação.'); return false; }
     if (res === false) return false;
-    hist.undo.push({ label, snap });
-    if (hist.undo.length > 150) hist.undo.shift();
-    hist.redo = [];
+    const [fwd, inv] = window.Patch.diffPair(JSON.parse(snap), JSON.parse(JSON.stringify(docView(), replacer)));
+    // permissões (planilhas compartilhadas): desfaz a alteração se não for permitida
+    if (fwd && App.validatePatch) {
+      const err = App.validatePatch(fwd);
+      if (err) { applyPatch(inv); if (isStructural(inv)) App.emit('sheet'); App.emit('change', {}); App.emit('notify', err); return false; }
+    }
+    if (fwd) {
+      hist.undo.push({ label, fwd, inv });
+      if (hist.undo.length > 200) hist.undo.shift();
+      hist.redo = [];
+    }
     invalidate();
     App.emit('change', { label });
+    if (fwd) App.emit('localPatch', fwd);
     scheduleSave();
     return true;
   };
-  App.undo = () => {
-    const h = hist.undo.pop();
-    if (!h) return App.emit('notify', 'Nada para desfazer');
-    hist.redo.push({ label: h.label, snap: snapshot() });
-    restore(h.snap);
+  const isStructural = (p) => !!(p && (p.order || Object.values(p.sheets || {}).some((e) => e.created || e.removed)));
+  // Depois de desfazer/refazer, mostra a página afetada
+  function focusPatch(p) {
+    for (const id in p.sheets || {}) {
+      const i = doc.sheets.findIndex((s) => s.id === id);
+      if (i >= 0) { doc.active = i; return; }
+    }
+  }
+  function step(from, to, key, back) {
+    const h = from.pop();
+    if (!h) return App.emit('notify', key === 'inv' ? 'Nada para desfazer' : 'Nada para refazer');
+    const p = h[key];
+    if (App.validatePatch) {
+      const err = App.validatePatch(p);
+      if (err) { from.push(h); return App.emit('notify', err); }
+    }
+    const before = doc.active;
+    applyPatch(p);
+    focusPatch(p);
+    to.push(h);
+    if (before !== doc.active || isStructural(p)) App.emit('sheet');
+    App.emit('change', { undo: back });
+    App.emit('localPatch', p);
+    scheduleSave();
+  }
+  App.undo = () => step(hist.undo, hist.redo, 'inv', true);
+  App.redo = () => step(hist.redo, hist.undo, 'fwd', false);
+  // Alteração vinda de outra pessoa (não entra no histórico local)
+  App.applyRemote = (p) => {
+    applyPatch(p);
+    if (isStructural(p)) App.emit('sheet');
+    App.emit('change', { remote: true });
+    if (p.title !== undefined) App.emit('title');
   };
-  App.redo = () => {
-    const h = hist.redo.pop();
-    if (!h) return App.emit('notify', 'Nada para refazer');
-    hist.undo.push({ label: h.label, snap: snapshot() });
-    restore(h.snap);
-  };
+  App.clearHistory = () => { hist.undo = []; hist.redo = []; };
   App.snapshot = snapshot;
   App.restore = restore;
   App.canUndo = () => hist.undo.length > 0;
@@ -184,6 +232,7 @@
     localStorage.setItem('planilhas:last', App.docId);
   }
   function save() {
+    if (App.cloudMode) return; // planilhas da nuvem são salvas no servidor
     try {
       if (!App.docId) App.docId = uid();
       localStorage.setItem(docKey(App.docId), serialize());
@@ -227,7 +276,9 @@
   };
   // Troca o documento aberto
   App.openDoc = (id, data) => {
-    save();
+    const wasCloud = App.cloudMode;
+    App.emit('localDoc');
+    if (!wasCloud) save();
     const d = data || App.readDoc(id);
     if (!d) return false;
     App.docId = id;
@@ -239,7 +290,9 @@
     return true;
   };
   App.newDocument = (data) => {
-    save();
+    const wasCloud = App.cloudMode;
+    App.emit('localDoc');
+    if (!wasCloud) save();
     App.docId = uid();
     loadData(data || { title: 'Planilha sem título', sheets: [newSheet('Página1')] });
     if (App.sel) Object.assign(App.sel, { ar: 1, ac: 1, er: 1, ec: 1 });
@@ -251,7 +304,7 @@
   App.serialize = serialize;
   App.save = save;
   App.scheduleSave = scheduleSave;
-  App.setTitle = (t) => { doc.title = t || 'Planilha sem título'; scheduleSave(); App.emit('title'); };
+  App.setTitle = (t) => { App.change('Renomear planilha', () => { doc.title = t || 'Planilha sem título'; }); App.emit('title'); };
 
   // ---------- Formatos de número ----------
   App.FORMATS = {

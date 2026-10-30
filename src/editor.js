@@ -20,7 +20,9 @@
     if (ed.active) return;
     const sh = App.sheet();
     const g = App.mergeAt(sh, App.sel.ar, App.sel.ac);
-    ed.r = g ? g.r1 : App.sel.ar; ed.c = g ? g.c1 : App.sel.ac;
+    const er = g ? g.r1 : App.sel.ar, ec = g ? g.c1 : App.sel.ac;
+    if (App.editGuard) { const err = App.editGuard(sh, er, ec); if (err) { App.emit('notify', err); if (opts.from === 'bar') bar.blur(); App.grid.focus(); return; } }
+    ed.r = er; ed.c = ec;
     ed.si = doc.active;
     ed.mode = opts.mode || 'enter';
     ed.point = null; ed.pointCell = null;
