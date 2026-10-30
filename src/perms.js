@@ -10,6 +10,7 @@
   const minLevel = (a, b) => (RANK[a] <= RANK[b] ? a : b);
   const maxLevel = (a, b) => (RANK[a] >= RANK[b] ? a : b);
   const isLevel = (x) => LEVELS.includes(x);
+  const COLS_MSG = 'Somente administradores podem inserir, excluir, ocultar ou redimensionar colunas.';
 
   function defaultAcl() {
     return { link: 'none', linkSector: null, sectors: [], members: [] };
@@ -155,11 +156,9 @@
         // altura automática de linha acompanha a edição de uma célula liberada
         const keys = Object.keys(e.props).filter((k) => !(k === 'rowH' && bestLevel(perms, id) === 'edit'));
         const resize = 'rows' in e.props || 'cols' in e.props;
-        if ('access' in e.props) {
-          return 'cols' in e.props
-            ? `A página ${name} tem permissões por coluna. Somente administradores podem inserir ou excluir colunas nela.`
-            : 'Somente administradores podem definir permissões por coluna.';
-        }
+        // as colunas (A, B, C…) só podem ser alteradas por administradores
+        if ('cols' in e.props || 'colW' in e.props || 'hiddenCols' in e.props) return COLS_MSG;
+        if ('access' in e.props) return 'Somente administradores podem definir permissões por coluna.';
         if ('protected' in e.props) {
           return resize
             ? `A página ${name} tem intervalos protegidos que seriam deslocados. Somente administradores podem inserir ou excluir linhas e colunas antes deles.`
@@ -170,7 +169,6 @@
           if (resize && hasColRules(perms, id)) return `Você não pode inserir ou excluir linhas e colunas na página ${name}.`;
           return lv === 'view' ? `Você só pode visualizar a formatação da página ${name}.` : 'Você não tem acesso a esta página.';
         }
-        if ('cols' in e.props && perms.ruled && perms.ruled[id]) return `A página ${name} tem permissões por coluna. Somente administradores podem inserir ou excluir colunas nela.`;
       }
       if (e.cells) {
         for (const a in e.cells) {
@@ -226,7 +224,7 @@
   // Pode ver a célula?
   const canSee = (perms, sheetId, addr) => sheetVisible(perms, sheetId) && colLevel(perms, sheetId, colOf(addr)) !== 'none';
 
-  const api = { compute, validate, filterDoc, filterPatch, levelOf, colLevel, sheetVisible, bestLevel, hasHiddenCols, hasColRules, blockingProtection, defaultAcl, canSee, colOf, colName, RANK, LEVELS };
+  const api = { COLS_MSG, compute, validate, filterDoc, filterPatch, levelOf, colLevel, sheetVisible, bestLevel, hasHiddenCols, hasColRules, blockingProtection, defaultAcl, canSee, colOf, colName, RANK, LEVELS };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Perms = api;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -750,6 +750,8 @@
     }
     if (y < st.hdrH) {
       const c = colAtScreen(x);
+      // planilha compartilhada: só administradores mexem na estrutura das colunas
+      if (App.colsLocked && App.colsLocked()) return { area: 'colHdr', c };
       const right = colX(c) + colW(c);
       if (Math.abs(x - right) <= 4) return { area: 'colEdge', c };
       const left = colX(c);

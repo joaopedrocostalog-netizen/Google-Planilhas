@@ -197,7 +197,7 @@
     if (!cloud.id && !App.cloudMode) return;
     disconnect();
     cloud.id = null; cloud.perms = null; cloud.initialized = false; cloud.pending.clear();
-    App.cloudMode = false; App.validatePatch = null; App.editGuard = null; App.colBlocked = null; App.colReadonly = null;
+    App.cloudMode = false; App.validatePatch = null; App.editGuard = null; App.colBlocked = null; App.colReadonly = null; App.colsLocked = null;
     closeHistory();
     renderChip();
   }
@@ -247,6 +247,7 @@
     // colunas ocultas por permissão somem da grade; as somente leitura ganham um cadeado no cabeçalho
     App.colBlocked = cloud.perms.admin ? null : (sh, c) => Perms.colLevel(cloud.perms, sh.id, c) === 'none';
     App.colReadonly = cloud.perms.admin ? null : (sh, c) => Perms.hasColRules(cloud.perms, sh.id) && Perms.colLevel(cloud.perms, sh.id, c) === 'view';
+    App.colsLocked = () => !!(App.cloudMode && cloud.perms && !cloud.perms.admin);
     App.editGuard = (sh, r, c) => {
       const lv = Perms.colLevel(cloud.perms, sh.id, c);
       if (lv !== 'edit') {
@@ -499,8 +500,8 @@
     const peekAccess = (sid) => draft[sid] || (sheetById(sid) || {}).access || {};
     const m = App.ui.modal({
       title: `Compartilhar "${doc.title}"`, width: '820px', cls: 'modal-tall share-modal', enterSubmits: false,
-      body: `<div class="sp-tabs share-tabs"><button class="on" data-t="people">Pessoas</button><button data-t="sectors">Setores e permissões</button><button data-t="link">Acesso pelo link</button></div>
-        <div class="share-pane" data-pane="people"></div><div class="share-pane" data-pane="sectors" hidden></div><div class="share-pane" data-pane="link" hidden></div>`,
+      body: `<div class="sp-tabs share-tabs"><button class="on" data-t="people">Pessoas</button><button data-t="sectors">Setores e permissões</button><button data-t="cols">Colunas por setor</button><button data-t="link">Acesso pelo link</button></div>
+        <div class="share-pane" data-pane="people"></div><div class="share-pane" data-pane="sectors" hidden></div><div class="share-pane" data-pane="cols" hidden></div><div class="share-pane" data-pane="link" hidden></div>`,
       buttons: [{ label: 'Cancelar' }, { label: 'Salvar', primary: true, action: () => {
         const valid = new Set([...acl.sectors.map((s) => s.id), ...acl.members.map((x) => x.rid), 'link']);
         commitAccess(draft, valid);
@@ -643,7 +644,51 @@
       pane.querySelector('#sh-link-sector').onchange = (e) => { acl.linkSector = e.target.value || null; };
       pane.querySelector('#sh-copy').onclick = () => navigator.clipboard.writeText(docLink(cloud.id)).then(() => notify('Link copiado.'), () => notify('Selecione e copie o link.'));
     }
-    function render() { renderPeople(); renderSectors(); renderLink(); }
+    // quadro único: o administrador escolhe, para cada setor, quais colunas da página ele vê e edita
+    let matrixSheet = (App.sheet() && st.sheets.some((x) => x.id === App.sheet().id)) ? App.sheet().id : (st.sheets[0] && st.sheets[0].id);
+    function renderMatrix() {
+      const pane = d.querySelector('[data-pane="cols"]');
+      if (!acl.sectors.length) {
+        pane.innerHTML = `<p class="sp-hint">Crie os setores na aba <b>Setores e permissões</b> para escolher aqui quais colunas cada setor pode ver e editar.</p>`;
+        return;
+      }
+      const sheet = sheetById(matrixSheet);
+      if (!sheet) { pane.innerHTML = ''; return; }
+      const si = doc.sheets.indexOf(sheet);
+      const n = Math.min(sheet.cols, Math.max(App.usedRange(sheet).maxC, 8));
+      const head = (c) => { try { const v = App.value(si, 1, c); return v === null || v === undefined ? '' : String(App.fmtValue(v, App.style(sheet, 1, c).nf)); } catch (e) { return ''; } };
+      const acc = peekAccess(sheet.id);
+      const short = [['', 'Padrão'], ['none', 'Oculta'], ['view', 'Ver'], ['edit', 'Editar']];
+      const cellSel = (sid, c) => {
+        const cur = (acc[sid] && acc[sid][c]) || '';
+        return `<select class="input mx-sel lv-${cur || 'def'}" data-mx="${esc(sid)}:${c}">${short.map(([k, l]) => `<option value="${k}"${cur === k ? ' selected' : ''}>${l}</option>`).join('')}</select>`;
+      };
+      const rows = [];
+      for (let c = 1; c <= n; c++) rows.push(`<tr><td class="ce-col">${Perms.colName(c)}</td><td class="ce-head">${esc(head(c).slice(0, 30)) || '<span class="sp-hint">(vazia)</span>'}</td>${acl.sectors.map((sec) => `<td>${cellSel(sec.id, c)}</td>`).join('')}</tr>`);
+      pane.innerHTML = `<div class="mx-top"><label class="field"><span>Página</span><select class="input" id="mx-sheet">${st.sheets.map((x) => `<option value="${esc(x.id)}"${x.id === matrixSheet ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+          <p class="sp-hint">Escolha o que cada setor pode fazer em cada coluna. <b>Padrão</b> segue o acesso do setor à página inteira (mostrado abaixo do nome). Colunas <b>ocultas</b> não aparecem para o setor e os dados delas nem chegam ao navegador dessas pessoas. Para uma pessoa específica, use Pessoas › Permissões.</p></div>
+        <div class="mx-wrap"><table class="sector-matrix mx-table"><thead><tr><th>Coluna</th><th>Cabeçalho</th>${acl.sectors.map((sec) => `<th><b>${esc(sec.name)}</b><small>página: ${lvName(sec.sheets[sheet.id] || sec.default).toLowerCase()}</small>
+          <select class="input mx-all" data-mxall="${esc(sec.id)}"><option value="-">Todas…</option>${short.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></th>`).join('')}</tr></thead>
+        <tbody>${rows.join('')}</tbody></table></div>`;
+      pane.querySelector('#mx-sheet').onchange = (e) => { matrixSheet = e.target.value; renderMatrix(); };
+      const set = (sid, c, v) => {
+        const a = accessOf(sheet.id);
+        const rule = a[sid] || (a[sid] = {});
+        if (v) rule[c] = v; else delete rule[c];
+        if (!Object.keys(rule).length) delete a[sid];
+      };
+      pane.querySelectorAll('[data-mx]').forEach((x) => (x.onchange = () => {
+        const [sid, c] = x.dataset.mx.split(':');
+        set(sid, c, x.value);
+        x.className = `input mx-sel lv-${x.value || 'def'}`;
+      }));
+      pane.querySelectorAll('[data-mxall]').forEach((x) => (x.onchange = () => {
+        if (x.value === '-') return;
+        for (let c = 1; c <= n; c++) set(x.dataset.mxall, c, x.value);
+        renderMatrix();
+      }));
+    }
+    function render() { renderPeople(); renderSectors(); renderMatrix(); renderLink(); }
     render();
   }
 
@@ -753,7 +798,27 @@
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeHistory(); });
 
   // itens extras nos menus de contexto
+  const COL_CMDS = new Set(['insertColsLeft', 'insertColsRight', 'deleteCols', 'hideCols', 'unhideCols', 'resizeCols', 'autofitCols']);
+  const stripCols = (list) => {
+    for (let i = list.length - 1; i >= 0; i--) {
+      const x = list[i];
+      if (x && x.cmd && COL_CMDS.has(x.cmd)) list.splice(i, 1);
+      else if (x && Array.isArray(x.sub)) { stripCols(x.sub); if (!x.sub.length) list.splice(i, 1); }
+    }
+    for (let i = list.length - 1; i > 0; i--) if (list[i] === '-' && list[i - 1] === '-') list.splice(i, 1);
+  };
+  // comandos de coluna bloqueados para quem não é administrador (também nos menus do topo)
+  function lockColumnCommands() {
+    for (const id of COL_CMDS) {
+      const c = App.cmds[id];
+      if (!c || c._locked) continue;
+      const run = c.run;
+      c.run = (...args) => { if (App.colsLocked && App.colsLocked()) return notify(Perms.COLS_MSG); return run(...args); };
+      c._locked = true;
+    }
+  }
   App.on('contextItems', ({ hit, items }) => {
+    if (App.colsLocked && App.colsLocked()) stripCols(items);
     if (hit.area === 'cell' || hit.area === 'fill') {
       const at = items.findIndex((x) => x && x.label === 'Ver mais ações da célula');
       items.splice(at >= 0 ? at : items.length, 0, { label: 'Mostrar histórico de edições', icon: 'history', cmd: 'cellHistory' });
@@ -824,6 +889,7 @@
   def('cellHistory', 'Mostrar histórico de edições', cellHistory);
 
   function init() {
+    lockColumnCommands();
     $('btn-account').addEventListener('click', (e) => accountMenu(e.currentTarget));
     renderAccount();
     loadMe();
