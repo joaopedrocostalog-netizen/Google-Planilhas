@@ -109,6 +109,42 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     check('intervalo protegido', (await B.wait('reject')).reason, 'A célula A3 está protegida (Metas). Peça acesso a um administrador.');
     await B.wait('init');
 
+    // permissões por coluna: Comercial não vê a coluna B e só visualiza a coluna C de Vendas
+    A.send({ type: 'patch', id: 40, patch: { sheets: { p1: { props: { access: { com: { 2: 'none', 3: 'view' } } } } } } });
+    await A.wait('ack');
+    const ib2 = await B.wait('init');
+    check('coluna oculta chega mascarada', [ib2.doc.sheets[0].cells.B2, ib2.perms.cols.p1], [{ _h: 1 }, { 2: 'none', 3: 'view' }]);
+    B.send({ type: 'patch', id: 41, patch: { sheets: { p1: { cells: { C1: { v: 'x' } } } } } });
+    check('coluna somente leitura', (await B.wait('reject')).reason, 'Você só pode visualizar a coluna C da página "Vendas".');
+    await B.wait('init');
+    B.send({ type: 'patch', id: 42, patch: { sheets: { p1: { cells: { B5: {} } } } } });
+    check('coluna oculta não pode ser alterada', /ocultas para você/.test((await B.wait('reject')).reason), true);
+    await B.wait('init');
+    B.send({ type: 'patch', id: 43, patch: { sheets: { p1: { props: { cols: 30 } } } } });
+    check('não-admin não insere colunas em página com regras', /Somente administradores podem inserir ou excluir colunas/.test((await B.wait('reject')).reason), true);
+    await B.wait('init');
+    B.send({ type: 'patch', id: 44, patch: { sheets: { p1: { cells: { D1: { v: 'Meta' } } } } } });
+    check('coluna liberada pode ser editada', (await B.wait('ack')).id, 44);
+    A.send({ type: 'patch', id: 45, patch: { sheets: { p1: { cells: { B3: { v: '999' }, E1: { v: 'ok' } } } } } });
+    await A.wait('ack');
+    const pb = await B.wait('patch', (m) => m.patch.sheets.p1 && m.patch.sheets.p1.cells && m.patch.sheets.p1.cells.E1);
+    check('edição em coluna oculta chega mascarada', [pb.patch.sheets.p1.cells.B3, pb.patch.sheets.p1.cells.E1.v], [{ _h: 1 }, 'ok']);
+    // regra da pessoa tem prioridade sobre a do setor
+    const sh2 = await api('GET', `/api/docs/${doc.id}/share`, null, ana.token);
+    const rid = sh2.acl.members[0].rid;
+    check('pessoa recebe id para regras', /^m/.test(rid), true);
+    A.send({ type: 'patch', id: 46, patch: { sheets: { p1: { props: { access: { com: { 2: 'none', 3: 'view' }, [rid]: { 2: 'view' } } } } } } });
+    await A.wait('ack');
+    const ib3 = await B.wait('init');
+    check('regra da pessoa libera a coluna B', [ib3.doc.sheets[0].cells.B3.v, ib3.perms.cols.p1[2]], ['999', 'view']);
+
+    // histórico de edições por célula
+    const h1 = await api('GET', `/api/docs/${doc.id}/history?sheet=p1&addr=D1`, null, ana.token);
+    check('histórico da célula', h1.map((h) => [h.name, h.before, h.after]), [['Bia', null, 'Meta']]);
+    const h2 = await api('GET', `/api/docs/${doc.id}/history?sheet=p1&addr=B3`, null, ana.token);
+    check('histórico com valor anterior', h2.map((h) => [h.name, h.after]), [['Ana', '999']]);
+    check('histórico respeita página oculta', (await api('GET', `/api/docs/${doc.id}/history?sheet=p2&addr=A1`, null, bia.token))._status, 403);
+
     // acesso pelo link (Caio não é membro): setor Financeiro, somente leitura
     const C = await connect(caio.token, doc.id);
     const ic = await C.wait('init');

@@ -3,8 +3,9 @@
 const fs = require('fs');
 
 function memoryStore(file) {
-  let db = { users: {}, sessions: {}, docs: {} };
+  let db = { users: {}, sessions: {}, docs: {}, history: {} };
   if (file && fs.existsSync(file)) { try { db = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { /* começa vazio */ } }
+  db.history = db.history || {};
   let timer = null;
   const persist = () => {
     if (!file) return;
@@ -31,7 +32,18 @@ function memoryStore(file) {
     async createDoc(d) { db.docs[d.id] = Object.assign({ version: 0, updated_at: new Date().toISOString() }, clone(d)); persist(); },
     async saveDoc(id, { title, data, version }) { const d = db.docs[id]; if (!d) return; d.title = title; d.data = clone(data); d.version = version; d.updated_at = new Date().toISOString(); persist(); },
     async saveAcl(id, acl) { if (db.docs[id]) { db.docs[id].acl = clone(acl); persist(); } },
-    async deleteDoc(id) { delete db.docs[id]; persist(); },
+    async deleteDoc(id) { delete db.docs[id]; delete db.history[id]; persist(); },
+    // histórico de edições por célula
+    async addHistory(docId, user, entries) {
+      const list = db.history[docId] || (db.history[docId] = []);
+      const at = new Date().toISOString();
+      for (const e of entries) list.push({ sheet_id: e.s, addr: e.a, user_id: user.id, user_name: user.name, at, before: e.b, after: e.f });
+      if (list.length > 20000) list.splice(0, list.length - 20000);
+      persist();
+    },
+    async getHistory(docId, sheetId, addr, limit) {
+      return (db.history[docId] || []).filter((h) => h.sheet_id === sheetId && h.addr === addr).slice(-limit).reverse().map(clone);
+    },
   };
 }
 
@@ -67,6 +79,11 @@ function pgStore(url) {
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
       await q('CREATE INDEX IF NOT EXISTS docs_owner ON docs(owner_id)');
       await q("CREATE INDEX IF NOT EXISTS docs_members ON docs USING GIN ((acl->'members'))");
+      await q(`CREATE TABLE IF NOT EXISTS cell_history (
+        id BIGSERIAL PRIMARY KEY, doc_id TEXT NOT NULL REFERENCES docs(id) ON DELETE CASCADE,
+        sheet_id TEXT NOT NULL, addr TEXT NOT NULL, user_id TEXT, user_name TEXT,
+        at TIMESTAMPTZ NOT NULL DEFAULT now(), before TEXT, after TEXT)`);
+      await q('CREATE INDEX IF NOT EXISTS cell_history_cell ON cell_history(doc_id, sheet_id, addr, id DESC)');
     },
     getUserByEmail: (email) => row('SELECT * FROM users WHERE email = $1', [email]),
     getUserById: (id) => row('SELECT * FROM users WHERE id = $1', [id]),
@@ -85,6 +102,15 @@ function pgStore(url) {
     async saveDoc(id, { title, data, version }) { await q('UPDATE docs SET title = $2, data = $3, version = $4, updated_at = now() WHERE id = $1', [id, title, JSON.stringify(data), version]); },
     async saveAcl(id, acl) { await q('UPDATE docs SET acl = $2, updated_at = now() WHERE id = $1', [id, JSON.stringify(acl)]); },
     async deleteDoc(id) { await q('DELETE FROM docs WHERE id = $1', [id]); },
+    async addHistory(docId, user, entries) {
+      await q(`INSERT INTO cell_history (doc_id, sheet_id, addr, user_id, user_name, before, after)
+        SELECT $1, x.s, x.a, $2, $3, x.b, x.f FROM jsonb_to_recordset($4::jsonb) AS x(s text, a text, b text, f text)`,
+      [docId, user.id, user.name, JSON.stringify(entries)]);
+    },
+    async getHistory(docId, sheetId, addr, limit) {
+      const r = await q('SELECT user_id, user_name, at, before, after FROM cell_history WHERE doc_id = $1 AND sheet_id = $2 AND addr = $3 ORDER BY id DESC LIMIT $4', [docId, sheetId, addr, limit]);
+      return r.rows;
+    },
   };
 }
 
