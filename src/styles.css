@@ -634,7 +634,10 @@ body.dragging-file .drop-overlay { display: flex; }
 .mx-name .input:not(:placeholder-shown) { font-weight: 500; border-color: var(--red); }
 
 /* ---------- Executores (setores): só o que podem usar ---------- */
-body.executor #toolbar > *:not([data-cmd="undo"]):not([data-cmd="redo"]):not([data-cmd="print"]):not([data-dd="zoom"]) { display: none !important; }
-body.executor #tab-add, body.executor #add-rows, body.executor #btn-history, body.executor #btn-star, body.executor #btn-share, body.executor #menu-search-btn, body.executor #pivot-chip, body.executor .chart-menu, body.executor .ch-h { display: none !important; }
+/* barra de ferramentas dos setores: pesquisa, desfazer/refazer, imprimir, pintar formatação, zoom,
+   formatos de número, fonte, tamanho, negrito, itálico, tachado, cor do texto e de preenchimento */
+body.executor #toolbar > *:not(.tb-search):not([data-cmd="undo"]):not([data-cmd="redo"]):not([data-cmd="print"]):not([data-cmd="paintFormat"]):not([data-dd="zoom"]):not([data-cmd="fmt_currency"]):not([data-cmd="fmt_percent"]):not([data-cmd="decDec"]):not([data-cmd="decInc"]):not([data-dd="formats"]):not([data-dd="font"]):not([data-cmd="fontSizeDec"]):not(#tb-size):not([data-cmd="fontSizeInc"]):not([data-cmd="bold"]):not([data-cmd="italic"]):not([data-cmd="strike"]):not([data-dd="textColor"]):not([data-dd="fillColor"]):not(.tb-sep) { display: none !important; }
+body.executor #toolbar > span.tb-sep:nth-of-type(n+6) { display: none !important; }
+body.executor #tab-add, body.executor #add-rows, body.executor #btn-history, body.executor #btn-star, body.executor #btn-share, body.executor #pivot-chip, body.executor .chart-menu, body.executor .ch-h { display: none !important; }
 body.executor .chart-obj { cursor: default; }
 body.executor .doc-title { pointer-events: none; }

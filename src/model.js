@@ -168,12 +168,11 @@
         if (!sh) continue;
         for (const a in e.cells) {
           const b = inv.sheets[id].cells[a], f = e.cells[a];
-          const keep = {};
-          if (b) for (const k in b) if (k !== 'v') keep[k] = b[k];
-          if (f && f.v !== undefined && f.v !== null && f.v !== '') keep.v = f.v;
-          if (window.Perms.nonValue(b) === window.Perms.nonValue(f)) continue;
+          if (window.Perms.execAllowed(b, f)) continue;
+          // mantém o valor e a formatação liberada; descarta bordas, alinhamento, notas, links…
+          const keep = window.Perms.execMerge(b, f);
           dropped = true;
-          if (Object.keys(keep).length) sh.cells[a] = JSON.parse(JSON.stringify(keep)); else delete sh.cells[a];
+          if (keep) sh.cells[a] = JSON.parse(JSON.stringify(keep)); else delete sh.cells[a];
         }
       }
       if (dropped) {

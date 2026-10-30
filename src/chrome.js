@@ -527,7 +527,7 @@
         out.push({ label, path: path.join(' › '), it });
       }
     };
-    for (const m of MENUS) walk(m.items(), [m.label]);
+    for (const m of MENUS) walk(App.menuFilter ? App.menuFilter(m.items()) : m.items(), [m.label]);
     return out;
   }
   function menuSearch() {
