@@ -59,6 +59,10 @@ function memoryStore(file) {
   };
 }
 
+const zlib = require('zlib');
+const { promisify } = require('util');
+const gzip = promisify(zlib.gzip), gunzip = promisify(zlib.gunzip);
+
 function pgStore(url) {
   const { Pool } = require('pg');
   // URL interna da Render (host sem pontos) e localhost dispensam SSL; a externa exige
@@ -93,6 +97,8 @@ function pgStore(url) {
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
       await q('CREATE INDEX IF NOT EXISTS docs_owner ON docs(owner_id)');
       await q("CREATE INDEX IF NOT EXISTS docs_members ON docs USING GIN ((acl->'members'))");
+      // conteúdo da planilha compactado (gzip): o banco não precisa interpretar um JSON enorme a cada gravação
+      await q('ALTER TABLE docs ADD COLUMN IF NOT EXISTS data_gz BYTEA');
       await q(`CREATE TABLE IF NOT EXISTS cell_history (
         id BIGSERIAL PRIMARY KEY, doc_id TEXT NOT NULL REFERENCES docs(id) ON DELETE CASCADE,
         sheet_id TEXT NOT NULL, addr TEXT NOT NULL, user_id TEXT, user_name TEXT,
@@ -135,9 +141,14 @@ function pgStore(url) {
         WHERE owner_id = $1 OR acl->'members' @> $2::jsonb ORDER BY updated_at DESC LIMIT 500`, [user.id, JSON.stringify([{ email: user.email }])]);
       return r.rows;
     },
-    getDoc: (id) => row('SELECT * FROM docs WHERE id = $1', [id]),
-    async createDoc(d) { await q('INSERT INTO docs (id, title, owner_id, data, acl, version) VALUES ($1, $2, $3, $4, $5, 0)', [d.id, d.title, d.owner_id, JSON.stringify(d.data), JSON.stringify(d.acl)]); },
-    async saveDoc(id, { title, data, version }) { await q('UPDATE docs SET title = $2, data = $3, version = $4, updated_at = now() WHERE id = $1', [id, title, JSON.stringify(data), version]); },
+    async getDoc(id) {
+      const r = await row('SELECT id, title, owner_id, acl, version, created_at, updated_at, data_gz, CASE WHEN data_gz IS NULL THEN data END AS data FROM docs WHERE id = $1', [id]);
+      if (r && r.data_gz) { r.data = JSON.parse((await gunzip(r.data_gz)).toString('utf8')); }
+      if (r) delete r.data_gz;
+      return r;
+    },
+    async createDoc(d) { await q("INSERT INTO docs (id, title, owner_id, data, data_gz, acl, version) VALUES ($1, $2, $3, '{}'::jsonb, $4, $5, 0)", [d.id, d.title, d.owner_id, await gzip(JSON.stringify(d.data)), JSON.stringify(d.acl)]); },
+    async saveDoc(id, { title, data, version }) { await q("UPDATE docs SET title = $2, data_gz = $3, data = '{}'::jsonb, version = $4, updated_at = now() WHERE id = $1", [id, title, await gzip(JSON.stringify(data)), version]); },
     async saveAcl(id, acl) { await q('UPDATE docs SET acl = $2, updated_at = now() WHERE id = $1', [id, JSON.stringify(acl)]); },
     async deleteDoc(id) { await q('DELETE FROM docs WHERE id = $1', [id]); },
     async addHistory(docId, user, entries) {

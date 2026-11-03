@@ -100,6 +100,8 @@
     const R = { r1: Math.min(sel.ar, sel.er), r2: Math.max(sel.ar, sel.er), c1: Math.min(sel.ac, sel.ec), c2: Math.max(sel.ac, sel.ec) };
     return App.expandToMerges(App.sheet(), R);
   };
+  // Ctrl+clique: várias seleções ao mesmo tempo (as anteriores ficam em sel.extra)
+  App.selRects = () => (sel.extra || []).concat([App.selRect()]);
   App.selIsCell = () => { const R = App.selRect(), g = App.mergeAt(App.sheet(), sel.ar, sel.ac); return g ? R.r1 === g.r1 && R.r2 === g.r2 && R.c1 === g.c1 && R.c2 === g.c2 : R.r1 === R.r2 && R.c1 === R.c2; };
   function clampCell(r, c) {
     const sh = App.sheet();
@@ -154,6 +156,7 @@
     return [nr, nc];
   }
   function moveCursor(dr, dc, extend, toEdge) {
+    if (sel.extra && sel.extra.length) { sel.extra = []; schedule(); }
     const from = extend ? [sel.er, sel.ec] : [sel.ar, sel.ac];
     const [r, c] = toEdge ? jump(from[0], from[1], dr, dc) : step(from[0], from[1], dr, dc);
     select(r, c, extend);
@@ -782,6 +785,13 @@
         ctx.fillText(label, pb.x + pb.w - tw + 5 * z, ly + th / 2 + 0.5);
       }
     }
+    // seleções extras (Ctrl+clique)
+    for (const XR of sel.extra || []) {
+      const xb = box(XR);
+      ctx.fillStyle = C.selFill; ctx.fillRect(xb.x, xb.y, xb.w, xb.h);
+      ctx.strokeStyle = C.sel; ctx.lineWidth = 1;
+      ctx.strokeRect(Math.round(xb.x) + 0.5, Math.round(xb.y) + 0.5, Math.round(xb.w) - 1, Math.round(xb.h) - 1);
+    }
     // seleção
     const R = App.selRect();
     const b = box(R);
@@ -1034,6 +1044,14 @@
     }
     if (App.editing && App.editing()) App.commitEdit();
     focusGrid();
+    // Ctrl (ou Cmd) + clique: acrescenta uma seleção, mantendo as anteriores
+    if (['cell', 'colHdr', 'rowHdr', 'corner'].includes(h.area)) {
+      const add = (e.ctrlKey || e.metaKey) && !e.shiftKey && h.area !== 'corner' && !(h.area === 'cell' && (App.cellInfo(h.r, h.c).link || GROUP(h.r)));
+      if (add) {
+        const cur = App.selRect();
+        sel.extra = (sel.extra || []).filter((x) => !(x.r1 === cur.r1 && x.r2 === cur.r2 && x.c1 === cur.c1 && x.c2 === cur.c2)).concat([cur]).slice(-50);
+      } else if (!e.shiftKey && sel.extra && sel.extra.length) sel.extra = [];
+    }
     switch (h.area) {
       case 'corner': selectRange({ r1: 1, c1: 1, r2: st.nR, c2: st.nC }); return;
       case 'colEdge': st.drag = { kind: 'colResize', c: RC(h.c), x0: p.x, w0: sh.colW[RC(h.c)] || App.DEF_W }; bindDrag(); return;
@@ -1366,6 +1384,7 @@
         return;
       }
       curKey = null;
+      sel.extra = [];
       const p = posAll[key];
       layout();
       if (p) {

@@ -25,6 +25,8 @@
   // ---------- Formatação ----------
   const si = () => doc.active;
   function forSel(fn, R) {
+    // várias seleções (Ctrl+clique): aplica em todas
+    if (!R && App.selRects && App.selRects().length > 1) { for (const X of App.selRects()) forSel(fn, X); return; }
     const sh = App.sheet();
     R = R || App.selRect();
     const used = App.usedRange(sh);
@@ -193,20 +195,20 @@
     }
   };
   def('clearValues', 'Excluir valores', () => {
-    const sh = App.sheet(), R = App.selRect();
+    const sh = App.sheet(), rects = App.selRects ? App.selRects() : [App.selRect()];
     if (App.vm) {
-      App.change('Excluir valores', () => App.withReal(() => viewCells(sh, R, (r, c, a) => {
+      App.change('Excluir valores', () => App.withReal(() => rects.forEach((R) => viewCells(sh, R, (r, c, a) => {
         if (!sh.cells[a]) return;
         const dv = App.dvAt(sh, r, c);
         sh.cells[a].v = dv && dv.type === 'checkbox' ? App.cbValues(dv).off : '';
         App.cleanup(sh, a);
-      })));
+      }))));
       return;
     }
     App.change('Excluir valores', () => {
       for (const a of Object.keys(sh.cells)) {
         const p = E.parseAddr(a);
-        if (App.inRect(R, p.row, p.col)) {
+        if (rects.some((R) => App.inRect(R, p.row, p.col))) {
           const dv = App.dvAt(sh, p.row, p.col);
           sh.cells[a].v = dv && dv.type === 'checkbox' ? App.cbValues(dv).off : '';
           App.cleanup(sh, a);
@@ -215,9 +217,9 @@
     });
   }, 'Delete');
   def('clearAll', 'Limpar tudo (valores e formatação)', () => {
-    const sh = App.sheet(), R = App.selRect();
-    if (App.vm) { App.change('Limpar', () => viewCells(sh, R, (r, c, a) => { delete sh.cells[a]; })); return; }
-    App.change('Limpar', () => { for (const a of Object.keys(sh.cells)) { const p = E.parseAddr(a); if (App.inRect(R, p.row, p.col)) delete sh.cells[a]; } });
+    const sh = App.sheet(), rects = App.selRects ? App.selRects() : [App.selRect()];
+    if (App.vm) { App.change('Limpar', () => rects.forEach((R) => viewCells(sh, R, (r, c, a) => { delete sh.cells[a]; }))); return; }
+    App.change('Limpar', () => { for (const a of Object.keys(sh.cells)) { const p = E.parseAddr(a); if (rects.some((R) => App.inRect(R, p.row, p.col))) delete sh.cells[a]; } });
   });
   def('hideRows', 'Ocultar linhas', () => { const sh = App.sheet(), R = App.selRect(); App.change('Ocultar linhas', () => { for (let r = R.r1; r <= R.r2; r++) sh.hiddenRows[r] = true; }); }, 'Ctrl+Alt+9');
   def('hideCols', 'Ocultar colunas', () => { const sh = App.sheet(), R = App.selRect(); App.change('Ocultar colunas', () => { for (let c = R.c1; c <= R.c2; c++) sh.hiddenCols[c] = true; }); }, 'Ctrl+Alt+0');
@@ -380,7 +382,8 @@
     const sh = App.sheet(), R = App.selRect(), col = App.critCol(sh);
     const rows = [];
     const real = (r) => { const p = App.realCell ? App.realCell(r, 1) : { r }; return p ? { r: p.r, c: col } : null; };
-    for (let r = R.r1; r <= Math.min(R.r2, R.r1 + 5000); r++) { const p = real(r); if (p && !App.isRowHidden(sh, p.r)) rows.push(r); }
+    const seenRows = new Set();
+    for (const X of (App.selRects ? App.selRects() : [R])) for (let r = X.r1; r <= Math.min(X.r2, X.r1 + 5000); r++) { const p = real(r); if (p && !App.isRowHidden(sh, p.r) && !seenRows.has(r)) { seenRows.add(r); rows.push(r); } }
     const isOn = (r) => { const p = real(r); const x = p && sh.cells[E.addrToStr(p.r, p.c)]; return !!(x && x.crit); };
     const mark = typeof on === 'boolean' ? on : !rows.every(isOn);
     App.change(mark ? 'Marcar como crítico' : 'Remover alerta de crítico', () => {

@@ -160,24 +160,35 @@ async function getRoom(id) {
   return room;
 }
 const permDoc = (room) => ({ ownerId: room.ownerId, acl: room.acl, data: room.data });
+// Gravação no banco: no máximo a cada ~10 s por planilha (planilhas grandes pesam no banco gratuito),
+// uma gravação por vez e sempre a versão mais nova. Ao sair o último usuário ou ao desligar, grava na hora.
+const SAVE_EVERY = 10000;
 function scheduleSave(room) {
   room.dirty = true;
-  clearTimeout(room.timer);
-  room.timer = setTimeout(() => saveRoom(room), 1500);
+  if (room.timer || room.saving) return;
+  const wait = Math.max(2500, SAVE_EVERY - (Date.now() - (room.lastSave || 0)));
+  room.timer = setTimeout(() => { room.timer = null; saveRoom(room); }, wait);
 }
 async function saveRoom(room) {
+  if (room.saving) { room.again = true; return room.saving; }
   if (!room.dirty) return;
+  clearTimeout(room.timer); room.timer = null;
   room.dirty = false;
-  try { await store.saveDoc(room.id, { title: String(room.data.title || 'Planilha sem título').slice(0, 200), data: room.data, version: room.version }); }
-  catch (e) {
-    room.dirty = true;
-    room.failures = (room.failures || 0) + 1;
-    if (isDbError(e)) logDbError('salvar ' + room.id, e); else console.error('Falha ao salvar', room.id, e.message);
-    clearTimeout(room.timer);
-    room.timer = setTimeout(() => saveRoom(room), Math.min(60e3, 5000 * room.failures));
-    return;
-  }
-  if (room.failures) { console.log(`[banco] planilha ${room.id} salva de novo após ${room.failures} tentativa(s).`); room.failures = 0; }
+  room.saving = (async () => {
+    try {
+      await store.saveDoc(room.id, { title: String(room.data.title || 'Planilha sem título').slice(0, 200), data: room.data, version: room.version });
+      room.lastSave = Date.now();
+      if (room.failures) { console.log(`[banco] planilha ${room.id} salva de novo após ${room.failures} tentativa(s).`); room.failures = 0; }
+    } catch (e) {
+      room.dirty = true;
+      room.failures = (room.failures || 0) + 1;
+      if (isDbError(e)) logDbError('salvar ' + room.id, e); else console.error('Falha ao salvar', room.id, e.message);
+      room.timer = setTimeout(() => { room.timer = null; saveRoom(room); }, Math.min(60e3, 5000 * room.failures));
+    }
+  })();
+  await room.saving;
+  room.saving = null;
+  if (room.again || (room.dirty && !room.timer)) { room.again = false; if (room.dirty && !room.timer) scheduleSave(room); }
 }
 // quem vê quem: administradores veem todos; os demais só veem pessoas do mesmo setor
 const seesPeer = (viewer, peer) => !!(viewer.perms && peer.perms) && (viewer.perms.admin || (!peer.perms.admin && viewer.perms.sectorId === peer.perms.sectorId));
@@ -683,6 +694,13 @@ function lookupFills(room, p, clears) {
     const byName = new Map(drivers.items.map((d) => [d.nome.toUpperCase(), d]));
     for (const a in e.cells) {
       const m = /^([A-Z]+)(\d+)$/.exec(a);
+      // CPF/CNPJ apagado com o motorista preenchido: volta sozinho
+      if (m && Perms.colOf(a) === lk.cpfCol && !String((e.cells[a] || {}).v || '').trim()) {
+        const nameCell = (sh.cells || {})[Perms.colName(lk.col) + m[2]];
+        const dn = nameCell && byName.get(String(nameCell.v || '').trim().toUpperCase());
+        if (dn && dn.cpf) (out[id] = out[id] || { cells: {} }).cells[a] = Object.assign({}, (sh.cells || {})[a] || {}, { v: dn.cpf });
+        continue;
+      }
       if (!m || Perms.colOf(a) !== lk.col) continue;
       const d = e.cells[a] && byName.get(String(e.cells[a].v || '').trim().toUpperCase());
       if (!d || !d.cpf) continue;
@@ -739,8 +757,14 @@ setInterval(() => {
   for (const room of rooms.values()) for (const c of room.clients) { if (!c.ws.alive) c.ws.close(1001, 'sem resposta'); else c.ws.ping(); }
 }, 25000);
 
+let shuttingDown = false;
 async function shutdown() {
-  for (const room of rooms.values()) await saveRoom(room);
+  if (shuttingDown) return;
+  shuttingDown = true;
+  // grava o que estiver pendente antes de desligar (novas publicações reiniciam o servidor)
+  const t = setTimeout(() => process.exit(0), 20000);
+  for (const room of rooms.values()) { try { if (room.saving) await room.saving; room.saving = null; await saveRoom(room); } catch (e) { /* tenta as outras */ } }
+  clearTimeout(t);
   process.exit(0);
 }
 process.on('SIGTERM', shutdown);
