@@ -276,20 +276,46 @@
     const jc = {};
     for (const f of ['DATA', 'CLIENTE', 'CAVALO', 'CARRETA', 'MOTORISTA', 'CPF', 'CONTATO']) jc[f] = App.colByName(js, f);
     const clienteCol = App.colByName(sh, 'CLIENTE');
-    const values = {
+    const joinCar = (list) => list.filter((x, i, a) => x && a.indexOf(x) === i).join(' + ');
+    // 1ª viagem: lida da própria página (com as 2 carretas, se for rodotrem)
+    const firstRows = withPair(sh, [first]);
+    const firstTrip = App.withReal(() => ({
+      DATA: keyLabel(day), CLIENTE: clienteCol ? text(si, sh, first, clienteCol) : '',
+      CAVALO: text(si, sh, first, tc.CAVALO), CARRETA: joinCar(firstRows.map((r) => text(si, sh, r, tc.CARRETA))),
+      MOTORISTA: text(si, sh, first, tc.MOTORISTA), CPF: text(si, sh, first, tc.CPF), CONTATO: text(si, sh, first, tc.CONTATO),
+    }));
+    const thisTrip = {
       DATA: keyLabel(day), CLIENTE: clienteCol ? App.withReal(() => text(si, sh, rows[0], clienteCol)) : '',
-      CAVALO: v.CAVALO, CARRETA: rows.map((r, i) => valueFor('CARRETA', i)).filter((x, i, a) => x && a.indexOf(x) === i).join(' + '),
+      CAVALO: v.CAVALO, CARRETA: joinCar(rows.map((r, i) => valueFor('CARRETA', i))),
       MOTORISTA: v.MOTORISTA, CPF: v.CPF, CONTATO: v.CONTATO,
     };
+    // não repete uma viagem que já está na JORNADA (mesma data, motorista, cavalo e cliente)
+    const tripKey = (o) => [o.DATA, norm(o.CPF) || norm(o.MOTORISTA), norm(o.CAVALO), norm(o.CLIENTE)].join('|');
+    const have = new Set();
+    App.withReal(() => {
+      const used = App.usedRange(js);
+      for (let r = 2; r <= used.maxR; r++) {
+        const o = {};
+        for (const f in jc) o[f] = jc[f] ? text(ji, js, r, jc[f]) : '';
+        const dk = dateKey(App.value(ji, r, jc.DATA));
+        if (dk) o.DATA = keyLabel(dk);
+        have.add(tripKey(o));
+      }
+    });
+    const add = [firstTrip, thisTrip].filter((o) => !have.has(tripKey(o)));
+    if (!add.length) return;
     const done = App.change('2ª viagem (JORNADA)', () => App.withReal(() => {
-      const r = Math.max(1, App.usedRange(js).maxR) + 1;
-      if (r > js.rows) js.rows = r + 50;
-      for (const f in jc) if (jc[f] && values[f]) {
-        App.setRaw(js, r, jc[f], String(values[f]));
-        if (f === 'DATA') { const fm = App.autoFormatFor(String(values[f])); if (fm) App.setStyle(js, r, jc[f], (x) => { x.nf = fm; }); }
+      let r = Math.max(1, App.usedRange(js).maxR) + 1;
+      for (const values of add) {
+        if (r > js.rows) js.rows = r + 50;
+        for (const f in jc) if (jc[f] && values[f]) {
+          App.setRaw(js, r, jc[f], String(values[f]));
+          if (f === 'DATA') { const fm = App.autoFormatFor(String(values[f])); if (fm) App.setStyle(js, r, jc[f], (x) => { x.nf = fm; }); }
+        }
+        r++;
       }
     }));
-    if (done !== false) setTimeout(() => notify(`2ª viagem de ${v.MOTORISTA || 'motorista'} no dia ${keyLabel(day)} (a 1ª está na linha ${first}): registrada na aba JORNADA.`), 60);
+    if (done !== false) setTimeout(() => notify(`2ª viagem de ${v.MOTORISTA || 'motorista'} no dia ${keyLabel(day)} (a 1ª está na linha ${first}): as viagens foram registradas na aba JORNADA.`), 60);
   }
 
   // ---------- Veículo bloqueado: parece normal; ao tentar mexer, aparece o cadeado fechando ----------
@@ -372,11 +398,103 @@
     baseCache = { ver: baseVer, map };
     return map;
   }
+  // placa no padrão brasileiro (antigo ou Mercosul): ABC1234 / ABC1D23
+  const isPlate = (t) => /^[A-Z]{3}[0-9][A-Z0-9][0-9]{2}$/.test(norm(t));
   // sem a aba BASE GERAL (ou sem acesso a ela) não dá para saber: não marca nada
   function vehicleInfo(plate) {
     const map = baseMap();
-    if (!map || !plate) return null;
+    if (!map || !plate || !isPlate(plate)) return null;
     return map.get(norm(plate)) || { CATEGORIA: 'Terceiro', terceiro: true };
+  }
+  // rótulo de cada coluna de uma aba (nome dado pelo administrador ou texto da linha 1)
+  function labels(sh) {
+    const names = sh.colNames || {};
+    const maxC = Math.max(App.usedRange(sh).maxC || 0, ...Object.keys(names).map(Number), 1);
+    const out = [null];
+    for (let c = 1; c <= maxC; c++) out.push(norm(names[c] || App.raw(sh, 1, c)));
+    return out;
+  }
+  let lookCache = null;
+  // clientes (CLIENTES IMPO / CLIENTES EXPO, cada um com CIDADE e ENDEREÇO ao lado) e terminais com as cidades
+  function baseLookups() {
+    if (lookCache && lookCache.ver === baseVer) return lookCache;
+    const out = { ver: baseVer, clients: [], coleta: [], vazio: [], ok: false };
+    const bi = doc.sheets.findIndex((x) => norm(x.name) === norm('BASE GERAL'));
+    if (bi >= 0) {
+      const bs = doc.sheets[bi];
+      App.withReal(() => {
+        const L = labels(bs), used = App.usedRange(bs);
+        const near = (c, prefix) => { for (let k = c + 1; k <= Math.min(L.length - 1, c + 4); k++) if (L[k] && L[k].startsWith(prefix)) return k; return null; };
+        for (let c = 1; c < L.length; c++) {
+          const kind = /^CLIENTES?IMP/.test(L[c] || '') ? 'IMPO' : /^CLIENTES?EXP/.test(L[c] || '') ? 'EXPO' : null;
+          if (!kind) continue;
+          const cc = near(c, 'CIDADE'), ac = near(c, 'ENDERECO');
+          for (let r = 2; r <= used.maxR; r++) {
+            const name = text(bi, bs, r, c);
+            if (name) out.clients.push({ name, kind, city: cc ? text(bi, bs, r, cc) : '', addr: ac ? text(bi, bs, r, ac) : '' });
+          }
+        }
+        for (const [key, tcol, ccol] of [['coleta', 'TERMINALCOLETA', 'CIDADECOLETA'], ['vazio', 'TERMINALVAZIO', 'CIDADEVAZIO']]) {
+          const t = L.indexOf(tcol), ci = L.indexOf(ccol);
+          if (t < 1) continue;
+          const seen = new Set();
+          for (let r = 2; r <= used.maxR; r++) {
+            const name = text(bi, bs, r, t), city = ci > 0 ? text(bi, bs, r, ci) : '';
+            const k = norm(name) + '|' + norm(city);
+            if (name && !seen.has(k)) { seen.add(k); out[key].push({ name, city }); }
+          }
+        }
+        out.ok = true;
+      });
+    }
+    lookCache = out;
+    return out;
+  }
+  // tipo de coluna da página: cliente, terminal de coleta ou terminal de vazio
+  function columnKind(sh, c) {
+    if (!App.colByName) return null;
+    const L = App.withReal(() => labels(sh));
+    const k = L[c] || '';
+    if (k === 'CLIENTE' || k === 'CLIENTES') return 'cliente';
+    if (k === 'TERMINALCOLETA') return 'coleta';
+    if (k === 'TERMINALVAZIO') return 'vazio';
+    return null;
+  }
+  const fold = (t) => norm(t);
+  // sugestões ao digitar (ou ao abrir o menu suspenso) nessas colunas; usadas pelo editor
+  App.cellSuggest = (sh, r, c, typed, all) => {
+    const kind = columnKind(sh, c);
+    if (!kind) return null;
+    const look = baseLookups();
+    if (!look.ok) return null;
+    const q = all ? '' : fold(typed);
+    const match = (t) => !q || fold(t).includes(q);
+    const starts = (t) => !q || fold(t).startsWith(q);
+    if (kind === 'cliente') {
+      if (!look.clients.length) return null;
+      const entregaCol = App.colByName(sh, 'ENTREGA');
+      const addrCol = App.colByName(sh, 'ENDEREÇO - ENTREGA - 1') || App.colByName(sh, 'ENDEREÇO ENTREGA');
+      const list = look.clients.filter((x) => match(x.name)).sort((a, b) => (starts(b.name) - starts(a.name)) || a.name.localeCompare(b.name, 'pt-BR'));
+      return list.slice(0, all ? 300 : 30).map((x) => ({
+        show: x.name, desc: [x.kind, x.city, x.addr].filter(Boolean).join(' · '),
+        fills: [entregaCol && x.city ? { c: entregaCol, v: x.city } : null, addrCol && x.addr ? { c: addrCol, v: x.addr } : null].filter(Boolean),
+      }));
+    }
+    const list = look[kind];
+    if (!list.length) return null;
+    return list.filter((x) => match(x.name) || match(x.city)).sort((a, b) => (starts(b.name) - starts(a.name)) || a.name.localeCompare(b.name, 'pt-BR') || a.city.localeCompare(b.city, 'pt-BR'))
+      .slice(0, all ? 300 : 30).map((x) => ({ show: x.name, desc: x.city ? 'Cidade: ' + x.city : '', props: x.city ? { city: x.city } : null }));
+  };
+  // cidade do terminal: a escolhida na lista (guardada na célula) ou a(s) da BASE GERAL
+  function terminalInfo(sh, kind, r, c) {
+    const cell = sh.cells[E.addrToStr(r, c)];
+    const name = text(doc.sheets.indexOf(sh), sh, r, c);
+    if (!name) return null;
+    if (cell && cell.city) return { cities: [cell.city] };
+    const look = baseLookups();
+    if (!look.ok) return null;
+    const cities = look[kind].filter((x) => norm(x.name) === norm(name) && x.city).map((x) => x.city);
+    return cities.length ? { cities } : { cities: [], missing: true };
   }
   function canSeeInfo(sh) { const p = perms(); return !p || p.admin || !!(sh.escala && (sh.escala.infoSectors || []).includes(p.sectorId)); }
   // FRETE vazio numa linha com cavalo de terceiro: pisca até preencher (usado pela grade)
@@ -386,8 +504,9 @@
     if (!freteCache.col || c !== freteCache.col || !freteCache.cav) return false;
     const fv = App.value(si, r, c);
     if (fv !== null && fv !== undefined && String(fv).trim() !== '') return false;
+    if (r <= 1) return false;
     const plate = text(si, sh, r, freteCache.cav);
-    if (!plate) return false;
+    if (!plate || !isPlate(plate)) return false;
     const info = vehicleInfo(plate);
     return !!(info && info.terceiro);
   };
@@ -401,13 +520,24 @@
     if (!(R.r1 === R.r2 && R.c1 === R.c2) || (App.editing && App.editing())) return hideInfo();
     const p = App.realCell ? App.realCell(R.r1, R.c1) : { r: R.r1, c: R.c1 };
     const tc = cols(sh);
-    if (!p || !tc.CAVALO || p.c !== tc.CAVALO || !canSeeInfo(sh)) return hideInfo();
+    if (!p || !canSeeInfo(sh)) return hideInfo();
+    const kind = columnKind(sh, p.c);
+    if (kind === 'coleta' || kind === 'vazio') {
+      const ti = App.withReal(() => terminalInfo(sh, kind, p.r, p.c));
+      if (!ti || (!ti.cities.length && !ti.missing)) return hideInfo();
+      place(R, ti.missing ? '<span><i>Terminal fora da BASE GERAL</i></span>' : `<span><i>${ti.cities.length > 1 ? 'Cidades' : 'Cidade'}</i> <b>${ti.cities.map(esc).join(' · ')}</b></span>`);
+      return;
+    }
+    if (!tc.CAVALO || p.c !== tc.CAVALO) return hideInfo();
     const plate = App.withReal(() => text(doc.active, sh, p.r, tc.CAVALO));
     const info = plate ? vehicleInfo(plate) : null;
     if (!info) return hideInfo();
+    place(R, info.terceiro ? '<span><i>Categoria</i> <b class="t3">Terceiro</b></span><span class="cav-warn">preencha o FRETE</span>'
+      : ['MARCA', 'TIPO', 'CATEGORIA'].filter((f) => info[f]).map((f) => `<span><i>${f[0] + f.slice(1).toLowerCase()}</i> <b>${esc(info[f])}</b></span>`).join('') || '<span><i>Sem dados na BASE GERAL</i></span>');
+  }
+  function place(R, html) {
     if (!infoEl) { infoEl = document.createElement('div'); infoEl.className = 'cav-info'; document.getElementById('grid-wrap').appendChild(infoEl); }
-    infoEl.innerHTML = info.terceiro ? '<span><i>Categoria</i> <b class="t3">Terceiro</b></span><span class="cav-warn">preencha o FRETE</span>'
-      : ['MARCA', 'TIPO', 'CATEGORIA'].filter((f) => info[f]).map((f) => `<span><i>${f[0] + f.slice(1).toLowerCase()}</i> <b>${esc(info[f])}</b></span>`).join('') || '<span><i>Sem dados na BASE GERAL</i></span>';
+    infoEl.innerHTML = html;
     const rc = App.grid.cellRect(R.r1, R.c1);
     infoEl.style.left = rc.x + 'px';
     infoEl.style.top = rc.y + rc.h + 2 + 'px';

@@ -672,7 +672,8 @@ async function loadDrivers(force) {
       const seen = new Map();
       for (const it of rows) {
         const nome = pick(it, ['nome_motorista', 'nome', 'motorista_nome', 'motorista', 'razao_social']);
-        const doc = pick(it, ['cnpj_cpf', 'cpf_cnpj', 'cpf', 'cnpj', 'motorista_cpf']);
+        // CPF/CNPJ só com os números (sem pontos, traços e barra)
+        const doc = String(pick(it, ['cnpj_cpf', 'cpf_cnpj', 'cpf', 'cnpj', 'motorista_cpf']) || '').replace(/\D/g, '');
         if (!nome || nome.length > 150) continue;
         const key = nome.toUpperCase() + '|' + doc;
         if (!seen.has(key)) seen.set(key, { nome, cpf: doc, id: pick(it, ['id', 'motorista_id']) });

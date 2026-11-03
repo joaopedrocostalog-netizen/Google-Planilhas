@@ -698,6 +698,14 @@
     if (inf.isErr || invalid) tri(C.err);
     else if (inf.comment) tri(C.comment);
     else if (inf.note) tri(C.note);
+    if (inf.dv && inf.dv.type === 'dtrange') {
+      // ícone de calendário
+      const z = st.z, w = 10 * z, x = it.x + it.w - w - 4 * z, y = it.y + (it.h - w) / 2;
+      ctx.save(); ctx.strokeStyle = '#5f6368'; ctx.lineWidth = 1.2 * z;
+      ctx.strokeRect(x, y + 1 * z, w, w - 1 * z); ctx.fillStyle = '#5f6368'; ctx.fillRect(x, y + 1 * z, w, 2.5 * z);
+      ctx.fillRect(x + 2.5 * z, y, 1.2 * z, 2.5 * z); ctx.fillRect(x + w - 3.7 * z, y, 1.2 * z, 2.5 * z);
+      ctx.restore();
+    }
   }
 
   function drawSparkline(sp, it) {
@@ -1129,6 +1137,7 @@
         }
         select(h.r, h.c, e.shiftKey, true);
         // lista suspensa
+        if (info.dv && info.dv.type === 'dtrange' && !e.shiftKey && !(e.ctrlKey || e.metaKey)) { App.emit('dtpicker', { r: h.r, c: h.c }); return; }
         if (info.dv && (info.dv.type === 'list' || info.dv.type === 'range') && !e.shiftKey) {
           const rc = cellRect(h.r, h.c);
           App.emit('dropdown', { r: h.r, c: h.c, x: rc.x, y: rc.y + rc.h, w: rc.w });

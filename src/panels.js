@@ -254,7 +254,7 @@
   }
 
   // ---------- Validação de dados ----------
-  const DV_TYPES = [['list', 'Menu suspenso'], ['range', 'Menu suspenso (de um intervalo)'], ['checkbox', 'Caixa de seleção'], ['number', 'Número'], ['text', 'Texto'], ['date', 'É uma data válida']];
+  const DV_TYPES = [['list', 'Menu suspenso'], ['range', 'Menu suspenso (de um intervalo)'], ['checkbox', 'Caixa de seleção'], ['dtrange', 'Data com horário inicial e final (03/11/2026 15:00 ÁS 16:00)'], ['number', 'Número'], ['text', 'Texto'], ['date', 'É uma data válida']];
   const CHIP_COLORS = ['#ececec', '#fde3e5', '#f4cccc', '#fce5cd', '#fff2cc', '#d9ead3', '#d0e0e3', '#cfe2f3', '#d9d2e9', '#0d0d0d'];
   function dataValidation(opts) {
     const sh = App.sheet();
@@ -311,7 +311,7 @@
       const q = (f) => body.querySelector(`[data-f="${f}"]`);
       q('range').onchange = () => { const R = rangeFromInput(q('range').value); if (R) { d.range = R; preview(); } };
       q('type').onchange = () => { d.type = q('type').value; d.cond.type = d.type === 'text' ? 'contains' : 'between'; preview(); renderRule(body); };
-      if (q('src')) q('src').onchange = () => { d.src = q('src').value; preview(); };
+      if (q('src')) q('src').onchange = () => { d.src = App.quoteSheetRef(q('src').value); q('src').value = d.src; preview(); };
       if (q('custom')) q('custom').onchange = () => { d.prevOn = App.cbValues(d).on; d.custom = q('custom').checked; body.querySelector('.cb-values').hidden = !d.custom; if (d.custom && !d.checked) { d.checked = 'SIM'; d.unchecked = 'NÃO'; q('checked').value = 'SIM'; q('unchecked').value = 'NÃO'; } preview(); };
       if (q('checked')) q('checked').oninput = () => { d.checked = q('checked').value; preview(); };
       if (q('unchecked')) q('unchecked').oninput = () => { d.unchecked = q('unchecked').value; preview(); };

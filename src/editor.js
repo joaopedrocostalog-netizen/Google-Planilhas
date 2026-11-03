@@ -18,7 +18,7 @@
   function start(opts) {
     opts = opts || {};
     if (ed.active) return;
-    ed.pick = null;
+    ed.pick = null; ed.sugPick = null;
     ed.acAll = !!opts.dropdown;
     const sh = App.sheet();
     const g = App.mergeAt(sh, App.sel.ar, App.sel.ac);
@@ -29,6 +29,8 @@
     // posição real da célula (na visualização de filtro reordenada a posição de tela pode mudar enquanto se digita)
     const realPos = App.realCell ? App.realCell(er, ec) : { r: er, c: ec };
     if (!realPos) return;
+    // data com horário inicial e final: abre o calendário
+    if (App.dtPickerFor && App.dtPickerFor(sh, realPos, er, ec)) return;
     ed.real = realPos;
     ed.r = er; ed.c = ec;
     ed.si = doc.active;
@@ -133,6 +135,7 @@
       }
       const r = R0.r, c = R0.c;
       const pick = ed.pick && ed.pick.nome === text ? ed.pick : (App.lookupMatch ? App.lookupMatch(sh, r, c, text, true) : null);
+      const sug = ed.sugPick && ed.sugPick.show === text ? ed.sugPick : null;
       App.change('Editar célula', () => real(() => {
         App.setRaw(sh, r, c, text);
         // motorista do DSS: completa o CPF/CNPJ na coluna configurada (quando a pessoa pode editá-la; senão o servidor completa)
@@ -140,6 +143,11 @@
           const tc = sh.lookup.cpfCol;
           if (!(App.editGuard && App.editGuard(sh, r, tc, true))) App.setRaw(sh, r, tc, pick.cpf);
         }
+        if (sug) {
+          for (const f of sug.fills || []) if (!(App.editGuard && App.editGuard(sh, r, f.c, true))) App.setRaw(sh, r, f.c, f.v);
+          const a = E.addrToStr(r, c);
+          if (sh.cells[a]) { if (sug.props && sug.props.city) sh.cells[a].city = sug.props.city; else delete sh.cells[a].city; }
+        } else if (sh.cells[E.addrToStr(r, c)] && sh.cells[E.addrToStr(r, c)].city) delete sh.cells[E.addrToStr(r, c)].city;
         const st = App.style(sh, r, c);
         if (!st.nf) { const f = App.autoFormatFor(text); if (f) App.setStyle(sh, r, c, (s) => { s.nf = f; }); }
         if (r > sh.rows) sh.rows = r;
@@ -368,8 +376,24 @@
     renderAc();
     return true;
   }
+  // sugestões vindas da BASE GERAL (clientes com cidade/endereço, terminais com a cidade)
+  function sugAc() {
+    if (!App.cellSuggest || ta.value[0] === '=') return false;
+    const sh = doc.sheets[ed.si];
+    const real = ed.real || { r: ed.r, c: ed.c };
+    const items = App.cellSuggest(sh, real.r, real.c, ta.value.trim(), ed.acAll);
+    if (!items) return false;
+    ed.ac = items.map((x) => Object.assign({ args: null, sug: true }, x));
+    const q = fold(ta.value.trim());
+    if (!ed.ac.length || (!ed.acAll && ed.ac.length === 1 && fold(ed.ac[0].show) === q && !ed.ac[0].fills)) { hideAc(); return true; }
+    if (ed.acAll) { const cur = ed.ac.findIndex((x) => fold(x.show) === q); ed.acIndex = cur >= 0 ? cur : 0; }
+    ed.acIndex = Math.min(ed.acIndex, ed.ac.length - 1);
+    renderAc();
+    return true;
+  }
   function updateAc() {
     if (lookupAc()) return;
+    if (sugAc()) return;
     if (dvAc()) return;
     const w = currentWord();
     if (!w || w.word.length < 1) { hideAc(); return; }
@@ -393,7 +417,7 @@
   }
   function renderAc() {
     acEl.innerHTML = ed.ac.map((it, i) =>
-      `<div class="ac-item${i === ed.acIndex ? ' on' : ''}" data-i="${i}"><div class="ac-name">${it.dvItem ? `<i class="ac-sw" style="background:${esc(it.color || '#ececec')}"></i>` : ''}<b>${esc(it.show)}</b>${it.args !== null ? `<span>(${esc(it.args)})</span>` : ''}</div>${i === ed.acIndex && it.desc ? `<div class="ac-desc">${esc(it.desc)}</div>` : ''}</div>`
+      `<div class="ac-item${i === ed.acIndex ? ' on' : ''}" data-i="${i}"><div class="ac-name">${it.dvItem ? `<i class="ac-sw" style="background:${esc(it.color || '#ececec')}"></i>` : ''}<b>${esc(it.show)}</b>${it.args !== null ? `<span>(${esc(it.args)})</span>` : ''}</div>${(i === ed.acIndex || it.sug) && it.desc ? `<div class="ac-desc">${esc(it.desc)}</div>` : ''}</div>`
     ).join('');
     acEl.hidden = false;
     positionPopup(acEl);
@@ -404,6 +428,14 @@
   function acceptAc() {
     const it = ed.ac[ed.acIndex];
     if (!it) return false;
+    if (it.sug) {
+      // escolheu da lista: grava e completa as colunas ligadas (ex.: ENTREGA e ENDEREÇO do cliente)
+      ed.sugPick = it;
+      setText(it.show, it.show.length);
+      hideAc();
+      commit(1, 0);
+      return true;
+    }
     if (it.dvItem) {
       setText(it.show, it.show.length);
       hideAc();

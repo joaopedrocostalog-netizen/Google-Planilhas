@@ -740,11 +740,18 @@
     if (d && d.custom && d.checked) { const t = String(text).trim().toLowerCase(); return t === String(d.checked).trim().toLowerCase() || t === String(d.unchecked || '').trim().toLowerCase(); }
     return /^(TRUE|FALSE|VERDADEIRO|FALSO)$/i.test(text);
   };
+  // nome de aba com espaço sem aspas (BASE GERAL!A2:A) vira 'BASE GERAL'!A2:A
+  App.quoteSheetRef = (text) => {
+    const t = String(text || '').trim();
+    const m = /^(=?)\s*([^'!=][^!]*?)\s*!\s*([$A-Za-z0-9:]+)$/.exec(t);
+    if (!m || /^[A-Za-zÀ-ÿ_][\wÀ-ÿ.]*$/.test(m[2])) return t;
+    return `${m[1]}'${m[2].replace(/'/g, "''")}'!${m[3]}`;
+  };
   App.dvItems = (sh, d) => {
     if (d.type === 'list') return d.items || [];
     if (d.type === 'range' && d.src) {
       try {
-        const v = App.evalRange(App.sheetIndex(sh), d.src);
+        const v = App.evalRange(App.sheetIndex(sh), App.quoteSheetRef(d.src));
         return Array.from(new Set(v.flat().filter((x) => x !== null && x !== '').map((x) => App.fmtValue(x))));
       } catch (e) { return []; }
     }
@@ -758,6 +765,7 @@
     const d = App.dvAt(sh, r, c);
     if (!d || text === '' || (typeof text === 'string' && text[0] === '=')) return true;
     if (d.type === 'checkbox') return App.cbValid(d, text);
+    if (d.type === 'dtrange') return !App.DTRANGE_RE || App.DTRANGE_RE.test(String(text).trim());
     if (d.type === 'list' || d.type === 'range') return App.dvItems(sh, d).some((x) => x.toLowerCase() === String(text).toLowerCase());
     if (d.type === 'number') {
       const n = numOf(text);
@@ -1059,7 +1067,7 @@
   // Converte "A1:B5" ou "Página2!A1" em retângulo
   App.parseRange = (text) => {
     let toks;
-    try { toks = E.tokenize(String(text).trim().replace(/^=/, '')); } catch (e) { return null; }
+    try { toks = E.tokenize(App.quoteSheetRef(String(text).trim().replace(/^=/, ''))); } catch (e) { return null; }
     if (toks.length !== 2 || toks[0].t !== 'ref') return null;
     const { ref, sheet } = toks[0];
     const si = sheet ? App.wb.sheetIndex(sheet) : doc.active;
