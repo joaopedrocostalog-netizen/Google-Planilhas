@@ -418,6 +418,23 @@
   def('deleteCellsUp', 'Excluir células e deslocar para cima', () => deleteCells('up'));
   def('deleteCellsLeft', 'Excluir células e deslocar para a esquerda', () => deleteCells('left'));
 
+  // Mover colunas de lugar na planilha (administrador): muda para todos os setores e pessoas
+  App.canMoveRealCols = () => !(App.adminOnly && App.adminOnly()) && !(App.colsLocked && App.colsLocked());
+  def('moveColumns', 'Mover colunas', (arg) => {
+    if (!App.canMoveRealCols()) return notify('Somente administradores podem mudar as colunas de lugar.');
+    if (App.vm) return notify('Feche a visualização de filtro para mudar as colunas de lugar na planilha.');
+    const sh = App.sheet(), R = App.selRect();
+    const c1 = arg && arg.c1 ? arg.c1 : R.c1, c2 = arg && arg.c2 ? arg.c2 : R.c2;
+    let to = arg && arg.to;
+    if (arg && arg.dir) to = arg.dir < 0 ? c1 - 1 : c2 + 2;
+    if (!to || to < 1 || to > sh.cols + 1) return;
+    let res = null;
+    const ok = App.change('Mover colunas', () => { res = App.moveColumns(doc.active, c1, c2, to); if (!res) return false; });
+    if (ok === false || !res) return;
+    App.grid.selectCols(res.from, res.to);
+    notify(`${c2 > c1 ? 'Colunas movidas' : 'Coluna movida'} para ${E.numToCol(res.from)}${c2 > c1 ? '–' + E.numToCol(res.to) : ''}. A nova ordem vale para todos nesta planilha.`);
+  });
+
   // administrador escolhe a coluna do alerta de crítico; os alertas que já existem passam para ela
   def('critColumn', 'Coluna do alerta de crítico', (col) => {
     const sh = App.sheet();

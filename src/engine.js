@@ -676,6 +676,24 @@
       return sheetPrefix(t) + fmtRefParts(ref);
     });
   }
+  // Mover colunas de lugar: P(c) dá a nova coluna de cada coluna antiga da planilha alterada.
+  // Intervalos que deixam de ser contínuos passam a cobrir da menor à maior coluna.
+  function moveColumnsRefs(formula, formulaSheet, targetSheet, P) {
+    const T = targetSheet.toUpperCase();
+    return rewriteRefs(formula, (t) => {
+      const sheetName = (t.sheet !== null ? t.sheet : formulaSheet).toUpperCase();
+      if (sheetName !== T) return null;
+      const ref = Object.assign({}, t.ref);
+      if (ref.c1 === undefined) return null; // linhas inteiras (1:1): não mudam
+      if (ref.kind === 'cell') { const n = P(ref.c1); if (n === ref.c1) return null; ref.c1 = n; return sheetPrefix(t) + fmtRefParts(ref); }
+      const a = Math.min(ref.c1, ref.c2), b = Math.max(ref.c1, ref.c2);
+      let lo = Infinity, hi = -Infinity;
+      for (let c = a; c <= b; c++) { const n = P(c); if (n < lo) lo = n; if (n > hi) hi = n; }
+      if (lo === a && hi === b) return null;
+      ref.c1 = lo; ref.c2 = hi;
+      return sheetPrefix(t) + fmtRefParts(ref);
+    });
+  }
   function renameSheetRefs(formula, oldName, newName) {
     const O = oldName.toUpperCase();
     return rewriteRefs(formula, (t) => (t.sheet !== null && t.sheet.toUpperCase() === O ? quoteSheet(newName) + '!' + fmtRefParts(t.ref) : null));
@@ -707,7 +725,7 @@
     tokenize, parseFormula, evaluate, scalarOf, toMatrix, isArr, lift1, lift2, flat, safe,
     toNumber, toStr, toBool, compare, parseLiteral, serialToDate, dateToSerial, EPOCH,
     // reescrita
-    shiftFormula, structuralShift, renameSheetRefs, refsInFormula, fmtRefParts,
+    shiftFormula, structuralShift, moveColumnsRefs, renameSheetRefs, refsInFormula, fmtRefParts,
     // funções
     FUNCTIONS, ALIASES, INFO, def, alias,
   };

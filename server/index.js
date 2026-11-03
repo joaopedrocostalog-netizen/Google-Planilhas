@@ -241,7 +241,7 @@ function historyEntries(room, p) {
   for (const id in p.sheets || {}) {
     const e = p.sheets[id];
     if (!e.cells || e.created || e.removed) continue;
-    if (e.props && ('rows' in e.props || 'cols' in e.props)) continue;
+    if (e.props && ('rows' in e.props || 'cols' in e.props || 'colMoveSeq' in e.props)) continue;
     const sh = room.data.sheets.find((s) => s.id === id);
     if (!sh) continue;
     for (const a in e.cells) {

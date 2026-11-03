@@ -283,6 +283,8 @@
         items = [...base,
           { label: `Renomear coluna ${E.numToCol(R.c1)}`, cmd: 'renameCol', arg: R.c1 },
           { label: 'Personalizar cabeçalho da coluna', cmd: 'colHeaderStyle' },
+          { label: 'Mover para a esquerda', cmd: 'moveColumns', arg: { dir: -1 }, disabled: R.c1 <= 1 },
+          { label: 'Mover para a direita', cmd: 'moveColumns', arg: { dir: 1 }, disabled: R.c2 >= sh.cols },
           ...(App.adminOnly && App.adminOnly() ? [] : [{ label: App.critCol(sh) === R.c1 ? `Alerta de crítico já fica na coluna ${E.numToCol(R.c1)}` : `Usar a coluna ${E.numToCol(R.c1)} para o alerta de crítico`, cmd: 'critColumn', arg: R.c1, disabled: App.critCol(sh) === R.c1 }]),
           (sh.colGroups || []).some((g) => !(g.c2 < R.c1 || g.c1 > R.c2)) ? { label: `Desagrupar ${cl}`, cmd: 'ungroupCols' } : { label: `Agrupar ${cl} (com +)`, cmd: 'groupCols' },
           { label: `Inserir ${colsTxt(nc)} à esquerda`, cmd: 'insertColsLeft' }, { label: `Inserir ${colsTxt(nc)} à direita`, cmd: 'insertColsRight' },
