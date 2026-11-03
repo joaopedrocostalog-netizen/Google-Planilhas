@@ -6,9 +6,11 @@
   const esc = App.esc;
   const notify = (m) => App.emit('notify', m);
 
-  const PROC_FIELDS = ['DATA', 'ATENDENTE', 'MODALIDADE', 'DI/DTA', 'ARM', 'DEM', 'CLIENTE', 'REFERENCIA', 'BL', 'NAVIO', 'TERMINAL COLETA', 'ENTREGA', 'ENDEREÇO', 'ARMADOR'];
+  const PROC_FIELDS = ['DATA', 'ATENDENTE', 'MODALIDADE', 'DI/DTA', 'ARM', 'DEM', 'CLIENTE', 'REFERENCIA', 'BL', 'NAVIO', 'TERMINAL COLETA', 'ENTREGA', 'ENDEREÇO', 'ARMADOR',
+    'TERMINAL DE VAZIO', 'CIDADE DEPOT', 'DATA / HORA - DEPOT'];
   const LOAD_FIELDS = ['CONTAINER', 'TIPO', 'VALORES', 'PESO', 'QTD', 'IMO'];
   const WIDE = new Set(['CLIENTE', 'ENDEREÇO', 'ENTREGA']);
+  const HINT = { 'DATA': 'dd/mm/aaaa', 'DATA / HORA - DEPOT': 'dd/mm/aaaa hh:mm' };
   const STATUS_VALUE = 'NOVO';
   // estilos que passam da última linha para as novas (sem cores de status, negrito etc.)
   const KEEP_STYLE = ['nf', 'al', 'va', 'ff', 'fs', 'wrap', 'bd', 'indent'];
@@ -100,17 +102,19 @@
         list = ` list="${lid}"`;
       }
       const val = idx === undefined && defaults[f] && !x.blocked ? defaults[f] : '';
-      const ph = x.blocked ? x.blocked : x.items && x.items.length ? 'Digite para ver as opções' : f === 'DATA' ? 'dd/mm/aaaa' : '';
+      const ph = x.blocked ? x.blocked : x.items && x.items.length ? 'Digite para ver as opções' : HINT[f] || '';
       return `<input class="input" id="${id}" data-f="${esc(f)}"${idx === undefined ? '' : ` data-i="${idx}"`} value="${esc(val)}" placeholder="${esc(ph)}" autocomplete="off"${list}${dis}>`;
     };
     const colTag = (f) => (fi[f].c ? `<small class="pf-col">${E.numToCol(fi[f].c)}</small>` : '<small class="pf-col miss">?</small>');
     const missing = PROC_FIELDS.concat(LOAD_FIELDS).filter((f) => !fi[f].c);
+    const procOrder = PROC_FIELDS.slice().sort((a, b) => (fi[a].c || 9999) - (fi[b].c || 9999));
+    const loadOrder = LOAD_FIELDS.slice().sort((a, b) => (fi[a].c || 9999) - (fi[b].c || 9999));
 
     const body = `<p class="sp-hint">As linhas são criadas a partir da linha <b>${info.start}</b> (2 linhas depois da última informação da coluna B${info.last ? `, que está na linha ${info.last}` : ''}), uma por carregamento, com o status <b>${STATUS_VALUE}</b>.
         ${missing.length ? `<br><span class="pf-warn">Colunas não encontradas: ${missing.map(esc).join(', ')}. Confira o nome das colunas (cabeçalho).</span>` : ''}
         ${info.stBlocked ? `<br><span class="pf-warn">Status: ${esc(info.stBlocked)} — o status ${STATUS_VALUE} não será preenchido.</span>` : ''}</p>
       <h3 class="pf-h">Abertura do processo</h3>
-      <div class="pf-grid">${PROC_FIELDS.map((f) => `<label class="field${WIDE.has(f) ? ' pf-wide' : ''}${fi[f].blocked ? ' pf-off' : ''}"><span>${esc(f)} ${colTag(f)}</span>${input(f)}</label>`).join('')}</div>
+      <div class="pf-grid">${procOrder.map((f) => `<label class="field${WIDE.has(f) ? ' pf-wide' : ''}${fi[f].blocked ? ' pf-off' : ''}"><span>${esc(f)} ${colTag(f)}</span>${input(f)}</label>`).join('')}</div>
       <h3 class="pf-h">Carregamentos</h3>
       <div class="pf-qty"><label class="field"><span>Quantidade de carregamentos</span><input class="input" id="pf-qtd" type="number" min="1" max="60" value="1"></label>
         <p class="sp-hint">Cada carregamento vira uma linha, com os dados da abertura repetidos.</p></div>
@@ -118,7 +122,7 @@
       ${lists.map((lid) => { const f = Object.keys(fi).find((k) => 'pl-' + norm(k) === lid); return `<datalist id="${lid}">${(fi[f].items || []).map((it) => `<option value="${esc(it)}">`).join('')}</datalist>`; }).join('')}`;
 
     const m = App.ui.modal({
-      title: 'Incluir processo (importação)', width: 'min(1040px, 96vw)', cls: 'modal-tall pf-modal', enterSubmits: false,
+      title: 'Incluir processo (importação)', width: 'min(1320px, 97vw)', cls: 'pf-modal', enterSubmits: false,
       body,
       buttons: [{ label: 'Cancelar' }, { label: 'Criar linhas', primary: true, action: (d) => submit(d) }],
     });
@@ -133,8 +137,8 @@
     const drawLoads = () => {
       kept = readLoads().length ? readLoads() : kept;
       const n = Math.max(1, Math.min(60, +el.querySelector('#pf-qtd').value || 1));
-      loadsBox.innerHTML = `<table class="pf-table"><thead><tr><th>#</th>${LOAD_FIELDS.map((f) => `<th>${esc(f)} ${colTag(f)}${fi[f].blocked ? '' : ` <button class="pf-rep" data-rep="${esc(f)}" title="Repetir o valor do 1º carregamento em todos">⇣</button>`}</th>`).join('')}</tr></thead>
-        <tbody>${Array.from({ length: n }, (_, i) => `<tr class="pf-load"><td class="pf-n">${i + 1}</td>${LOAD_FIELDS.map((f) => `<td>${input(f, i)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+      loadsBox.innerHTML = `<table class="pf-table"><thead><tr><th>#</th>${loadOrder.map((f) => `<th>${esc(f)} ${colTag(f)}${fi[f].blocked ? '' : ` <button class="pf-rep" data-rep="${esc(f)}" title="Repetir o valor do 1º carregamento em todos">⇣</button>`}</th>`).join('')}</tr></thead>
+        <tbody>${Array.from({ length: n }, (_, i) => `<tr class="pf-load"><td class="pf-n">${i + 1}</td>${loadOrder.map((f) => `<td>${input(f, i)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
       // mantém o que já foi digitado
       loadsBox.querySelectorAll('.pf-load').forEach((row, i) => {
         const o = kept[i];
@@ -215,4 +219,7 @@
 
   App.commands.def('insertProcess', 'Incluir processo', open);
   App.processFields = { PROC_FIELDS, LOAD_FIELDS, norm };
+  // usado também por outras funções (ex.: Escalar veículo): coluna pelo nome
+  App.colByName = (sh, name) => App.withReal(() => findCol(columnMap(sh), name));
+  App.normName = norm;
 })(window.App);

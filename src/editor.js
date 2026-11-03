@@ -393,8 +393,8 @@
     acEl.innerHTML = ed.ac.map((it, i) =>
       `<div class="ac-item${i === ed.acIndex ? ' on' : ''}" data-i="${i}"><div class="ac-name">${it.dvItem ? `<i class="ac-sw" style="background:${esc(it.color || '#ececec')}"></i>` : ''}<b>${esc(it.show)}</b>${it.args !== null ? `<span>(${esc(it.args)})</span>` : ''}</div>${i === ed.acIndex && it.desc ? `<div class="ac-desc">${esc(it.desc)}</div>` : ''}</div>`
     ).join('');
-    positionPopup(acEl);
     acEl.hidden = false;
+    positionPopup(acEl);
     const on = acEl.querySelector('.ac-item.on');
     if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest' });
   }
@@ -430,8 +430,18 @@
   function positionPopup(el) {
     const onBar = document.activeElement === bar;
     const ref = onBar ? bar.getBoundingClientRect() : box.getBoundingClientRect();
-    el.style.left = Math.min(ref.left, window.innerWidth - 380) + 'px';
-    el.style.top = ref.bottom + 2 + 'px';
+    el.style.left = Math.max(4, Math.min(ref.left, window.innerWidth - 384)) + 'px';
+    // perto do fim da tela: abre para cima, sempre dentro da parte visível
+    const below = window.innerHeight - ref.bottom - 8, above = ref.top - 8;
+    el.style.maxHeight = '';
+    const h = Math.min(el.scrollHeight || el.offsetHeight || 0, 320);
+    if (h > below && above > below) {
+      el.style.maxHeight = Math.min(320, above) + 'px';
+      el.style.top = Math.max(4, ref.top - 2 - Math.min(h, above)) + 'px';
+    } else {
+      el.style.maxHeight = Math.max(120, Math.min(320, below)) + 'px';
+      el.style.top = ref.bottom + 2 + 'px';
+    }
   }
 
   // ---------- Ajuda de argumentos ----------

@@ -87,11 +87,45 @@
       { label: 'Excluir', need: 'deleteSheet', action: () => run('deleteSheet', i) },
       { label: 'Duplicar', need: 'duplicateSheet', action: () => { run('switchSheet', i); run('duplicateSheet'); } },
       { label: 'Renomear', need: 'renameSheet', action: () => startRename(i) },
-      { label: 'Mudar cor', need: 'sheetColor', sub: () => [{ label: 'Redefinir', action: () => run('sheetColor', { i, color: null }) }, ...['#e30613', '#b8000c', '#0d0d0d', '#ff9900', '#f1c232', '#6aa84f', '#3c78d8', '#674ea7', '#a64d79', '#999999'].map((c) => ({ label: c, swatch: c, action: () => run('sheetColor', { i, color: c }) }))] },
+      { label: 'Mudar cor', need: 'sheetColor', action: () => tabColorDialog(i) },
       { label: 'Ocultar página', need: 'hideSheet', action: () => run('hideSheet', i) }, '-',
       { label: 'Mover para a direita', need: 'moveSheet', disabled: i >= n - 1, action: () => run('moveSheet', { i, to: i + 1 }) },
       { label: 'Mover para a esquerda', need: 'moveSheet', disabled: i <= 0, action: () => run('moveSheet', { i, to: i - 1 }) },
     ], { above: true });
+  }
+  // cor da aba: cores prontas, as cores salvas da pessoa e qualquer outra cor
+  function tabColorDialog(i) {
+    const sh = doc.sheets[i];
+    if (!sh) return;
+    let chosen = sh.color || null;
+    const preset = ['#e30613', '#b8000c', '#0d0d0d', '#ff9900', '#f1c232', '#6aa84f', '#38761d', '#3c78d8', '#0b5394', '#674ea7', '#a64d79', '#999999'];
+    const saved = (App.customColors ? App.customColors() : []).filter((c) => !preset.includes(c)).slice(-12);
+    const sw = (c) => `<button class="tcd-sw${c === chosen ? ' on' : ''}" data-c="${c}" style="background:${c}" title="${c}"></button>`;
+    const m = App.ui.modal({
+      title: `Cor da aba "${sh.name}"`, width: '400px',
+      body: `<div class="tcd-grid">${preset.map(sw).join('')}</div>
+        ${saved.length ? `<p class="sp-label">Suas cores</p><div class="tcd-grid">${saved.map(sw).join('')}</div>` : ''}
+        <label class="field tcd-custom"><span>Personalizada</span><input type="color" id="tcd-pick" value="${chosen || '#3c78d8'}"><input class="input" id="tcd-hex" value="${chosen || ''}" placeholder="#RRGGBB" maxlength="7"></label>
+        <div class="tcd-prev"><span class="tab colored active" id="tcd-tab">${esc(sh.name)}</span></div>`,
+      buttons: [{ label: 'Sem cor', action: () => { run('sheetColor', { i, color: null }); } }, { label: 'Cancelar' }, { label: 'Aplicar', primary: true, action: () => {
+        if (!chosen) return;
+        run('sheetColor', { i, color: chosen });
+        if (App.saveCustomColors && App.customColors && !preset.includes(chosen) && !App.customColors().includes(chosen)) App.saveCustomColors(App.customColors().concat([chosen]).slice(-30));
+      } }],
+    });
+    const el = m.el, tab = el.querySelector('#tcd-tab');
+    const ink = (hex) => { const n = parseInt(hex.slice(1), 16), r = n >> 16, g = (n >> 8) & 255, b = n & 255; return (r * 299 + g * 587 + b * 114) / 1000 > 150 ? '#1a1a1a' : '#ffffff'; };
+    const set = (c) => {
+      if (!/^#[0-9a-f]{6}$/i.test(c || '')) return;
+      chosen = c.toLowerCase();
+      tab.style.setProperty('--tab', chosen); tab.style.setProperty('--tab-ink', ink(chosen));
+      el.querySelectorAll('.tcd-sw').forEach((b) => b.classList.toggle('on', b.dataset.c === chosen));
+      el.querySelector('#tcd-pick').value = chosen; el.querySelector('#tcd-hex').value = chosen;
+    };
+    el.querySelectorAll('.tcd-sw').forEach((b) => (b.onclick = () => set(b.dataset.c)));
+    el.querySelector('#tcd-pick').oninput = (e) => set(e.target.value);
+    el.querySelector('#tcd-hex').oninput = (e) => { const v = e.target.value.trim(); set(v[0] === '#' ? v : '#' + v); };
+    if (chosen) set(chosen); else tab.style.setProperty('--tab', '#3c78d8');
   }
   function startRename(i) {
     if (App.adminOnly && App.adminOnly()) return;
