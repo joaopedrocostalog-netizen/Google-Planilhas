@@ -811,8 +811,8 @@ body.executor .doc-title { pointer-events: none; }
 .tab.colored { background: var(--tab); color: var(--tab-ink); }
 .tab.colored:hover { background: var(--tab); color: var(--tab-ink); filter: brightness(1.08); }
 .tab.colored .tab-color { display: none; }
-.tab.colored.active { background: color-mix(in srgb, var(--tab) 14%, #fff); color: var(--ink, #111); filter: none; box-shadow: inset 0 3px 0 var(--tab); }
-.tab.colored.active::after { background: var(--tab); height: 4px; }
+.tab.colored.active { background: var(--tab); color: var(--tab-ink); filter: none; font-weight: 700; box-shadow: inset 0 -4px 0 rgba(0,0,0,.28); }
+.tab.colored.active::after { display: none; }
 .sheet-chip { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: #f2f2f2; font-size: 15px; padding: 2px 8px; border-radius: 6px; cursor: pointer; max-width: 260px; }
 .sheet-chip:hover { background: rgba(255,255,255,.1); }
 .sheet-chip .sc-sep { color: #8a8a8a; }
@@ -820,3 +820,4 @@ body.executor .doc-title { pointer-events: none; }
 .sheet-chip .sc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 @media (max-width: 700px) { .sheet-chip { display: none; } }
 .ac-sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; border: 1px solid rgba(0,0,0,.15); }
+.autocomplete { max-height: 320px; overflow-y: auto; }

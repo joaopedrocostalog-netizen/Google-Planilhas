@@ -272,7 +272,8 @@
           { label: `Inserir ${rowsTxt(nr)} acima`, cmd: 'insertRowsAbove' }, { label: `Inserir ${colsTxt(nc)} à esquerda`, cmd: 'insertColsLeft' },
           { label: 'Inserir células', sub: [{ label: `Inserir ${rowsTxt(nr)} abaixo`, cmd: 'insertRowsBelow' }, { label: `Inserir ${colsTxt(nc)} à direita`, cmd: 'insertColsRight' }] },
           { label: `Excluir ${rl}`, cmd: 'deleteRows' }, { label: `Excluir ${cl}`, cmd: 'deleteCols' },
-          { label: nr * nc === 1 ? 'Excluir esta célula' : 'Excluir células', sub: [{ label: 'Deslocar para cima', cmd: 'deleteCellsUp' }, { label: 'Deslocar para a esquerda', cmd: 'deleteCellsLeft' }] }, '-',
+          { label: `${nr * nc === 1 ? 'Excluir esta célula' : 'Excluir células'} e deslocar para cima`, cmd: 'deleteCellsUp' },
+          { label: `${nr * nc === 1 ? 'Excluir esta célula' : 'Excluir células'} e deslocar para a esquerda`, cmd: 'deleteCellsLeft' }, '-',
           { label: 'Criar um filtro', cmd: 'toggleFilter', disabled: !!sh.filter }, { label: 'Classificar intervalo', sub: [{ label: 'A a Z', cmd: 'sortRange', arg: false }, { label: 'Z a A', cmd: 'sortRange', arg: true }, { label: 'Opções avançadas', cmd: 'sortAdvanced' }] }, '-',
           { label: 'Inserir link', icon: 'link', cmd: 'insertLink' }, { label: 'Comentário', icon: 'comment', cmd: 'insertComment' }, { label: 'Inserir nota', icon: 'note', cmd: 'insertNote' },
           { label: 'Menu suspenso', icon: 'dropdown', cmd: 'insertDropdown' }, '-',
@@ -290,6 +291,8 @@
       const sh = App.sheet();
       const d = App.dvAt(sh, r, c);
       if (!d) return;
+      // uma lista só, no estilo da lista do DSS: abre a célula em edição com as opções logo abaixo
+      if (App.startEdit) { App.startEdit({ dropdown: true }); return; }
       const items = App.dvItems(sh, d);
       const cur = App.raw(sh, r, c);
       const box = document.createElement('div');

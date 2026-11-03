@@ -19,6 +19,7 @@
     opts = opts || {};
     if (ed.active) return;
     ed.pick = null;
+    ed.acAll = !!opts.dropdown;
     const sh = App.sheet();
     const g = App.mergeAt(sh, App.sel.ar, App.sel.ac);
     const er = g ? g.r1 : App.sel.ar, ec = g ? g.c1 : App.sel.ac;
@@ -40,7 +41,7 @@
     place();
     box.hidden = false;
     if (opts.from === 'bar') { bar.focus(); }
-    else { ta.focus({ preventScroll: true }); ta.setSelectionRange(text.length, text.length); }
+    else { ta.focus({ preventScroll: true }); if (opts.dropdown) ta.select(); else ta.setSelectionRange(text.length, text.length); }
     update();
     App.grid.draw();
     App.emit('editStart');
@@ -350,15 +351,17 @@
     if (!d || (d.type !== 'list' && d.type !== 'range')) return false;
     let items = [];
     try { items = App.withReal(() => App.dvItems(sh, d)) || []; } catch (e) { items = []; }
-    const q = fold(ta.value.trim());
+    // aberto pelo clique na seta: mostra todas as opções (a atual fica marcada); ao digitar, filtra
+    const q = ed.acAll ? '' : fold(ta.value.trim());
     const seen = new Set(), starts = [], has = [];
     for (const it of items) {
       const t = String(it); if (!t || seen.has(t)) continue; seen.add(t);
       const n = fold(t);
       if (!q || n.startsWith(q)) starts.push(t); else if (n.includes(q)) has.push(t);
     }
-    ed.ac = starts.concat(has).slice(0, 12).map((t) => ({ show: t, args: null, desc: 'Opção do menu suspenso', dvItem: true, color: (d.colors || {})[t] || null }));
-    if (!ed.ac.length || (ed.ac.length === 1 && fold(ed.ac[0].show) === q)) { hideAc(); return true; }
+    ed.ac = starts.concat(has).slice(0, ed.acAll ? 200 : 12).map((t) => ({ show: t, args: null, desc: '', dvItem: true, color: (d.colors || {})[t] || null }));
+    if (!ed.ac.length || (!ed.acAll && ed.ac.length === 1 && fold(ed.ac[0].show) === q)) { hideAc(); return true; }
+    if (ed.acAll) { const cur = ed.ac.findIndex((x) => fold(x.show) === fold(ta.value.trim())); ed.acIndex = cur >= 0 ? cur : 0; }
     ed.acIndex = Math.min(ed.acIndex, ed.ac.length - 1);
     renderAc();
     return true;
@@ -388,10 +391,12 @@
   }
   function renderAc() {
     acEl.innerHTML = ed.ac.map((it, i) =>
-      `<div class="ac-item${i === ed.acIndex ? ' on' : ''}" data-i="${i}"><div class="ac-name">${it.dvItem ? `<i class="ac-sw" style="background:${esc(it.color || '#ececec')}"></i>` : ''}<b>${esc(it.show)}</b>${it.args !== null ? `<span>(${esc(it.args)})</span>` : ''}</div>${i === ed.acIndex ? `<div class="ac-desc">${esc(it.desc)}</div>` : ''}</div>`
+      `<div class="ac-item${i === ed.acIndex ? ' on' : ''}" data-i="${i}"><div class="ac-name">${it.dvItem ? `<i class="ac-sw" style="background:${esc(it.color || '#ececec')}"></i>` : ''}<b>${esc(it.show)}</b>${it.args !== null ? `<span>(${esc(it.args)})</span>` : ''}</div>${i === ed.acIndex && it.desc ? `<div class="ac-desc">${esc(it.desc)}</div>` : ''}</div>`
     ).join('');
     positionPopup(acEl);
     acEl.hidden = false;
+    const on = acEl.querySelector('.ac-item.on');
+    if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest' });
   }
   function hideAc() { ed.ac = []; ed.acIndex = 0; if (acEl) acEl.hidden = true; }
   function acceptAc() {
@@ -499,6 +504,7 @@
     update();
   }
   function onInput(e) {
+    ed.acAll = false;
     const src = e.target;
     const other = src === ta ? bar : ta;
     other.value = src.value;
