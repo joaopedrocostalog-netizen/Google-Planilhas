@@ -270,6 +270,7 @@
       const cl = nc === 1 ? `coluna ${E.numToCol(R.c1)}` : `colunas ${E.numToCol(R.c1)} - ${E.numToCol(R.c2)}`;
       // container crítico: marcar ou desmarcar as linhas selecionadas
       const critItem = () => {
+        if (App.canMarkCritical && !App.canMarkCritical(sh)) return null;
         const col = App.critCol(sh);
         let all = true;
         for (let r = R.r1; r <= Math.min(R.r2, R.r1 + 500); r++) { const p = App.realCell ? App.realCell(r, 1) : { r }; if (!p) continue; const x = sh.cells[E.addrToStr(p.r, col)]; if (!(x && x.crit)) { all = false; break; } }
@@ -296,7 +297,7 @@
           { label: 'Estatísticas da coluna', cmd: 'columnStats' }, { label: 'Validação de dados', cmd: 'dataValidation' }, { label: 'Formatação condicional', cmd: 'condFormat' }];
       } else if (hit.area === 'rowHdr' || hit.area === 'rowEdge') {
         items = [...base,
-          critItem(),
+          critItem(), ...(App.adminOnly && App.adminOnly() ? [] : [{ label: 'Container crítico: quem pode marcar…', cmd: 'critSectors' }]),
           { label: `Inserir ${rowsTxt(nr)} acima`, cmd: 'insertRowsAbove' }, { label: `Inserir ${rowsTxt(nr)} abaixo`, cmd: 'insertRowsBelow' },
           { label: `Excluir ${rl}`, cmd: 'deleteRows' }, { label: `Limpar ${rl}`, cmd: 'clearValues' }, { label: `Ocultar ${rl}`, cmd: 'hideRows' },
           { label: `Redimensionar ${rl}`, cmd: 'resizeRows' }, '-',
@@ -304,7 +305,7 @@
           { label: 'Formatação condicional', cmd: 'condFormat' }, { label: 'Validação de dados', cmd: 'dataValidation' }];
       } else if (hit.area === 'cell' || hit.area === 'fill') {
         items = [...base,
-          critItem(),
+          critItem(), ...(App.adminOnly && App.adminOnly() ? [] : [{ label: 'Container crítico: quem pode marcar…', cmd: 'critSectors' }]),
           { label: `Inserir ${rowsTxt(nr)} acima`, cmd: 'insertRowsAbove' }, { label: `Inserir ${colsTxt(nc)} à esquerda`, cmd: 'insertColsLeft' },
           { label: 'Inserir células', sub: [{ label: `Inserir ${rowsTxt(nr)} abaixo`, cmd: 'insertRowsBelow' }, { label: `Inserir ${colsTxt(nc)} à direita`, cmd: 'insertColsRight' }] },
           { label: `Excluir ${rl}`, cmd: 'deleteRows' }, { label: `Excluir ${cl}`, cmd: 'deleteCols' },
@@ -316,6 +317,7 @@
           ...(App.dvAt(sh, sel.ar, sel.ac) && App.dvAt(sh, sel.ar, sel.ac).type === 'checkbox' ? [{ label: 'Remover caixa de seleção', icon: 'checkbox', cmd: 'removeCheckbox' }] : []),
           { label: 'Ver mais ações da célula', sub: [{ label: 'Formatação condicional', cmd: 'condFormat' }, { label: 'Validação de dados', cmd: 'dataValidation' }, { label: 'Estatísticas da coluna', cmd: 'columnStats' }, { label: 'Limpar tudo', cmd: 'clearAll' }] }];
       } else return;
+      items = items.filter(Boolean);
       App.emit('contextItems', { hit, items, R });
       App.ui.menuPopup({ x, y }, items);
     });

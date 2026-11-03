@@ -260,6 +260,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     B.send({ type: 'patch', id: 102, patch: { sheets: { bg: { cells: { A3: { v: 'x' } } } } } });
     check('setor não edita a base (rejeitado)', /acesso/.test((await B.wait('reject', (m) => m.id === 102)).reason), true);
 
+    // container crítico: o administrador escolhe os setores
+    check('sem escolha, setor marca crítico', await res(110, { T40: { v: 'C1', crit: true } }), 'ok');
+    A.send({ type: 'patch', id: 111, patch: { sheets: { p1: { props: { critSectors: ['fin'] } } } } });
+    await A.wait('ack', (m) => m.id === 111);
+    await B.wait('patch', (m) => m.patch.sheets && m.patch.sheets.p1 && m.patch.sheets.p1.props && m.patch.sheets.p1.props.critSectors);
+    check('setor fora da lista não marca', /crítico não está liberado/.test(await res(112, { T41: { v: 'C2', crit: true } })), true);
+    check('setor fora da lista não desmarca', /crítico não está liberado/.test(await res(113, { T40: { v: 'C1' } })), true);
+    check('mas continua editando o valor', await res(114, { T42: { v: 'C3' } }), 'ok');
+
     // remover o acesso pelo link derruba o Caio
     await api('PUT', `/api/docs/${doc.id}/share`, { acl: Object.assign({}, acl, { link: 'none' }) }, ana.token);
     check('acesso removido', (await C.wait('error')).code, 'denied');

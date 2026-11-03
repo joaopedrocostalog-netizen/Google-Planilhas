@@ -378,8 +378,41 @@
   });
   def('toggleOldRows', 'Mostrar/ocultar linhas antigas', () => App.toggleOld(App.sheet()));
   // Container crítico (coluna T por padrão): a célula fica piscando como alerta. Funciona em lote (várias linhas).
+  // quem pode marcar: administradores e, se o administrador escolheu, só os setores marcados (sem escolha = todos)
+  App.canMarkCritical = (sh) => {
+    const p = App.cloudMode && App.cloud && App.cloud.perms;
+    if (!p || p.admin || !Array.isArray(sh.critSectors)) return true;
+    return sh.critSectors.includes(p.sectorId);
+  };
+  def('critSectors', 'Container crítico: quem pode marcar', async () => {
+    const sh = App.sheet();
+    if (App.adminOnly && App.adminOnly()) return notify('Somente administradores escolhem quem marca container crítico.');
+    let sectors = [];
+    if (App.cloudMode && App.cloud && App.cloud.id) {
+      try { const r = await App.collab.api('GET', `/api/docs/${App.cloud.id}/share`); sectors = (r.acl && r.acl.sectors) || []; } catch (e) { return notify(e.message); }
+    }
+    const all = !Array.isArray(sh.critSectors);
+    const cur = sh.critSectors || [];
+    App.ui.modal({
+      title: 'Container crítico — quem pode marcar', width: '440px',
+      body: `<p class="sp-hint">Administradores sempre podem marcar e desmarcar. Escolha os setores que também podem.</p>
+        <label class="inline cs-all"><input type="checkbox" id="cs-all"${all ? ' checked' : ''}> <b>Todos os setores</b></label>
+        <div class="esc-sectors" id="cs-list">${sectors.length ? sectors.map((s) => `<label class="inline"><input type="checkbox" data-cs="${App.esc(s.id)}"${all || cur.includes(s.id) ? ' checked' : ''}${all ? ' disabled' : ''}> ${App.esc(s.name)}</label>`).join('') : '<p class="sp-hint">Nenhum setor criado ainda (Compartilhar › Setores).</p>'}</div>`,
+      onOpen: (d) => {
+        const allBox = d.querySelector('#cs-all');
+        allBox.onchange = () => d.querySelectorAll('[data-cs]').forEach((x) => { x.disabled = allBox.checked; if (allBox.checked) x.checked = true; });
+      },
+      buttons: [{ label: 'Cancelar' }, { label: 'Salvar', primary: true, action: (d) => {
+        const everyone = d.querySelector('#cs-all').checked;
+        const list = [...d.querySelectorAll('[data-cs]')].filter((x) => x.checked).map((x) => x.dataset.cs);
+        App.change('Quem marca container crítico', () => { if (everyone) delete sh.critSectors; else sh.critSectors = list; });
+        notify(everyone ? 'Todos os setores podem marcar container crítico.' : list.length ? 'Setores para marcar container crítico salvos.' : 'Só administradores podem marcar container crítico nesta página.');
+      } }],
+    });
+  });
   def('markCritical', 'Marcar container como crítico', (on) => {
     const sh = App.sheet(), R = App.selRect(), col = App.critCol(sh);
+    if (!App.canMarkCritical(sh)) return notify('Marcar container como crítico não está liberado para o seu setor. Peça a um administrador.');
     const rows = [];
     const real = (r) => { const p = App.realCell ? App.realCell(r, 1) : { r }; return p ? { r: p.r, c: col } : null; };
     const seenRows = new Set();
