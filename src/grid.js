@@ -213,6 +213,24 @@
       crit = Math.floor(Date.now() / 550) % 2 === 1;
       if (!(dv && dv.type === 'checkbox')) s = Object.assign({}, s, crit ? { bg: '#d93025', color: '#ffffff', b: true } : { bg: '#fce8e6', color: '#b3261e', b: true });
     }
+    // escala de veículos: não confirmada = vermelho (por cima da formatação condicional);
+    // pedido de troca = CAVALO, CARRETA e MOTORISTA piscando em azul; bloqueado = cadeado no CAVALO
+    let locked = false;
+    if (window.Perms && window.Perms.escalaCols) {
+      if (st.escFor !== sh) { st.escFor = sh; st.escCols = window.Perms.escalaCols(sh); }
+      const ec = st.escCols;
+      if (ec.CAVALO && (c === ec.CAVALO || c === ec.CARRETA || c === ec.MOTORISTA || c === ec.CPF || c === ec.CONTATO)) {
+        const cav = sh.cells[E.addrToStr(r, ec.CAVALO)];
+        if (cav && (cav.esc || cav.lock || cav.swap)) {
+          const vehicle = c === ec.CAVALO || c === ec.CARRETA || c === ec.MOTORISTA;
+          if (cav.swap && vehicle) {
+            st.hasCrit = true;
+            s = Object.assign({}, s, Math.floor(Date.now() / 550) % 2 ? { bg: '#1a73e8', color: '#ffffff', b: true } : { bg: '#d2e3fc', color: '#0b3d91', b: true });
+          } else if (cav.esc === 'p') s = Object.assign({}, s, { bg: '#d93025', color: '#ffffff' });
+          if (cav.lock && c === ec.CAVALO) locked = true;
+        }
+      }
+    }
     const isFormula = typeof raw === 'string' && raw[0] === '=';
     let nf = base.nf;
     if (nf === undefined && isFormula) nf = App.inferFormat(si, raw);
@@ -224,12 +242,13 @@
     let link = (cell && cell.link) || null;
     if (!link && isFormula && /^=\s*(HYPERLINK|HIPERLINK)\s*\(/i.test(raw)) { const m = /\(\s*"([^"]+)"/.exec(raw); if (m) link = m[1]; }
     if (!link && typeof v === 'string' && /^(https?:\/\/|www\.)\S+$/i.test(v)) link = v.startsWith('www.') ? 'https://' + v : v;
-    return { cell, raw, v, s, text, align, dv, link, crit, isErr: E.isErr(v), note: cell && cell.note, comment: cell && cell.comments && cell.comments.length };
+    return { cell, raw, v, s, text, align, dv, link, crit, locked, isErr: E.isErr(v), note: cell && cell.note, comment: cell && cell.comments && cell.comments.length };
   }
   App.cellInfo = (r, c) => cellInfo(App.sheet(), doc.active, r, c);
 
   function draw() {
     if (!ctx) return;
+    st.escFor = null;
     const sh = App.sheet(), si = doc.active;
     const dpr = window.devicePixelRatio || 1;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -669,6 +688,15 @@
     if (inf.isErr || invalid) tri(C.err);
     else if (inf.comment) tri(C.comment);
     else if (inf.note) tri(C.note);
+    if (inf.locked) {
+      // cadeado: veículo bloqueado para troca
+      const z = st.z, w = 7 * z, h = 6 * z, x = it.x + it.w - w - 4 * z, y = it.y + (it.h - h) / 2 + 1.5 * z;
+      ctx.save();
+      ctx.fillStyle = '#1a73e8'; ctx.strokeStyle = '#1a73e8'; ctx.lineWidth = 1.4 * z;
+      ctx.fillRect(x, y, w, h);
+      ctx.beginPath(); ctx.arc(x + w / 2, y, w * 0.32, Math.PI, 0); ctx.stroke();
+      ctx.restore();
+    }
   }
 
   function drawSparkline(sp, it) {

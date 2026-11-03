@@ -233,6 +233,22 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await sleep(150);
     check('apagar o CPF não apaga o nome', A.msgs.some((m) => m.type === 'patch' && m.by && m.by.name === 'DSS' && m.patch.sheets.p1.cells.G21 !== undefined), false);
 
+    // escala de veículos: escalar/confirmar (setor da escala), bloquear (setor do bloqueio), veículo bloqueado não troca
+    A.send({ type: 'patch', id: 90, patch: { sheets: { p1: { props: { colNames: { 1: 'CLIENTE', 2: 'SALÁRIO', 10: 'CAVALO', 11: 'CARRETA', 12: 'MOTORISTA' }, escala: { sectors: ['com'], lockSectors: ['fin'] } } } } } });
+    await A.wait('ack', (m) => m.id === 90);
+    await B.wait('patch', (m) => m.patch.sheets && m.patch.sheets.p1 && m.patch.sheets.p1.props && m.patch.sheets.p1.props.escala);
+    const res = async (id, cells) => { B.send({ type: 'patch', id, patch: { sheets: { p1: { cells } } } }); const r = await Promise.race([B.wait('ack', (m) => m.id === id).then(() => 'ok'), B.wait('reject', (m) => m.id === id).then((m) => m.reason)]); return r; };
+    check('setor da escala escala (não confirmada)', await res(91, { J30: { v: 'CAV0001', esc: 'p' }, K30: { v: 'CAR0001' }, L30: { v: 'JOAO' } }), 'ok');
+    check('setor da escala confirma', await res(92, { J30: { v: 'CAV0001', esc: 'ok' } }), 'ok');
+    check('setor da escala não bloqueia', /bloquear ou destravar/.test(await res(93, { J30: { v: 'CAV0001', esc: 'ok', lock: true } })), true);
+    A.send({ type: 'patch', id: 94, patch: { sheets: { p1: { cells: { J30: { v: 'CAV0001', esc: 'ok', lock: true } } } } } });
+    await A.wait('ack', (m) => m.id === 94);
+    await B.wait('patch', (m) => m.patch.sheets && m.patch.sheets.p1 && m.patch.sheets.p1.cells && m.patch.sheets.p1.cells.J30 && m.patch.sheets.p1.cells.J30.lock);
+    check('veículo bloqueado não troca o motorista', /bloqueado para troca/.test(await res(95, { L30: { v: 'PEDRO' } })), true);
+    check('CPF/contato continuam livres', await res(96, { M30: { v: '123' } }), 'ok');
+    check('qualquer um pede troca', await res(97, { J30: { v: 'CAV0001', esc: 'ok', lock: true, swap: true } }), 'ok');
+    check('só o setor do bloqueio encerra o pedido', /encerrar o pedido/.test(await res(98, { J30: { v: 'CAV0001', esc: 'ok', lock: true } })), true);
+
     // remover o acesso pelo link derruba o Caio
     await api('PUT', `/api/docs/${doc.id}/share`, { acl: Object.assign({}, acl, { link: 'none' }) }, ana.token);
     check('acesso removido', (await C.wait('error')).code, 'denied');
