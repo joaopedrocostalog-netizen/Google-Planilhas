@@ -799,3 +799,4 @@ body.executor .doc-title { pointer-events: none; }
 .mycolor-custom { display: flex; align-items: center; gap: 10px; }
 .mycolor-prev { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .mycolor-prev .avatar { width: 30px; height: 30px; border-radius: 50%; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-weight: 600; }
+.cf-all { align-self: flex-start; }

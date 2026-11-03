@@ -586,16 +586,23 @@
     // lista suspensa em formato de chip
     if (inf.dv && (inf.dv.type === 'list' || inf.dv.type === 'range')) {
       const arrow = 9 * z;
+      // respeita o alinhamento da célula/coluna (esquerda, centro ou direita)
+      const al = s.al === 'c' || s.al === 'r' ? s.al : 'l';
       if (inf.dv.style === 'arrow' || inf.text === '') {
         ctx.fillStyle = '#5f5f5f';
         const ax = it.x + it.w - pad - arrow, ay = it.y + it.h / 2 - 2 * z;
         ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(ax + arrow, ay); ctx.lineTo(ax + arrow / 2, ay + 5 * z); ctx.closePath(); ctx.fill();
-        if (inf.text) { ctx.fillStyle = color; ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.fillText(inf.text, it.x + pad, it.y + it.h / 2 + 0.5); }
+        if (inf.text) {
+          ctx.fillStyle = color; ctx.textBaseline = 'middle';
+          ctx.textAlign = al === 'c' ? 'center' : al === 'r' ? 'right' : 'left';
+          const tx = al === 'c' ? it.x + (it.w - arrow - pad) / 2 : al === 'r' ? ax - 4 * z : it.x + pad;
+          ctx.fillText(inf.text, tx, it.y + it.h / 2 + 0.5);
+        }
       } else {
         const colorMap = inf.dv.colors || {};
         const tw = ctx.measureText(inf.text).width;
         const chipH = Math.min(it.h - 4 * z, 18 * z), chipW = Math.min(it.w - 2 * pad, tw + 26 * z);
-        const cx = it.x + pad, cy = it.y + (it.h - chipH) / 2;
+        const cx = al === 'c' ? it.x + (it.w - chipW) / 2 : al === 'r' ? it.x + it.w - pad - chipW : it.x + pad, cy = it.y + (it.h - chipH) / 2;
         ctx.fillStyle = colorMap[inf.text] || C.chipBg;
         roundRect(cx, cy, chipW, chipH, chipH / 2); ctx.fill();
         ctx.fillStyle = s.color || '#1a1a1a';
