@@ -190,7 +190,7 @@
     box.addEventListener('dragend', () => { dragFrom = null; box.querySelectorAll('.tab').forEach((x) => x.classList.remove('drop-before', 'drop-after')); });
     $('tab-add').addEventListener('click', () => run('newSheet'));
     $('tab-list').addEventListener('click', (e) => {
-      App.ui.menuPopup(e.currentTarget, doc.sheets.map((s, i) => ({ label: s.name + (s.hidden ? ' (oculta)' : ''), check: i === doc.active, swatch: s.color || undefined, action: () => (s.hidden ? run('showSheet', i) : run('switchSheet', i)) })), { above: true });
+      App.ui.menuPopup(e.currentTarget, doc.sheets.map((s, i) => (s.shadow ? null : { label: s.name + (s.hidden ? ' (oculta)' : ''), check: i === doc.active, swatch: s.color || undefined, action: () => (s.hidden ? run('showSheet', i) : run('switchSheet', i)) })).filter(Boolean), { above: true });
     });
     App.on('sheet', renderTabs);
     App.on('change', renderTabs);

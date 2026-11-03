@@ -306,17 +306,61 @@
     if (s.colNames) o.colNames = maskNames(s.colNames, perms, s.id);
     return o;
   }
+  // Abas de consulta sem acesso (ex.: BASE GERAL, ou abas usadas por menus suspensos e formatação condicional):
+  // vão só com os valores, escondidas e sem edição, para que menus, validações e avisos funcionem para todos
+  function shadowSheetIds(data, perms) {
+    const out = new Set();
+    if (!perms || perms.admin) return out;
+    const hidden = data.sheets.filter((s) => !sheetVisible(perms, s.id));
+    if (!hidden.length) return out;
+    const refs = [];
+    for (const s of data.sheets) {
+      if (!sheetVisible(perms, s.id)) continue;
+      for (const d of s.dv || []) if (d && d.src) refs.push(String(d.src));
+      for (const r of s.cf || []) if (r && r.cond) refs.push(String(r.cond.a || '') + ' ' + String(r.cond.b || ''));
+    }
+    const txt = refs.join('\n');
+    for (const h of hidden) if (nrm(h.name) === 'BASEGERAL' || (h.name && txt.includes(h.name))) out.add(h.id);
+    return out;
+  }
+  const valuesOnly = (cells) => {
+    const out = {};
+    for (const a in cells || {}) { const x = cells[a]; out[a] = x && x.v !== undefined && x.v !== null && x.v !== '' ? { v: x.v } : null; }
+    return out;
+  };
+  function shadowOf(s) {
+    const cells = {};
+    for (const a in s.cells || {}) { const x = s.cells[a]; if (x && x.v !== undefined && x.v !== null && x.v !== '') cells[a] = { v: x.v }; }
+    return { id: s.id, name: s.name, shadow: true, hidden: true, rows: s.rows, cols: s.cols, colNames: s.colNames || {}, cells };
+  }
   // Remove do documento as páginas e colunas que o usuário não pode ver
   function filterDoc(data, perms) {
-    return Object.assign({}, data, { sheets: data.sheets.filter((s) => sheetVisible(perms, s.id)).map((s) => maskSheet(s, perms)) });
+    const shadows = shadowSheetIds(data, perms);
+    return Object.assign({}, data, { sheets: data.sheets.map((s) => (sheetVisible(perms, s.id) ? maskSheet(s, perms) : shadows.has(s.id) ? shadowOf(s) : null)).filter(Boolean) });
   }
   // Remove de uma alteração o que o destinatário não pode ver
-  function filterPatch(patch, perms) {
+  function filterPatch(patch, perms, data) {
     const out = Object.assign({}, patch, { sheets: {} });
     let any = patch.title !== undefined || patch.names !== undefined;
+    let shadows = null;
     for (const id in patch.sheets || {}) {
       const e = patch.sheets[id];
-      if (!e.removed && !sheetVisible(perms, id)) continue;
+      if (!e.removed && !sheetVisible(perms, id)) {
+        // aba de consulta sem acesso: só os valores
+        if (data && e.created) {
+          shadows = shadows || shadowSheetIds(data, perms);
+          if (shadows.has(id)) { out.sheets[id] = { created: shadowOf(Object.assign({ id }, e.created)) }; any = true; }
+        } else if (data) {
+          shadows = shadows || shadowSheetIds(data, perms);
+          if (shadows.has(id)) {
+            const o = {};
+            if (e.cells) o.cells = valuesOnly(e.cells);
+            if (e.props) { const pr = {}; for (const k of ['name', 'rows', 'cols', 'colNames']) if (k in e.props) pr[k] = e.props[k]; if (Object.keys(pr).length) o.props = pr; }
+            if (o.cells || o.props) { out.sheets[id] = o; any = true; }
+          }
+        }
+        continue;
+      }
       if (e.created) out.sheets[id] = { created: maskSheet(Object.assign({ id }, e.created), perms) };
       else if (hasHiddenCols(perms, id) && (e.cells || (e.props && e.props.colNames))) {
         const o = Object.assign({}, e);

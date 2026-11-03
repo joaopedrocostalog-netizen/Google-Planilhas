@@ -408,15 +408,18 @@
     doc.title = m.doc.title || 'Planilha sem título';
     doc.names = m.doc.names || {};
     doc.sheets = (m.doc.sheets || []).map(App.normalizeSheet);
-    if (!doc.sheets.length) {
+    if (!doc.sheets.some((s) => !s.shadow)) {
       // nenhuma página liberada para este setor
       const ph = App.newSheet('Sem acesso');
       ph.id = '__sem_acesso__';
       ph.cells.A1 = { v: 'Você ainda não tem acesso a nenhuma página desta planilha. Peça acesso a um administrador.', s: { i: true, color: '#6b6b6b' } };
-      doc.sheets = [ph];
+      doc.sheets = [ph].concat(doc.sheets);
       cloud.perms.sheets[ph.id] = 'view';
     }
-    const idx = activeId ? doc.sheets.findIndex((s) => s.id === activeId) : 0;
+    // abas de consulta (só valores, sem acesso) nunca ficam abertas
+    let idx = activeId ? doc.sheets.findIndex((s) => s.id === activeId) : -1;
+    if (idx < 0 || doc.sheets[idx].shadow || doc.sheets[idx].hidden) idx = doc.sheets.findIndex((s) => !s.shadow && !s.hidden);
+    if (idx < 0) idx = doc.sheets.findIndex((s) => !s.shadow);
     doc.active = Math.max(0, idx);
     App.clearHistory();
     App.invalidate();

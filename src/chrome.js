@@ -652,7 +652,7 @@
       };
       syncChip();
       App.on('sheet', syncChip); App.on('title', syncChip); App.on('change', syncChip);
-      chip.onclick = (e) => App.ui.menuPopup(e.currentTarget, doc.sheets.map((s, i) => ({ label: s.name + (s.hidden ? ' (oculta)' : ''), check: i === doc.active, swatch: s.color || undefined, action: () => (s.hidden ? App.run('showSheet', i) : App.run('switchSheet', i)) })));
+      chip.onclick = (e) => App.ui.menuPopup(e.currentTarget, doc.sheets.map((s, i) => (s.shadow ? null : { label: s.name + (s.hidden ? ' (oculta)' : ''), check: i === doc.active, swatch: s.color || undefined, action: () => (s.hidden ? App.run('showSheet', i) : App.run('switchSheet', i)) })).filter(Boolean));
     }
     t.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'Escape') { if (e.key === 'Escape') t.value = doc.title; t.blur(); App.grid.focus(); } });
     t.addEventListener('blur', () => { if (t.value.trim() !== doc.title) App.setTitle(t.value.trim()); sync(); });

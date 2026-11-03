@@ -249,6 +249,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     check('qualquer um pede troca', await res(97, { J30: { v: 'CAV0001', esc: 'ok', lock: true, swap: true } }), 'ok');
     check('só o setor do bloqueio encerra o pedido', /encerrar o pedido/.test(await res(98, { J30: { v: 'CAV0001', esc: 'ok', lock: true } })), true);
 
+    // aba de consulta sem acesso (BASE GERAL): vai só com os valores, escondida e sem edição
+    A.send({ type: 'patch', id: 99, patch: { sheets: { bg: { created: { id: 'bg', name: 'BASE GERAL', rows: 10, cols: 5, cells: { A1: { v: 'ENU2J12', s: { b: true }, note: 'segredo' } } } } } } });
+    await A.wait('ack', (m) => m.id === 99);
+    const bg1 = await B.wait('patch', (m) => m.patch.sheets && m.patch.sheets.bg);
+    check('base chega só com valores e escondida', [bg1.patch.sheets.bg.created.shadow, bg1.patch.sheets.bg.created.hidden, JSON.stringify(bg1.patch.sheets.bg.created.cells)], [true, true, '{"A1":{"v":"ENU2J12"}}']);
+    A.send({ type: 'patch', id: 100, patch: { sheets: { bg: { cells: { A2: { v: 'ABC1D23', s: { bg: '#ff0000' } } } } } } });
+    const bg2 = await B.wait('patch', (m) => m.patch.sheets && m.patch.sheets.bg && m.patch.sheets.bg.cells);
+    check('atualização da base também só com valores', JSON.stringify(bg2.patch.sheets.bg.cells), '{"A2":{"v":"ABC1D23"}}');
+    B.send({ type: 'patch', id: 102, patch: { sheets: { bg: { cells: { A3: { v: 'x' } } } } } });
+    check('setor não edita a base (rejeitado)', /acesso/.test((await B.wait('reject', (m) => m.id === 102)).reason), true);
+
     // remover o acesso pelo link derruba o Caio
     await api('PUT', `/api/docs/${doc.id}/share`, { acl: Object.assign({}, acl, { link: 'none' }) }, ana.token);
     check('acesso removido', (await C.wait('error')).code, 'denied');
