@@ -230,9 +230,23 @@
     }
   }
 
-  // muda as marcas da célula do CAVALO nas linhas selecionadas
-  function setFlags(label, rows, fn, okMsg) {
-    const sh = App.sheet(), c = cols(sh).CAVALO;
+  // rodotrem: a linha de cima ou de baixo com o mesmo CAVALO entra junto (bloquear, destravar, pedir troca)
+  function withPair(sh, rows) {
+    const c = cols(sh).CAVALO, si = doc.sheets.indexOf(sh);
+    if (!c || si < 0) return rows;
+    const out = new Set(rows);
+    App.withReal(() => {
+      for (const r of rows) {
+        const plate = norm(text(si, sh, r, c));
+        if (!plate) continue;
+        for (const d of [-1, 1]) if (r + d >= 1 && norm(text(si, sh, r + d, c)) === plate) out.add(r + d);
+      }
+    });
+    return [...out].sort((a, b) => a - b);
+  }
+  // muda as marcas da célula do CAVALO nas linhas indicadas
+  function setFlags(label, rows, fn, okMsg, target) {
+    const sh = target || App.sheet(), c = cols(sh).CAVALO;
     const done = App.change(label, () => App.withReal(() => {
       for (const r of rows) {
         const a = E.addrToStr(r, c);
@@ -244,7 +258,7 @@
     if (done !== false && okMsg) notify(okMsg);
     return done !== false;
   }
-  const rowsWith = (sh, pred) => App.withReal(() => selRows().filter((r) => pred(cavCell(sh, r) || {})));
+  const rowsWith = (sh, pred, pair) => App.withReal(() => (pair ? withPair(sh, selRows()) : selRows()).filter((r) => pred(cavCell(sh, r) || {})));
   const rowTxt = (rows) => (rows.length === 1 ? `linha ${rows[0]}` : `${rows.length} linhas`);
 
   function confirmarEscala() {
@@ -257,24 +271,25 @@
   function bloquear() {
     const sh = App.sheet();
     if (!canLock(sh)) return notify('Bloquear veículo não está liberado para o seu setor.');
-    const rows = rowsWith(sh, (x) => x.esc === 'ok' && !x.lock);
-    if (!rows.length) return notify('Só dá para bloquear depois que a escala estiver confirmada.');
+    const sel = rowsWith(sh, (x) => x.esc === 'ok' && !x.lock);
+    if (!sel.length) return notify('Só dá para bloquear depois que a escala estiver confirmada.');
+    const rows = withPair(sh, sel).filter((r) => !(cavCell(sh, r) || {}).lock);
     setFlags('Bloquear veículo', rows, (x) => { x.lock = true; delete x.swap; }, `Veículo bloqueado para troca (${rowTxt(rows)}). CAVALO, CARRETA e MOTORISTA só mudam depois de destravar.`);
   }
   function destravar() {
     const sh = App.sheet();
     if (!canLock(sh)) return notify('Destravar veículo não está liberado para o seu setor.');
-    const rows = rowsWith(sh, (x) => x.lock);
+    const rows = rowsWith(sh, (x) => x.lock, true);
     if (!rows.length) return notify('Nenhum veículo bloqueado na seleção.');
     setFlags('Destravar veículo', rows, (x) => { delete x.lock; delete x.swap; }, `Veículo destravado para troca (${rowTxt(rows)}). Depois da troca, bloqueie de novo.`);
   }
   // pede a troca ao setor que destrava: manda mensagem no chat e faz as células piscarem em azul
   function pedirTroca() {
     const sh = App.sheet();
-    const rows = rowsWith(sh, (x) => x.lock);
+    const rows = rowsWith(sh, (x) => x.lock, true);
     if (!rows.length) return notify('Este veículo não está bloqueado: a troca pode ser feita direto.');
     const tc = cols(sh);
-    const plates = App.withReal(() => rows.map((r) => text(doc.active, sh, r, tc.CAVALO) || '—'));
+    const plates = [...new Set(App.withReal(() => rows.map((r) => text(doc.active, sh, r, tc.CAVALO) || '—')))];
     const lockSectors = (sh.escala && sh.escala.lockSectors) || [];
     App.ui.modal({
       title: 'Pedir troca do veículo', width: '480px',
@@ -298,10 +313,34 @@
       const msg = `🔒 Pedido de troca de veículo — ${plates.join(', ')} (${rowTxt(rows)}, página ${sh.name}). Motivo: ${why}`;
       let ok = 0;
       for (const p of to) {
-        try { await App.collab.api('POST', '/api/messages', { to: p.id, text: msg, doc: App.cloud.id, ref: { sheet: sh.id, addr, label: `${sh.name}!${addr}` } }); ok++; } catch (e) { /* tenta os outros */ }
+        try { await App.collab.api('POST', '/api/messages', { to: p.id, text: msg, doc: App.cloud.id, ref: { sheet: sh.id, addr, label: `${sh.name}!${addr}`, act: 'unlock', rows } }); ok++; } catch (e) { /* tenta os outros */ }
       }
       notify(ok ? `Pedido enviado no chat para ${to.filter((_, i) => i < ok).map((p) => p.name.split(' ')[0]).join(', ')}. As células ficam piscando em azul até destravarem.` : 'Não foi possível enviar a mensagem do pedido.');
     }
+  }
+
+  // Destravar direto pela mensagem do pedido de troca (no chat); avisa quem pediu
+  function chatUnlockState(ref) {
+    if (!ref || ref.act !== 'unlock' || (ref.doc && App.cloud && ref.doc !== App.cloud.id)) return null;
+    const sh = doc.sheets.find((x) => x.id === ref.sheet);
+    if (!sh) return null;
+    const rows = App.withReal(() => withPair(sh, (ref.rows || []).filter((r) => r > 0)));
+    const locked = rows.filter((r) => (cavCell(sh, r) || {}).lock);
+    return { sh, rows, locked, can: canLock(sh) };
+  }
+  async function unlockFromChat(ref, requesterId) {
+    const st = chatUnlockState(ref);
+    if (!st) return notify('Abra a planilha do pedido para destravar.');
+    if (!st.can) return notify('Destravar veículo não está liberado para o seu setor.');
+    if (!st.locked.length) return notify('Este veículo já foi destravado.');
+    const plates = App.withReal(() => st.locked.map((r) => text(doc.sheets.indexOf(st.sh), st.sh, r, cols(st.sh).CAVALO) || '—'));
+    if (!setFlags('Destravar veículo', st.locked, (x) => { delete x.lock; delete x.swap; }, null, st.sh)) return false;
+    notify(`Veículo ${[...new Set(plates)].join(', ')} destravado para troca (${rowTxt(st.locked)}). Depois da troca, bloqueie de novo.`);
+    if (requesterId && App.cloudMode) {
+      const c = cols(st.sh).CAVALO, addr = E.numToCol(c) + st.locked[0];
+      try { await App.collab.api('POST', '/api/messages', { to: requesterId, text: `🔓 Veículo ${[...new Set(plates)].join(', ')} destravado para troca (${rowTxt(st.locked)}). Pode fazer a troca; depois o veículo será bloqueado de novo.`, doc: App.cloud.id, ref: { sheet: st.sh.id, addr, label: `${st.sh.name}!${addr}` } }); } catch (e) { /* o destravamento já foi feito */ }
+    }
+    return true;
   }
 
   // Administrador: quem escala/confirma e quem bloqueia/destrava nesta página
@@ -362,5 +401,5 @@
   def('destravarVeiculo', 'Destravar veículo para troca', destravar);
   def('pedirTroca', 'Pedir troca do veículo', pedirTroca);
   def('escalaConfig', 'Escala de veículos: quem pode usar', config);
-  App.escala = { dateKey, vehiclesToday, srcSheet, canEscalar, canLock };
+  App.escala = { dateKey, vehiclesToday, srcSheet, canEscalar, canLock, chatUnlockState, unlockFromChat, withPair };
 })(window.App);

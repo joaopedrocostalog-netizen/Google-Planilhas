@@ -712,10 +712,14 @@
   };
 
   // Coluna do alerta de container crítico: a escolhida pelo administrador, senão a coluna chamada IMO, senão T
+  // Coluna do alerta de container crítico: a escolhida pelo administrador, senão a coluna CONTAINER, senão T.
+  // (A coluna IMO tem a sua própria marcação: a caixa marcada pisca em verde.)
+  const isImoName = (n) => /^\s*IMO\s*$/i.test(String(n || ''));
+  App.isImoCol = (sh, c) => isImoName((sh.colNames || {})[c]) || isImoName((sh.cells[E.addrToStr(1, c)] || {}).v);
   App.critCol = (sh) => {
-    if (sh.critCol) return sh.critCol;
+    if (sh.critCol && !App.isImoCol(sh, sh.critCol)) return sh.critCol;
     const names = sh.colNames || {};
-    for (const k in names) if (/^\s*IMO\s*$/i.test(String(names[k]))) return +k;
+    for (const k in names) if (/^\s*CONTAINER\s*$/i.test(String(names[k]))) return +k;
     return 20;
   };
 

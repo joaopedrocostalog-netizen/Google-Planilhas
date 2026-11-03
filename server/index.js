@@ -51,12 +51,16 @@ async function loadColors() {
   for (const r of rows) {
     const c = String(r.color || '').toLowerCase();
     if (HEX.test(c) && !colorTaken(c)) userColors.set(r.id, c); else fix.push(r.id);
+    if (r.avatar_v) avatarVer.set(r.id, String(r.avatar_v));
   }
   for (const id of fix) { const c = nextColor(); userColors.set(id, c); await store.setUserColor(id, c); }
 }
 async function giveColor(id) { if (userColors.has(id)) return; const c = nextColor(); userColors.set(id, c); await store.setUserColor(id, c); }
 const colorFor = (id) => userColors.get(id) || COLORS[[...String(id)].reduce((a, c) => a + c.charCodeAt(0), 0) % COLORS.length];
-const publicUser = (u) => ({ id: u.id, email: u.email, name: u.name, color: colorFor(u.id) });
+// foto do perfil: o endereço leva a versão, para o navegador guardar a imagem e atualizar quando mudar
+const avatarVer = new Map();
+const avatarOf = (id) => avatarVer.get(id) || null;
+const publicUser = (u) => ({ id: u.id, email: u.email, name: u.name, color: colorFor(u.id), avatar: avatarOf(u.id) });
 async function isGlobalAdmin(u) {
   if (ADMIN_EMAILS.includes(String(u.email).toLowerCase())) return true;
   const rows = await store.listDocsFor(u);
@@ -192,7 +196,7 @@ async function saveRoom(room) {
 }
 // quem vê quem: administradores veem todos; os demais só veem pessoas do mesmo setor
 const seesPeer = (viewer, peer) => !!(viewer.perms && peer.perms) && (viewer.perms.admin || (!peer.perms.admin && viewer.perms.sectorId === peer.perms.sectorId));
-const peerInfo = (c) => ({ cid: c.cid, uid: c.user.id, name: c.user.name, email: c.user.email, color: colorFor(c.user.id), presence: c.presence });
+const peerInfo = (c) => ({ cid: c.cid, uid: c.user.id, name: c.user.name, email: c.user.email, color: colorFor(c.user.id), avatar: avatarOf(c.user.id), presence: c.presence });
 function sendInit(c) {
   const room = c.room;
   c.ws.send({
@@ -443,6 +447,30 @@ route('PUT', '/api/me/color', async (req) => {
   return { color };
 });
 
+// foto do perfil (imagem pequena, já recortada e reduzida no navegador)
+route('PUT', '/api/me/avatar', async (req) => {
+  const user = await requireUser(req);
+  const b = await readBody(req, 400000);
+  let data = b.data === null ? null : String(b.data || '');
+  if (data !== null && !/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(data)) throw httpError(400, 'Imagem inválida. Use uma foto JPG ou PNG.');
+  if (data && data.length > 300000) throw httpError(400, 'A foto é grande demais.');
+  const v = String(Date.now());
+  await store.setAvatar(user.id, data, v);
+  if (data) avatarVer.set(user.id, v); else avatarVer.delete(user.id);
+  for (const room of rooms.values()) for (const c of room.clients) {
+    if (!c.user || c.user.id !== user.id) continue;
+    for (const o of room.clients) if (o !== c && seesPeer(o, c)) o.ws.send({ type: 'presence', peer: peerInfo(c) });
+  }
+  return { avatar: avatarOf(user.id) };
+});
+route('GET', '/api/avatar/:uid', async (req, p) => {
+  const a = await store.getAvatar(p.uid);
+  if (!a || !a.avatar) throw httpError(404, 'Sem foto.');
+  const m = /^data:(image\/[a-z]+);base64,(.+)$/.exec(a.avatar);
+  if (!m) throw httpError(404, 'Sem foto.');
+  return { __raw: { type: m[1], body: Buffer.from(m[2], 'base64'), cache: 'public, max-age=31536000, immutable' } };
+});
+
 // ---------- Mensagens diretas ----------
 // Com quem a pessoa pode conversar nesta planilha: administradores falam com todos; os demais, com o próprio setor e com os administradores
 async function contactsFor(user, room) {
@@ -464,14 +492,14 @@ async function contactsFor(user, room) {
     const p = Perms.compute(permDoc(room), u);
     if (!p) continue;
     if (!(me.admin || p.admin || (p.sectorId && p.sectorId === me.sectorId) || (p.sectorId && lockSectors.has(p.sectorId)) || (me.sectorId && lockSectors.has(me.sectorId)))) continue;
-    out.push({ id: u.id, name: u.name, email: u.email, color: colorFor(u.id), admin: !!p.admin, sector: p.sectorName || null, sectorId: p.sectorId || null, online: online.has(u.id) });
+    out.push({ id: u.id, name: u.name, email: u.email, color: colorFor(u.id), avatar: avatarOf(u.id), admin: !!p.admin, sector: p.sectorName || null, sectorId: p.sectorId || null, online: online.has(u.id) });
   }
   return out.sort((a, b) => (b.online - a.online) || a.name.localeCompare(b.name, 'pt-BR'));
 }
 const userCache = new Map();
 async function userBrief(id) {
   if (!userCache.has(id)) { const u = await store.getUserById(id); userCache.set(id, u ? { id: u.id, name: u.name, email: u.email } : { id, name: 'Pessoa removida', email: '' }); }
-  return Object.assign({}, userCache.get(id), { color: colorFor(id) });
+  return Object.assign({}, userCache.get(id), { color: colorFor(id), avatar: avatarOf(id) });
 }
 const pubMsg = (m) => ({ id: m.id, from: m.from_id, to: m.to_id, doc: m.doc_id || null, text: m.text, ref: m.ref || null, at: m.at, read: !!m.read_at });
 function deliver(userIds, msg) {
@@ -522,7 +550,11 @@ route('POST', '/api/messages', async (req) => {
   if (!ok && room) ok = (await contactsFor(user, room)).some((c) => c.id === to);
   if (!ok) throw httpError(403, 'Você não pode enviar mensagem para esta pessoa.');
   let ref = null;
-  if (b.ref && typeof b.ref === 'object') ref = { sheet: String(b.ref.sheet || '').slice(0, 40), addr: String(b.ref.addr || '').slice(0, 30), label: String(b.ref.label || '').slice(0, 120), doc: room ? room.id : null, title: room ? String(room.data.title || '').slice(0, 120) : '' };
+  if (b.ref && typeof b.ref === 'object') {
+    ref = { sheet: String(b.ref.sheet || '').slice(0, 40), addr: String(b.ref.addr || '').slice(0, 30), label: String(b.ref.label || '').slice(0, 120), doc: room ? room.id : null, title: room ? String(room.data.title || '').slice(0, 120) : '' };
+    // pedido de troca de veículo: o setor responsável destrava pela própria mensagem
+    if (b.ref.act === 'unlock' && Array.isArray(b.ref.rows)) { ref.act = 'unlock'; ref.rows = b.ref.rows.map(Number).filter((n) => Number.isInteger(n) && n > 0 && n < 1e6).slice(0, 10); }
+  }
   const m = await store.addMessage({ from_id: user.id, to_id: to, doc_id: room ? room.id : null, text, ref });
   const out = Object.assign(pubMsg(m), { fromUser: await userBrief(user.id) });
   deliver([to, user.id], { type: 'dm', msg: out });
@@ -612,7 +644,7 @@ route('GET', '/api/docs/:id/history', async (req, p) => {
   if (!/^[A-Z]{1,3}\d{1,7}$/.test(addr)) throw httpError(400, 'Célula inválida.');
   if (!Perms.canSee(perms, sheet, addr)) throw httpError(403, 'Você não tem permissão para ver esta célula.');
   const rows = await store.getHistory(room.id, sheet, addr, 100);
-  return rows.map((h) => ({ at: h.at, name: h.user_name || 'Alguém', color: colorFor(h.user_id || ''), before: h.before, after: h.after }));
+  return rows.map((h) => ({ at: h.at, uid: h.user_id || null, name: h.user_name || 'Alguém', color: colorFor(h.user_id || ''), avatar: avatarOf(h.user_id || ''), before: h.before, after: h.after }));
 });
 
 // ---------- DSS: catálogo de motoristas (GET {DSS_BASE_URL}/listarMotoristas, Basic) ----------
@@ -740,7 +772,11 @@ const server = http.createServer(async (req, res) => {
     if (r.method !== req.method) continue;
     const m = r.re.exec(url.pathname);
     if (!m) continue;
-    try { return sendJson(res, 200, await r.fn(req, m.groups || {})); }
+    try {
+      const out = await r.fn(req, m.groups || {});
+      if (out && out.__raw) { res.writeHead(200, { 'Content-Type': out.__raw.type, 'Cache-Control': out.__raw.cache || 'no-store' }); return res.end(out.__raw.body); }
+      return sendJson(res, 200, out);
+    }
     catch (e) {
       if (!e.status && isDbError(e)) { logDbError(url.pathname, e); return sendJson(res, 503, { error: DB_DOWN_MSG }); }
       if (!e.status) console.error(e);

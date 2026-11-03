@@ -887,3 +887,19 @@ body.executor .doc-title { pointer-events: none; }
 .esc-tipo.rodo.on { background: #1a73e8; color: #fff; }
 .esc-car { display: inline-block; background: #eef3fd; color: #0b3d91; border-radius: 4px; padding: 0 6px; margin-right: 4px; font-weight: 600; }
 .esc-rodo { display: inline-block; font-style: normal; font-size: 10.5px; background: #1a73e8; color: #fff; border-radius: 8px; padding: 0 6px; margin-left: 6px; vertical-align: 1px; }
+.tip-lock { border-left: 3px solid #1a73e8; padding: 6px 10px; } .tip-lock p { margin: 2px 0 0; font-size: 12.5px; }
+.chat-unlock { display: block; margin-top: 6px; border: 0; background: #1a73e8; color: #fff; border-radius: 14px; padding: 5px 12px; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.chat-unlock:hover { background: #1765cc; }
+.chat-unlock.done { background: #e6f4ea; color: #137333; cursor: default; }
+/* foto do perfil */
+.avatar { overflow: hidden; }
+.avatar.has-img, .peer.has-img, .account-btn.has-img { padding: 0; }
+.av-img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; display: block; }
+.peer .av-img, .account-btn .av-img { width: 100%; height: 100%; }
+.account-btn.has-img { overflow: hidden; }
+.peer.has-img { overflow: hidden; }
+.pf-photo { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
+.pf-photo > div { display: flex; flex-direction: column; gap: 3px; }
+.pf-photo small { color: #6b6b6b; font-size: 12px; }
+.pf-photo-btns { display: flex; gap: 6px; margin-top: 4px; }
+.pf-photo-btns label.btn { cursor: pointer; }

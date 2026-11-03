@@ -208,14 +208,19 @@
     const dv = sh.dv.length ? App.dvAt(sh, r, c) : null;
     // container crítico: numa caixa de seleção só a caixa pisca (verde); nas demais células, a célula pisca em vermelho
     let crit = false;
-    if (cell && cell.crit) {
+    const isCb = !!(dv && dv.type === 'checkbox');
+    if (isCb) {
+      // coluna IMO: a caixa marcada pisca em verde (marcação própria de cada linha)
+      if (App.isImoCol && App.isImoCol(sh, c) && App.cbIsOn(dv, raw, v)) { st.hasCrit = true; crit = Math.floor(Date.now() / 550) % 2 === 1; }
+    } else if (cell && cell.crit) {
+      // container crítico: a célula pisca em vermelho
       st.hasCrit = true;
       crit = Math.floor(Date.now() / 550) % 2 === 1;
-      if (!(dv && dv.type === 'checkbox')) s = Object.assign({}, s, crit ? { bg: '#d93025', color: '#ffffff', b: true } : { bg: '#fce8e6', color: '#b3261e', b: true });
+      s = Object.assign({}, s, crit ? { bg: '#d93025', color: '#ffffff', b: true } : { bg: '#fce8e6', color: '#b3261e', b: true });
     }
     // escala de veículos: não confirmada = vermelho (por cima da formatação condicional);
     // pedido de troca = CAVALO, CARRETA e MOTORISTA piscando em azul; bloqueado = cadeado no CAVALO
-    let locked = false;
+    let locked = false, swap = false;
     if (window.Perms && window.Perms.escalaCols) {
       if (st.escFor !== sh) { st.escFor = sh; st.escCols = window.Perms.escalaCols(sh); }
       const ec = st.escCols;
@@ -227,7 +232,7 @@
             st.hasCrit = true;
             s = Object.assign({}, s, Math.floor(Date.now() / 550) % 2 ? { bg: '#1a73e8', color: '#ffffff', b: true } : { bg: '#d2e3fc', color: '#0b3d91', b: true });
           } else if (cav.esc === 'p') s = Object.assign({}, s, { bg: '#d93025', color: '#ffffff' });
-          if (cav.lock && c === ec.CAVALO) locked = true;
+          if (cav.lock && vehicle) { locked = true; swap = !!cav.swap; }
         }
       }
     }
@@ -242,7 +247,7 @@
     let link = (cell && cell.link) || null;
     if (!link && isFormula && /^=\s*(HYPERLINK|HIPERLINK)\s*\(/i.test(raw)) { const m = /\(\s*"([^"]+)"/.exec(raw); if (m) link = m[1]; }
     if (!link && typeof v === 'string' && /^(https?:\/\/|www\.)\S+$/i.test(v)) link = v.startsWith('www.') ? 'https://' + v : v;
-    return { cell, raw, v, s, text, align, dv, link, crit, locked, isErr: E.isErr(v), note: cell && cell.note, comment: cell && cell.comments && cell.comments.length };
+    return { cell, raw, v, s, text, align, dv, link, crit, locked, swap, isErr: E.isErr(v), note: cell && cell.note, comment: cell && cell.comments && cell.comments.length };
   }
   App.cellInfo = (r, c) => cellInfo(App.sheet(), doc.active, r, c);
 
@@ -689,12 +694,13 @@
     else if (inf.comment) tri(C.comment);
     else if (inf.note) tri(C.note);
     if (inf.locked) {
-      // cadeado: veículo bloqueado para troca
-      const z = st.z, w = 7 * z, h = 6 * z, x = it.x + it.w - w - 4 * z, y = it.y + (it.h - h) / 2 + 1.5 * z;
+      // veículo bloqueado para troca: moldura azul dupla em CAVALO, CARRETA e MOTORISTA (passe o mouse para ver o aviso)
+      const z = st.z;
       ctx.save();
-      ctx.fillStyle = '#1a73e8'; ctx.strokeStyle = '#1a73e8'; ctx.lineWidth = 1.4 * z;
-      ctx.fillRect(x, y, w, h);
-      ctx.beginPath(); ctx.arc(x + w / 2, y, w * 0.32, Math.PI, 0); ctx.stroke();
+      ctx.strokeStyle = '#1a73e8'; ctx.lineWidth = 2 * z;
+      ctx.strokeRect(it.x + 1.5 * z, it.y + 1.5 * z, it.w - 3 * z, it.h - 3 * z);
+      ctx.fillStyle = '#1a73e8';
+      ctx.fillRect(it.x + 1.5 * z, it.y + it.h - 4.5 * z, it.w - 3 * z, 3 * z);
       ctx.restore();
     }
   }
