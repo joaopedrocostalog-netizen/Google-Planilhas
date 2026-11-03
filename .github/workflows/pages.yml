@@ -24,6 +24,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Testar o motor de fórmulas
         run: node tests/engine.test.js
+      - name: Versão nos arquivos (o navegador não usa arquivos antigos guardados)
+        run: sed -i -E "s#(src/[a-z0-9]+\.(js|css))\"#\1?v=${GITHUB_SHA::8}\"#g" index.html && grep -c "?v=" index.html
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
