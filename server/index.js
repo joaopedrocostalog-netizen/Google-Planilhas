@@ -456,12 +456,15 @@ async function contactsFor(user, room) {
   for (const c of room.clients) if (c.user) cand.set(c.user.id, c.user);
   cand.delete(user.id);
   const online = new Set([...room.clients].map((c) => c.user && c.user.id));
+  // setores que destravam veículos (escala): qualquer pessoa pode pedir troca a eles pelo chat
+  const lockSectors = new Set();
+  for (const sh of room.data.sheets || []) for (const id of (sh.escala && sh.escala.lockSectors) || []) lockSectors.add(id);
   const out = [];
   for (const u of cand.values()) {
     const p = Perms.compute(permDoc(room), u);
     if (!p) continue;
-    if (!(me.admin || p.admin || (p.sectorId && p.sectorId === me.sectorId))) continue;
-    out.push({ id: u.id, name: u.name, email: u.email, color: colorFor(u.id), admin: !!p.admin, sector: p.sectorName || null, online: online.has(u.id) });
+    if (!(me.admin || p.admin || (p.sectorId && p.sectorId === me.sectorId) || (p.sectorId && lockSectors.has(p.sectorId)) || (me.sectorId && lockSectors.has(me.sectorId)))) continue;
+    out.push({ id: u.id, name: u.name, email: u.email, color: colorFor(u.id), admin: !!p.admin, sector: p.sectorName || null, sectorId: p.sectorId || null, online: online.has(u.id) });
   }
   return out.sort((a, b) => (b.online - a.online) || a.name.localeCompare(b.name, 'pt-BR'));
 }

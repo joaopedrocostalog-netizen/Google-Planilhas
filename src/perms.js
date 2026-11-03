@@ -29,6 +29,48 @@
   }
   const colName = (c) => { let s = ''; while (c > 0) { const m = (c - 1) % 26; s = String.fromCharCode(65 + m) + s; c = Math.floor((c - 1) / 26); } return s; };
 
+  // Colunas da escala de veículos pelo nome (nome dado pelo administrador ou texto da linha 1)
+  const nrm = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\b(DE|DA|DO|DAS|DOS)\b/g, ' ').replace(/[^A-Z0-9]/g, '');
+  const ESC_FIELDS = ['CAVALO', 'CARRETA', 'MOTORISTA', 'CPF', 'CONTATO'];
+  const escCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  function escalaCols(sheet) {
+    if (!sheet) return {};
+    const names = sheet.colNames || {}, cells = sheet.cells || {};
+    const maxC = Math.min(Math.max(sheet.cols || 26, ...Object.keys(names).map(Number)), 400);
+    const labels = [];
+    for (let c = 1; c <= maxC; c++) labels.push(names[c] || (cells[colName(c) + '1'] && cells[colName(c) + '1'].v) || '');
+    const key = labels.join('\u0001');
+    const hit = escCache && escCache.get(sheet);
+    if (hit && hit.key === key) return hit.cols;
+    const cols = {};
+    labels.forEach((l, i) => { const k = nrm(l); if (ESC_FIELDS.includes(k) && !cols[k]) cols[k] = i + 1; });
+    if (escCache) escCache.set(sheet, { key, cols });
+    return cols;
+  }
+  const truthy = (x) => x !== undefined && x !== null && x !== false && x !== '';
+  // Regras da escala de veículos para quem não é administrador:
+  // escalar/confirmar = setores da escala; bloquear/destravar = setores do bloqueio; veículo bloqueado não troca
+  function escalaCheck(perms, sheet, a, before, after, beforeOf) {
+    const cols = escalaCols(sheet);
+    if (!cols.CAVALO) return null;
+    const p = parseAddr(a);
+    if (!p) return null;
+    const cfg = sheet.escala || {};
+    const inEsc = (cfg.sectors || []).includes(perms.sectorId), inLock = (cfg.lockSectors || []).includes(perms.sectorId);
+    const b = before || {}, f = after || {};
+    if (p.c === cols.CAVALO) {
+      if (truthy(b.lock) !== truthy(f.lock) && !inLock) return 'Somente o setor responsável pode bloquear ou destravar o veículo.';
+      if (truthy(b.swap) && !truthy(f.swap) && !inLock) return 'Somente o setor responsável pode encerrar o pedido de troca (destravando o veículo).';
+      if ((b.esc || '') !== (f.esc || '') && !inEsc) return 'Somente o setor responsável pela escala pode escalar ou confirmar a escala.';
+    }
+    if ([cols.CAVALO, cols.CARRETA, cols.MOTORISTA].includes(p.c)) {
+      const cav = beforeOf(colName(cols.CAVALO) + p.r);
+      const bv = b.v === undefined || b.v === null ? '' : String(b.v), fv = f.v === undefined || f.v === null ? '' : String(f.v);
+      if (cav && truthy(cav.lock) && bv !== fv && !inLock) return 'Veículo bloqueado para troca. Peça ao setor responsável para destravar (use "Pedir troca" no botão direito ou o chat).';
+    }
+    return null;
+  }
+
   // Calcula as permissões de um usuário. doc: { ownerId, acl, data: { sheets } }; user: { id, email }
   function compute(doc, user) {
     const acl = Object.assign(defaultAcl(), doc.acl || {});
@@ -167,11 +209,13 @@
   // formato de número, fonte, tamanho, negrito, itálico, tachado, cor do texto e cor de preenchimento
   const EXEC_STYLE = ['nf', 'ff', 'fs', 'b', 'i', 'st', 'color', 'bg'];
   // Célula resultante quando um setor altera "before" para "after": só o valor e a formatação liberada mudam
+  // marcas de linha que os setores podem mudar (quem pode cada uma é conferido em escalaCheck)
+  const FLAG_KEYS = ['crit', 'esc', 'lock', 'swap'];
   function execMerge(before, after) {
     const out = {}, s = {};
-    if (before) for (const k in before) if (k !== 'v' && k !== 's' && k !== 'crit' && k[0] !== '_') out[k] = before[k];
-    // marcação de container crítico também é liberada para os setores
-    if (after && after.crit) out.crit = true;
+    if (before) for (const k in before) if (k !== 'v' && k !== 's' && !FLAG_KEYS.includes(k) && k[0] !== '_') out[k] = before[k];
+    // container crítico e marcas da escala de veículos
+    if (after) for (const k of FLAG_KEYS) if (after[k] !== undefined && after[k] !== null && after[k] !== false && after[k] !== '') out[k] = after[k];
     if (before && before.s) for (const k in before.s) if (!EXEC_STYLE.includes(k)) s[k] = before.s[k];
     if (after && after.s) for (const k of EXEC_STYLE) if (after.s[k] !== undefined && after.s[k] !== null) s[k] = after.s[k];
     if (Object.keys(s).length) out.s = s;
@@ -223,7 +267,9 @@
             const pr = blockingProtection(perms, sheet, a);
             if (pr) return `A célula ${a} está protegida${pr.desc ? ' (' + pr.desc + ')' : ''}. Peça acesso a um administrador.`;
           }
+          const beforeOf = (x) => (invCells && x in invCells ? invCells[x] : sheet ? (sheet.cells || {})[x] || null : null);
           const before = invCells ? (a in invCells ? invCells[a] : null) : sheet ? (sheet.cells || {})[a] || null : null;
+          if (sheet) { const ee = escalaCheck(perms, sheet, a, before, e.cells[a], beforeOf); if (ee) return ee; }
           if (!execAllowed(before, e.cells[a])) return FORMAT_MSG;
         }
       }
@@ -282,7 +328,7 @@
   // Pode ver a célula?
   const canSee = (perms, sheetId, addr) => sheetVisible(perms, sheetId) && colLevel(perms, sheetId, colOf(addr)) !== 'none';
 
-  const api = { COLS_MSG, FORMAT_MSG, nonValue, execMerge, execAllowed, stable, normCell, EXEC_STYLE, compute, validate, filterDoc, filterPatch, levelOf, colLevel, sheetVisible, bestLevel, hasHiddenCols, hasColRules, blockingProtection, defaultAcl, canSee, colOf, colName, RANK, LEVELS };
+  const api = { escalaCols, escalaCheck, ESC_FIELDS, normName: nrm, COLS_MSG, FORMAT_MSG, nonValue, execMerge, execAllowed, stable, normCell, EXEC_STYLE, compute, validate, filterDoc, filterPatch, levelOf, colLevel, sheetVisible, bestLevel, hasHiddenCols, hasColRules, blockingProtection, defaultAcl, canSee, colOf, colName, RANK, LEVELS };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Perms = api;
 })(typeof window !== 'undefined' ? window : globalThis);

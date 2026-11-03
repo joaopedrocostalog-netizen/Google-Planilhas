@@ -880,3 +880,10 @@ body.executor .doc-title { pointer-events: none; }
 .esc-table em { display: block; font-style: normal; font-size: 11px; color: #b06000; }
 .esc-conf { margin: 4px 0 8px 18px; font-size: 13px; }
 .esc-sectors { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 10px; }
+.esc-ok { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line, #e3e3e3); border-radius: 8px; background: #fafafa; font-size: 13.5px; }
+.esc-ok span { color: #6b6b6b; font-size: 12.5px; }
+.esc-ok input { width: 18px; height: 18px; }
+.esc-tipo.rodo { border-color: #1a73e8; color: #1a73e8; }
+.esc-tipo.rodo.on { background: #1a73e8; color: #fff; }
+.esc-car { display: inline-block; background: #eef3fd; color: #0b3d91; border-radius: 4px; padding: 0 6px; margin-right: 4px; font-weight: 600; }
+.esc-rodo { display: inline-block; font-style: normal; font-size: 10.5px; background: #1a73e8; color: #fff; border-radius: 8px; padding: 0 6px; margin-left: 6px; vertical-align: 1px; }
