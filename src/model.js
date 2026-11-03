@@ -212,10 +212,15 @@
         if (!fwd) { App.emit('change', {}); App.emit('notify', window.Perms.FORMAT_MSG); return false; }
       }
     }
+    // veículo bloqueado (escala): nem administradores trocam sem destravar antes
+    if (fwd && App.lockViolation) {
+      const lv = App.lockViolation(fwd, inv);
+      if (lv) { applyPatch(inv); if (isStructural(inv)) App.emit('sheet'); App.emit('change', {}); App.emit('lockedAttempt', lv); return false; }
+    }
     // permissões (planilhas compartilhadas): desfaz a alteração se não for permitida
     if (fwd && App.validatePatch) {
       const err = App.validatePatch(fwd, inv);
-      if (err) { applyPatch(inv); if (isStructural(inv)) App.emit('sheet'); App.emit('change', {}); App.emit('notify', err); return false; }
+      if (err) { applyPatch(inv); if (isStructural(inv)) App.emit('sheet'); App.emit('change', {}); if (err === window.Perms.LOCK_MSG) App.emit('lockedAttempt', null); else App.emit('notify', err); return false; }
     }
     if (fwd) {
       hist.undo.push({ label, fwd, inv });
