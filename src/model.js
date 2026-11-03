@@ -837,8 +837,6 @@
       sh.colW = shiftMap(sh.colW, at, count);
       sh.hiddenCols = shiftMap(sh.hiddenCols, at, count);
       if (sh.colNames) sh.colNames = shiftMap(sh.colNames, at, count);
-      // ordem das colunas nas visualizações: acompanha colunas inseridas ou excluídas
-      if (sh.viewOrder && sh.viewOrder.length) sh.viewOrder = sh.viewOrder.map((c) => (c >= at ? (count < 0 && c < at - count ? null : c + count) : c)).filter((c) => c !== null && c >= 1);
       if (sh.colHdr) sh.colHdr = shiftMap(sh.colHdr, at, count);
       if (sh.colGroups && sh.colGroups.length) sh.colGroups = sh.colGroups.map((g) => { const R = shiftRect({ r1: 1, r2: 1, c1: g.c1, c2: g.c2 }, 'col', at, count); return R ? Object.assign({}, g, { c1: R.c1, c2: R.c2 }) : null; }).filter(Boolean);
       if (sh.access) { const acc = {}; for (const k in sh.access) acc[k] = shiftMap(sh.access[k], at, count); sh.access = acc; }
@@ -868,6 +866,65 @@
       for (const ch of other.charts) if (other !== sh && ch.range.includes('!')) ch.range = E.structuralShift('=' + ch.range, other.name, sh.name, axis, at, count).slice(1);
     }
     for (const n in doc.names) doc.names[n] = E.structuralShift('=' + doc.names[n], sh.name, sh.name, axis, at, count).slice(1);
+  };
+  // Mover colunas de lugar (para todos): as colunas c1..c2 vão para antes da coluna "to".
+  // Leva junto valores, formatação, nomes, permissões por coluna, regras, validações e fórmulas.
+  App.moveColumns = (si, c1, c2, to) => {
+    const sh = doc.sheets[si];
+    const n = c2 - c1 + 1;
+    if (to >= c1 && to <= c2 + 1) return false;
+    const P = (c) => {
+      if (c >= c1 && c <= c2) return to < c1 ? to + (c - c1) : to - n + (c - c1);
+      if (to < c1 && c >= to && c < c1) return c + n;
+      if (to > c2 && c > c2 && c < to) return c - n;
+      return c;
+    };
+    const mapKeys = (m) => { if (!m) return m; const o = {}; for (const k in m) { const c = +k; o[Number.isFinite(c) && c > 0 ? P(c) : k] = m[k]; } return o; };
+    // intervalo de colunas depois de mover: um ou mais trechos contínuos
+    const segments = (a, b) => {
+      const list = []; for (let c = a; c <= b; c++) list.push(P(c));
+      list.sort((x, y) => x - y);
+      const out = []; let s0 = list[0], prev = list[0];
+      for (let i = 1; i <= list.length; i++) { if (i < list.length && list[i] === prev + 1) { prev = list[i]; continue; } out.push([s0, prev]); s0 = prev = list[i]; }
+      return out;
+    };
+    const span = (a, b) => { const seg = segments(a, b); return [seg[0][0], seg[seg.length - 1][1]]; };
+    const cells = {};
+    for (const a in sh.cells) { const p = E.parseAddr(a); cells[addr(p.row, P(p.col))] = sh.cells[a]; }
+    sh.cells = cells;
+    sh.colW = mapKeys(sh.colW); sh.hiddenCols = mapKeys(sh.hiddenCols);
+    if (sh.colNames) sh.colNames = mapKeys(sh.colNames);
+    if (sh.colHdr) sh.colHdr = mapKeys(sh.colHdr);
+    if (sh.access) { const acc = {}; for (const k in sh.access) acc[k] = mapKeys(sh.access[k]); sh.access = acc; }
+    if (sh.critCol) sh.critCol = P(sh.critCol);
+    if (sh.lookup) { const lk = Object.assign({}, sh.lookup); if (lk.col) lk.col = P(lk.col); if (lk.cpfCol) lk.cpfCol = P(lk.cpfCol); sh.lookup = lk; }
+    // regras com intervalo: se o intervalo se partir, a regra vira uma por trecho
+    const splitRules = (list, withId) => {
+      const out = [];
+      for (const x of list || []) {
+        const R = x.range;
+        if (!R) { out.push(x); continue; }
+        segments(R.c1, R.c2).forEach(([a, b], i) => out.push(Object.assign(JSON.parse(JSON.stringify(x)), { range: Object.assign({}, R, { c1: a, c2: b }) }, i && withId ? { id: uid() } : {})));
+      }
+      return out;
+    };
+    sh.cf = splitRules(sh.cf, true); sh.dv = splitRules(sh.dv, true); sh.banding = splitRules(sh.banding, true);
+    if (sh.protected && sh.protected.length) sh.protected = splitRules(sh.protected, true);
+    sh.merges = sh.merges.map((g) => { const seg = segments(g.c1, g.c2); return seg.length === 1 ? Object.assign({}, g, { c1: seg[0][0], c2: seg[0][1] }) : null; }).filter(Boolean);
+    if (sh.colGroups && sh.colGroups.length) sh.colGroups = sh.colGroups.map((g) => { const seg = segments(g.c1, g.c2); return seg.length === 1 ? Object.assign({}, g, { c1: seg[0][0], c2: seg[0][1] }) : null; }).filter(Boolean);
+    if (sh.filter) { const [a, b] = span(sh.filter.c1, sh.filter.c2); sh.filter = Object.assign({}, sh.filter, { c1: a, c2: b, crit: mapKeys(sh.filter.crit || {}) }); }
+    const fix = (f, fs) => E.moveColumnsRefs(f, fs, sh.name, P);
+    for (const ch of sh.charts || []) ch.range = fix('=' + ch.range, sh.name).slice(1);
+    for (const other of doc.sheets) {
+      for (const a in other.cells) { const x = other.cells[a]; if (typeof x.v === 'string' && x.v[0] === '=') x.v = fix(x.v, other.name); }
+      for (const r of other.cf || []) if (r.cond) { if (typeof r.cond.a === 'string' && r.cond.a[0] === '=') r.cond.a = fix(r.cond.a, other.name); if (typeof r.cond.b === 'string' && r.cond.b[0] === '=') r.cond.b = fix(r.cond.b, other.name); }
+      for (const d of other.dv || []) if (d.src) d.src = fix('=' + App.quoteSheetRef(d.src).replace(/^=/, ''), other.name).slice(1);
+      if (other !== sh) for (const ch of other.charts || []) if (ch.range.includes('!')) ch.range = fix('=' + ch.range, other.name).slice(1);
+    }
+    for (const nm in doc.names) doc.names[nm] = fix('=' + doc.names[nm], sh.name).slice(1);
+    // marca a mudança (o servidor não registra isso no histórico de cada célula)
+    sh.colMoveSeq = (sh.colMoveSeq || 0) + 1;
+    return { from: P(c1), to: P(c2) };
   };
   App.renameSheet = (si, newName) => {
     const sh = doc.sheets[si], old = sh.name;

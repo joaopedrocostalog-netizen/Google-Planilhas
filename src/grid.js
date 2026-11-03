@@ -1103,11 +1103,19 @@
       case 'colHdr': {
         // visualização de filtro: segurar a coluna selecionada e arrastar muda a ordem (só para você)
         // basta segurar o cabeçalho e arrastar; Shift+clique seleciona várias colunas para mover juntas
-        if (!e.shiftKey && !e.ctrlKey && !e.metaKey && App.views.has(sh.id) && (!App.canMoveCols || App.canMoveCols())) {
+        if (!e.shiftKey && !e.ctrlKey && !e.metaKey && App.views.has(sh.id)) {
           let Rs = App.selRect();
           if (!(Rs.r1 === 1 && Rs.r2 >= st.nR && h.c >= Rs.c1 && h.c <= Rs.c2)) { selectCols(h.c, h.c); Rs = App.selRect(); }
           st.drag = { kind: 'colMove', d1: Rs.c1, d2: Rs.c2, x0: p.x, px: p.x, to: null, active: false, frozen: Rs.c1 <= st.Fc };
           bindDrag(); return;
+        }
+        // planilha normal: o administrador segura o cabeçalho de uma coluna já selecionada e arrasta (vale para todos)
+        if (!e.shiftKey && !e.ctrlKey && !e.metaKey && !App.views.has(sh.id) && App.canMoveRealCols && App.canMoveRealCols()) {
+          const Rs = App.selRect();
+          if (Rs.r1 === 1 && Rs.r2 >= st.nR && h.c >= Rs.c1 && h.c <= Rs.c2 && !(Rs.c1 === 1 && Rs.c2 >= st.nC)) {
+            st.drag = { kind: 'colMove', real: true, d1: Rs.c1, d2: Rs.c2, x0: p.x, px: p.x, to: null, active: false, frozen: false };
+            bindDrag(); return;
+          }
         }
       }
         if (e.shiftKey) { sel.ec = h.c; sel.er = st.nR; sel.ar = 1; App.emit('selection'); schedule(); }
@@ -1191,7 +1199,7 @@
         if (d.frozen) { schedule(); break; }
         const cc = colAtScreen(px);
         d.to = p.x > colX(cc) + colW(cc) / 2 ? cc + 1 : cc;
-        if (d.to <= st.Fc) d.to = st.Fc + 1;
+        if (d.to <= st.Fc && !d.real) d.to = st.Fc + 1;
         schedule(); break;
       }
       case 'freezeRows': d.to = p.y < st.hdrH + 4 ? 0 : rowAtScreen(p.y); schedule(); break;
@@ -1245,6 +1253,7 @@
       scroller.style.cursor = '';
       if (d.active && d.frozen) { App.emit('notify', 'Colunas congeladas ficam fixas. Para mudar a ordem delas, descongele em Ver › Congelar.'); return; }
       if (!d.active || d.to === null) return;
+      if (d.real) { if (!d.active) return; App.run('moveColumns', { c1: d.d1, c2: d.d2, to: d.to }); return; }
       const res = App.moveViewCols(d.d1, d.d2, d.to);
       if (res) setTimeout(() => selectCols(res.from, res.to), 0);
       return;
@@ -1353,7 +1362,8 @@
     const p = pos(e);
     const h = hit(p.x, p.y);
     scroller.style.cursor = h.area === 'cell' && GROUP(h.r) ? 'pointer' : h.area === 'colEdge' ? 'col-resize' : h.area === 'rowEdge' ? 'row-resize' : h.area === 'fill' ? 'crosshair'
-      : h.area === 'colHdr' && App.views.has(App.sheet().id) && (!App.canMoveCols || App.canMoveCols()) ? 'grab'
+      : h.area === 'colHdr' && App.views.has(App.sheet().id) ? 'grab'
+      : h.area === 'colHdr' && App.canMoveRealCols && App.canMoveRealCols() && (() => { const R = App.selRect(); return R.r1 === 1 && R.r2 >= st.nR && h.c >= R.c1 && h.c <= R.c2; })() ? 'grab'
       : h.area === 'colHdr' || h.area === 'filterHdr' || h.area === 'colGroup' || h.area === 'rowHdr' || h.area === 'unhideCols' || h.area === 'unhideRows' || h.area === 'corner' ? 'pointer'
         : h.area === 'freezeRowBar' ? 'row-resize' : h.area === 'freezeColBar' ? 'col-resize' : 'default';
     const key = h.area === 'cell' ? h.r + ':' + h.c : null;
