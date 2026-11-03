@@ -53,38 +53,72 @@
     { bg: '#b7e1cd', color: '#000000' }, { bg: '#fce8b2', color: '#000000' }, { bg: '#f4c7c3', color: '#000000' },
     { bg: '#e30613', color: '#ffffff' }, { bg: '#0d0d0d', color: '#ffffff' }, { color: '#e30613', b: true },
   ];
+  // As regras são gravadas enquanto a pessoa edita (e já aparecem para todos na planilha compartilhada),
+  // em vez de só ao fechar o painel.
   function condFormat() {
-    const sh = App.sheet();
-    const original = clone(sh.cf);
-    let editing = null;
-    const finish = () => {
-      const final = clone(sh.cf);
-      sh.cf = original;
-      if (JSON.stringify(final) !== JSON.stringify(original)) App.change('Formatação condicional', () => { sh.cf = final; });
-      else preview();
+    const sid = App.sheet().id;
+    const S = () => doc.sheets.find((x) => x.id === sid) || App.sheet();
+    let work = clone(S().cf || []);
+    let editingId = null, timer = null, alive = true, bodyRef = null, showAll = false;
+    const sh = { get cf() { return work; }, set cf(v) { work = v; } };
+    const save = () => {
+      clearTimeout(timer); timer = null;
+      const s = S();
+      if (JSON.stringify(s.cf || []) === JSON.stringify(work)) return;
+      App.change('Formatação condicional', () => { s.cf = clone(work); });
+    };
+    const preview = (now) => { clearTimeout(timer); if (now === true) save(); else timer = setTimeout(save, 350); };
+    // mudanças vindas de outra pessoa (ou desfazer) atualizam a lista
+    App.on('change', () => {
+      if (!alive || timer) return;
+      const cur = S().cf || [];
+      if (JSON.stringify(cur) === JSON.stringify(work)) return;
+      work = clone(cur);
+      if (editingId && !work.some((r) => r.id === editingId)) editingId = null;
+      if (bodyRef && !bodyRef.contains(document.activeElement)) render(bodyRef);
+    });
+    const finish = () => { save(); alive = false; };
+    const duplicate = (id) => {
+      const i = work.findIndex((r) => r.id === id);
+      if (i < 0) return;
+      const copy = Object.assign(clone(work[i]), { id: App.uid() });
+      work.splice(i + 1, 0, copy);
+      editingId = copy.id;
+      showAll = true;
+      preview(true);
+      notify('Regra duplicada. Ajuste o intervalo, a condição ou a cor da cópia.');
     };
     const render = (body) => {
-      if (editing) return renderRule(body);
+      bodyRef = body;
+      if (editingId && work.some((r) => r.id === editingId)) return renderRule(body);
+      editingId = null;
       const R = App.selRect();
-      const rules = sh.cf.filter((r) => !(r.range.r2 < R.r1 || r.range.r1 > R.r2 || r.range.c2 < R.c1 || r.range.c1 > R.c2));
-      body.innerHTML = `<p class="sp-hint">${rules.length ? 'Regras que se aplicam à seleção atual:' : 'Nenhuma regra na seleção atual.'}</p>
-        <div class="cf-list">${(rules.length ? rules : sh.cf).map((r) => `<div class="cf-item" data-id="${r.id}">${r.kind === 'scale' ? `<span class="cf-chip" style="background:linear-gradient(90deg,${r.min},${r.mid || r.min},${r.max})">&nbsp;</span>` : styleChip(r.style)}<div><b>${esc(r.kind === 'scale' ? 'Escala de cores' : (App.CONDITIONS.find((c) => c[0] === r.cond.type) || [, ''])[1] + (r.cond.a ? ' ' + r.cond.a : '') + (r.cond.b ? ' e ' + r.cond.b : ''))}</b><small>${esc(App.rangeText(r.range))}</small></div><button class="icon-btn cf-del" title="Excluir regra">${icon('close', 16)}</button></div>`).join('')}</div>
+      const inSel = sh.cf.filter((r) => !(r.range.r2 < R.r1 || r.range.r1 > R.r2 || r.range.c2 < R.c1 || r.range.c1 > R.c2));
+      const all = showAll || !inSel.length;
+      const rules = all ? sh.cf : inSel;
+      body.innerHTML = `<p class="sp-hint">${all ? (sh.cf.length ? `Todas as regras desta página (${sh.cf.length}):` : 'Nenhuma regra nesta página.') : 'Regras que se aplicam à seleção atual:'}</p>
+        ${sh.cf.length > inSel.length && inSel.length ? `<button class="btn btn-sm cf-all">${showAll ? 'Mostrar só as da seleção' : `Ver todas as regras da página (${sh.cf.length})`}</button>` : ''}
+        <div class="cf-list">${rules.map((r) => `<div class="cf-item" data-id="${r.id}">${r.kind === 'scale' ? `<span class="cf-chip" style="background:linear-gradient(90deg,${r.min},${r.mid || r.min},${r.max})">&nbsp;</span>` : styleChip(r.style)}<div><b>${esc(r.kind === 'scale' ? 'Escala de cores' : (App.CONDITIONS.find((c) => c[0] === r.cond.type) || [, ''])[1] + (r.cond.a ? ' ' + r.cond.a : '') + (r.cond.b ? ' e ' + r.cond.b : ''))}</b><small>${esc(App.rangeText(r.range))}</small></div><button class="icon-btn cf-dup" title="Duplicar regra">${icon('copy', 16)}</button><button class="icon-btn cf-del" title="Excluir regra">${icon('close', 16)}</button></div>`).join('')}</div>
         <button class="btn sp-add">${icon('plus', 16)} Adicionar outra regra</button>
         <div class="sp-foot"><button class="btn btn-primary sp-done">Concluído</button></div>`;
       body.querySelector('.sp-add').onclick = () => {
-        editing = { id: App.uid(), range: Object.assign({}, App.selRect()), kind: 'single', cond: { type: 'notEmpty', a: '', b: '' }, style: Object.assign({}, CF_PRESETS[0]) };
-        sh.cf.push(editing); preview(); render(body);
+        const rule = { id: App.uid(), range: Object.assign({}, App.selRect()), kind: 'single', cond: { type: 'notEmpty', a: '', b: '' }, style: Object.assign({}, CF_PRESETS[0]) };
+        editingId = rule.id;
+        sh.cf.push(rule); preview(true); render(body);
       };
       body.querySelectorAll('.cf-item').forEach((el) => {
         el.onclick = (e) => {
-          if (e.target.closest('.cf-del')) { sh.cf = sh.cf.filter((r) => r.id !== el.dataset.id); preview(); render(body); return; }
-          editing = sh.cf.find((r) => r.id === el.dataset.id); render(body);
+          if (e.target.closest('.cf-del')) { sh.cf = sh.cf.filter((r) => r.id !== el.dataset.id); preview(true); render(body); return; }
+          if (e.target.closest('.cf-dup')) { duplicate(el.dataset.id); render(body); return; }
+          editingId = el.dataset.id; render(body);
         };
       });
       body.querySelector('.sp-done').onclick = closePanel;
+      const ab = body.querySelector('.cf-all');
+      if (ab) ab.onclick = () => { showAll = !showAll; render(body); };
     };
     const renderRule = (body) => {
-      const r = editing;
+      const r = work.find((x) => x.id === editingId);
       body.innerHTML = `
         <div class="sp-tabs"><button data-k="single" class="${r.kind !== 'scale' ? 'on' : ''}">Cor única</button><button data-k="scale" class="${r.kind === 'scale' ? 'on' : ''}">Escala de cores</button></div>
         <label class="field"><span>Aplicar ao intervalo</span><input class="input" data-f="range" value="${esc(App.rangeText(r.range))}"></label>
@@ -103,7 +137,7 @@
             <label class="tb tb-color" title="Cor do texto">${icon('textColor')}<i class="color-bar" style="background:${r.style.color || '#000'}"></i><input type="color" data-s="color" value="${r.style.color || '#000000'}"></label>
             <label class="tb tb-color" title="Cor de preenchimento">${icon('fill')}<i class="color-bar" style="background:${r.style.bg || 'transparent'}"></i><input type="color" data-s="bg" value="${r.style.bg || '#ffffff'}"></label></div>
           <div class="cf-preview">Prévia: ${styleChip(r.style)}</div>`}
-        <div class="sp-foot"><button class="btn sp-remove">Remover regra</button><button class="btn btn-primary sp-back">Concluído</button></div>`;
+        <div class="sp-foot"><button class="btn sp-remove">Remover regra</button><button class="btn sp-dup" title="Criar uma cópia desta regra">${icon('copy', 16)} Duplicar</button><button class="btn btn-primary sp-back">Concluído</button></div>`;
       body.querySelectorAll('.sp-tabs button').forEach((b) => b.onclick = () => {
         r.kind = b.dataset.k;
         if (r.kind === 'scale' && !r.min) { r.min = '#ffffff'; r.max = '#e30613'; r.mid = null; }
@@ -127,8 +161,9 @@
           else b.onclick = () => { const k = b.dataset.s; if (r.style[k]) delete r.style[k]; else r.style[k] = true; preview(); renderRule(body); };
         });
       }
-      body.querySelector('.sp-remove').onclick = () => { sh.cf = sh.cf.filter((x) => x !== r); editing = null; preview(); render(body); };
-      body.querySelector('.sp-back').onclick = () => { editing = null; render(body); };
+      body.querySelector('.sp-remove').onclick = () => { sh.cf = sh.cf.filter((x) => x !== r); editingId = null; preview(true); render(body); };
+      body.querySelector('.sp-dup').onclick = () => { duplicate(r.id); render(body); };
+      body.querySelector('.sp-back').onclick = () => { editingId = null; preview(true); render(body); };
     };
     openPanel('Regras de formatação condicional', render, finish);
   }
