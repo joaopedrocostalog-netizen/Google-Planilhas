@@ -800,3 +800,23 @@ body.executor .doc-title { pointer-events: none; }
 .mycolor-prev { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .mycolor-prev .avatar { width: 30px; height: 30px; border-radius: 50%; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-weight: 600; }
 .cf-all { align-self: flex-start; }
+.cf-item .cf-grip { cursor: grab; color: #9a9a9a; font-size: 14px; padding: 0 2px; }
+.cf-item.dragging { opacity: .5; }
+.cf-item.drop-on { border-color: var(--red); box-shadow: inset 0 2px 0 var(--red); }
+.cf-ord { display: inline-flex; flex-direction: column; }
+.cf-ord .icon-btn { width: 20px; height: 16px; font-size: 9px; line-height: 1; padding: 0; }
+.cf-range-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: -4px; }
+.cf-range-btns .btn.on { background: var(--red-soft); border-color: var(--red); color: var(--red-dark); }
+/* abas coloridas: a aba inteira fica na cor escolhida; a aba aberta fica clara com a faixa na cor */
+.tab.colored { background: var(--tab); color: var(--tab-ink); }
+.tab.colored:hover { background: var(--tab); color: var(--tab-ink); filter: brightness(1.08); }
+.tab.colored .tab-color { display: none; }
+.tab.colored.active { background: color-mix(in srgb, var(--tab) 14%, #fff); color: var(--ink, #111); filter: none; box-shadow: inset 0 3px 0 var(--tab); }
+.tab.colored.active::after { background: var(--tab); height: 4px; }
+.sheet-chip { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: #f2f2f2; font-size: 15px; padding: 2px 8px; border-radius: 6px; cursor: pointer; max-width: 260px; }
+.sheet-chip:hover { background: rgba(255,255,255,.1); }
+.sheet-chip .sc-sep { color: #8a8a8a; }
+.sheet-chip i { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.sheet-chip .sc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+@media (max-width: 700px) { .sheet-chip { display: none; } }
+.ac-sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; border: 1px solid rgba(0,0,0,.15); }

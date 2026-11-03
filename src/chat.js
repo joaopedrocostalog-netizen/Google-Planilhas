@@ -81,7 +81,9 @@
     body.querySelectorAll('.chat-row').forEach((b) => (b.onclick = () => openConversation(b.dataset.u)));
   }
   async function openConversation(uid) {
-    st.with = uid; st.msgs = []; st.ref = false;
+    st.with = uid; st.msgs = []; st.ref = false; st.draft = '';
+    const oldTa = st.body && st.body.querySelector('#chat-text');
+    if (oldTa) oldTa.value = '';
     const known = st.contacts.find((c) => c.id === uid) || (st.inbox.get(uid) || {}).with;
     st.withUser = known || { id: uid, name: '…', color: '#5f6368' };
     renderConversation(true);
@@ -111,7 +113,10 @@
     const body = st.body;
     if (!body) return;
     const u = st.withUser, me = meId();
-    const draft = (body.querySelector('#chat-text') || {}).value || '';
+    // rascunho: o que a pessoa ainda está digitando (zera ao enviar, mesmo que a resposta do servidor chegue depois)
+    const ta0 = body.querySelector('#chat-text');
+    if (ta0) st.draft = ta0.value;
+    const draft = st.draft || '';
     const lastMine = [...st.msgs].reverse().find((m) => m.from === me);
     body.innerHTML = `<div class="chat-head"><button class="icon-btn chat-back" title="Voltar" aria-label="Voltar">←</button>${av(u, 32)}
         <span class="chat-who"><b>${esc(u.name)}</b><small>${u.online ? 'Na planilha agora' : u.admin ? 'Administrador' : u.sector ? 'Setor ' + esc(u.sector) : esc(u.email || '')}</small></span></div>
@@ -143,13 +148,23 @@
     const text = ta.value.trim();
     if (!text) return;
     sending = true;
+    const ref = st.ref ? refLabel() : null;
+    // limpa a caixa na hora; se der erro, o texto volta
+    st.draft = ''; st.ref = false; ta.value = '';
     try {
-      const m = await api('POST', '/api/messages', { to: st.with, text, doc: cloud.id, ref: st.ref ? refLabel() : null });
-      ta.value = ''; st.ref = false;
+      const m = await api('POST', '/api/messages', { to: st.with, text, doc: cloud.id, ref });
       addMsg(m, true);
-    } catch (e) { notify(e.message); }
+    } catch (e) {
+      notify(e.message);
+      st.draft = text; st.ref = !!ref;
+      const t2 = st.body && st.body.querySelector('#chat-text');
+      if (t2 && !t2.value) t2.value = text;
+    }
     sending = false;
+    const t3 = st.body && st.body.querySelector('#chat-text');
+    if (t3) t3.focus();
   }
+
   function goRef(ref) {
     if (!ref) return;
     if (ref.doc && ref.doc !== cloud.id) { location.hash = '#nuvem=' + ref.doc; notify('Abrindo a planilha da mensagem…'); return; }

@@ -499,7 +499,7 @@
     $('tb-fill-bar').style.background = st.bg || 'transparent';
     $('tb-align').innerHTML = icon(st.al === 'c' ? 'alignCenter' : st.al === 'r' ? 'alignRight' : 'alignLeft');
     $('tb-valign').innerHTML = icon(st.va === 't' ? 'valignTop' : st.va === 'm' ? 'valignMiddle' : 'valignBottom');
-    $('tb-wrap').innerHTML = icon(st.wrap === 'wrap' ? 'wrap' : st.wrap === 'clip' ? 'clip' : 'overflow');
+    $('tb-wrap').innerHTML = icon(st.wrap === 'wrap' ? 'wrap' : st.wrap === 'overflow' ? 'overflow' : 'clip');
     $('tb-zoom').textContent = doc.zoom + '%';
     document.querySelector('.tb[data-cmd="undo"]').classList.toggle('disabled', !App.canUndo());
     document.querySelector('.tb[data-cmd="redo"]').classList.toggle('disabled', !App.canRedo());
@@ -639,6 +639,20 @@
     const sync = () => { t.value = doc.title; document.title = doc.title + ' - Planilhas'; t.style.width = Math.min(480, Math.max(120, t.value.length * 9 + 24)) + 'px'; };
     sync();
     App.on('title', sync);
+    // nome da planilha (aba) aberta, ao lado do título: muda ao trocar de aba
+    const chip = $('sheet-chip');
+    if (chip) {
+      const syncChip = () => {
+        const sh = App.sheet();
+        if (!sh) return;
+        chip.innerHTML = `<span class="sc-sep">›</span>${sh.color ? `<i style="background:${esc(sh.color)}"></i>` : ''}<span class="sc-name">${esc(sh.name)}</span>`;
+        chip.hidden = false;
+        document.title = sh.name + ' · ' + doc.title + ' - Planilhas';
+      };
+      syncChip();
+      App.on('sheet', syncChip); App.on('title', syncChip); App.on('change', syncChip);
+      chip.onclick = (e) => App.ui.menuPopup(e.currentTarget, doc.sheets.map((s, i) => ({ label: s.name + (s.hidden ? ' (oculta)' : ''), check: i === doc.active, swatch: s.color || undefined, action: () => (s.hidden ? App.run('showSheet', i) : App.run('switchSheet', i)) })));
+    }
     t.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'Escape') { if (e.key === 'Escape') t.value = doc.title; t.blur(); App.grid.focus(); } });
     t.addEventListener('blur', () => { if (t.value.trim() !== doc.title) App.setTitle(t.value.trim()); sync(); });
     t.addEventListener('input', () => { t.style.width = Math.min(480, Math.max(120, t.value.length * 9 + 24)) + 'px'; });

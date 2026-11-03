@@ -202,10 +202,13 @@
     const base = (cell && cell.s) || {};
     const v = App.value(si, r, c);
     let s = App.effectiveStyle(sh, si, r, c, base);
-    // container crítico: a célula pisca em vermelho
+    const dv = sh.dv.length ? App.dvAt(sh, r, c) : null;
+    // container crítico: numa caixa de seleção só a caixa pisca (verde); nas demais células, a célula pisca em vermelho
+    let crit = false;
     if (cell && cell.crit) {
       st.hasCrit = true;
-      s = Object.assign({}, s, Math.floor(Date.now() / 550) % 2 ? { bg: '#d93025', color: '#ffffff', b: true } : { bg: '#fce8e6', color: '#b3261e', b: true });
+      crit = Math.floor(Date.now() / 550) % 2 === 1;
+      if (!(dv && dv.type === 'checkbox')) s = Object.assign({}, s, crit ? { bg: '#d93025', color: '#ffffff', b: true } : { bg: '#fce8e6', color: '#b3261e', b: true });
     }
     const isFormula = typeof raw === 'string' && raw[0] === '=';
     let nf = base.nf;
@@ -213,13 +216,12 @@
     let text;
     if (doc.showFormulas && isFormula) text = raw;
     else text = App.fmtValue(v, nf);
-    const dv = sh.dv.length ? App.dvAt(sh, r, c) : null;
     let align = s.al;
     if (!align) align = doc.showFormulas && isFormula ? 'l' : typeof v === 'number' ? 'r' : typeof v === 'boolean' || E.isErr(v) ? 'c' : 'l';
     let link = (cell && cell.link) || null;
     if (!link && isFormula && /^=\s*(HYPERLINK|HIPERLINK)\s*\(/i.test(raw)) { const m = /\(\s*"([^"]+)"/.exec(raw); if (m) link = m[1]; }
     if (!link && typeof v === 'string' && /^(https?:\/\/|www\.)\S+$/i.test(v)) link = v.startsWith('www.') ? 'https://' + v : v;
-    return { cell, raw, v, s, text, align, dv, link, isErr: E.isErr(v), note: cell && cell.note, comment: cell && cell.comments && cell.comments.length };
+    return { cell, raw, v, s, text, align, dv, link, crit, isErr: E.isErr(v), note: cell && cell.note, comment: cell && cell.comments && cell.comments.length };
   }
   App.cellInfo = (r, c) => cellInfo(App.sheet(), doc.active, r, c);
 
@@ -334,7 +336,8 @@
     for (const it of items) {
       const inf = it.info;
       it.tx = it.x; it.tw = it.w;
-      if (it.merge || !inf.text || inf.s.wrap === 'wrap' || inf.s.wrap === 'clip' || inf.dv || typeof inf.v === 'number' || inf.s.rot) continue;
+      // o texto fica dentro da própria célula (cortado), mesmo com a vizinha vazia; só transborda se a pessoa escolher "Transbordar"
+      if (inf.s.wrap !== 'overflow' || it.merge || !inf.text || inf.dv || typeof inf.v === 'number' || inf.s.rot) continue;
       ctx.font = fontFor(inf.s);
       const need = ctx.measureText(inf.text).width + 6 * st.z;
       if (need <= it.w) continue;
@@ -568,6 +571,16 @@
       const cy = it.y + it.h / 2;
       const on = App.cbIsOn(inf.dv, inf.raw, inf.v);
       ctx.lineWidth = 1.5 * z;
+      if (inf.crit) {
+        // alerta de crítico: só a caixa pisca em verde (R 77, G 255, B 0)
+        const g = 3 * z;
+        ctx.fillStyle = 'rgba(77,255,0,0.35)'; roundRect(cx - size / 2 - g, cy - size / 2 - g, size + 2 * g, size + 2 * g, 4 * z); ctx.fill();
+        roundRect(cx - size / 2, cy - size / 2, size, size, 2 * z);
+        ctx.fillStyle = 'rgb(77,255,0)'; ctx.fill(); ctx.strokeStyle = '#2f9e00'; ctx.stroke();
+        if (on) { ctx.strokeStyle = '#0b3d00'; ctx.lineWidth = 1.8 * z; ctx.beginPath(); ctx.moveTo(cx - size * 0.28, cy); ctx.lineTo(cx - size * 0.06, cy + size * 0.22); ctx.lineTo(cx + size * 0.3, cy - size * 0.22); ctx.stroke(); }
+        ctx.restore();
+        return;
+      }
       roundRect(cx - size / 2, cy - size / 2, size, size, 2 * z);
       if (on) { ctx.fillStyle = C.check; ctx.fill(); ctx.strokeStyle = C.check; ctx.stroke();
         ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.8 * z; ctx.beginPath();
@@ -1325,11 +1338,46 @@
     setInterval(() => { if (st.marquee) schedule(); }, 120);
     setInterval(() => { if (st.hasCrit) { st.hasCrit = false; schedule(); } }, 550);
     App.on('change', () => { layout(); App.emit('selection'); });
+    // cada página (e cada planilha) lembra onde a pessoa parou: rolagem e célula selecionada
+    const POS_KEY = 'planilhas:pos';
+    let posAll = {};
+    try { posAll = JSON.parse(localStorage.getItem(POS_KEY) || '{}') || {}; } catch (e) { posAll = {}; }
+    const posKey = () => (App.docId || 'local') + '|' + (App.sheet() ? App.sheet().id : '');
+    let curKey = posKey(), posTimer = null;
+    const remember = () => {
+      if (!curKey) return;
+      posAll[curKey] = { sx: scroller.scrollLeft, sy: scroller.scrollTop, ar: sel.ar, ac: sel.ac, er: sel.er, ec: sel.ec, t: Date.now() };
+      clearTimeout(posTimer);
+      posTimer = setTimeout(() => {
+        const keys = Object.keys(posAll);
+        if (keys.length > 300) keys.sort((a, b) => posAll[a].t - posAll[b].t).slice(0, keys.length - 300).forEach((k) => delete posAll[k]);
+        try { localStorage.setItem(POS_KEY, JSON.stringify(posAll)); } catch (e) { /* ignora */ }
+      }, 400);
+    };
+    scroller.addEventListener('scroll', () => { if (posKey() === curKey) remember(); }, { passive: true });
+    App.on('selection', () => { if (posKey() === curKey) remember(); });
     App.on('sheet', () => {
-      const sh = App.sheet();
-      sel.ar = Math.min(sel.ar, st.nR); sel.er = Math.min(sel.er, st.nR);
-      sel.ac = Math.min(sel.ac, st.nC); sel.ec = Math.min(sel.ec, st.nC);
-      scroller.scrollLeft = 0; scroller.scrollTop = 0; st.sx = 0; st.sy = 0;
+      const key = posKey();
+      if (key === curKey) {
+        // mesma página (ex.: atualização vinda do servidor): mantém onde está
+        sel.ar = Math.min(sel.ar, st.nR); sel.er = Math.min(sel.er, st.nR);
+        sel.ac = Math.min(sel.ac, st.nC); sel.ec = Math.min(sel.ec, st.nC);
+        layout(); App.emit('selection');
+        return;
+      }
+      curKey = null;
+      const p = posAll[key];
+      layout();
+      if (p) {
+        sel.ar = Math.max(1, Math.min(p.ar, st.nR)); sel.ac = Math.max(1, Math.min(p.ac, st.nC));
+        sel.er = Math.max(1, Math.min(p.er, st.nR)); sel.ec = Math.max(1, Math.min(p.ec, st.nC));
+      } else {
+        sel.ar = Math.min(sel.ar, st.nR); sel.er = Math.min(sel.er, st.nR);
+        sel.ac = Math.min(sel.ac, st.nC); sel.ec = Math.min(sel.ec, st.nC);
+      }
+      scroller.scrollLeft = p ? p.sx : 0; scroller.scrollTop = p ? p.sy : 0;
+      st.sx = scroller.scrollLeft; st.sy = scroller.scrollTop;
+      curKey = key;
       layout(); App.emit('selection');
     });
     layout();

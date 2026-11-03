@@ -56,7 +56,7 @@
   for (const [id, label, key, val, sc] of [
     ['alignLeft', 'Alinhar à esquerda', 'al', 'l', 'Ctrl+Shift+L'], ['alignCenter', 'Centralizar', 'al', 'c', 'Ctrl+Shift+E'], ['alignRight', 'Alinhar à direita', 'al', 'r', 'Ctrl+Shift+R'],
     ['valignTop', 'Alinhar acima', 'va', 't'], ['valignMiddle', 'Alinhar ao meio', 'va', 'm'], ['valignBottom', 'Alinhar abaixo', 'va', null],
-    ['wrapOverflow', 'Transbordar', 'wrap', null], ['wrapWrap', 'Ajustar texto', 'wrap', 'wrap'], ['wrapClip', 'Cortar texto', 'wrap', 'clip'],
+    ['wrapOverflow', 'Transbordar', 'wrap', 'overflow'], ['wrapWrap', 'Ajustar texto', 'wrap', 'wrap'], ['wrapClip', 'Cortar texto', 'wrap', 'clip'],
     ['rotNone', 'Sem rotação', 'rot', null], ['rot45', 'Inclinar para cima', 'rot', 45], ['rotUp', 'Girar para cima', 'rot', 90], ['rotDown', 'Girar para baixo', 'rot', -90],
   ]) {
     if (key === 'wrap') {
@@ -377,7 +377,7 @@
   def('toggleOldRows', 'Mostrar/ocultar linhas antigas', () => App.toggleOld(App.sheet()));
   // Container crítico (coluna T por padrão): a célula fica piscando como alerta. Funciona em lote (várias linhas).
   def('markCritical', 'Marcar container como crítico', (on) => {
-    const sh = App.sheet(), R = App.selRect(), col = sh.critCol || 20;
+    const sh = App.sheet(), R = App.selRect(), col = App.critCol(sh);
     const rows = [];
     const real = (r) => { const p = App.realCell ? App.realCell(r, 1) : { r }; return p ? { r: p.r, c: col } : null; };
     for (let r = R.r1; r <= Math.min(R.r2, R.r1 + 5000); r++) { const p = real(r); if (p && !App.isRowHidden(sh, p.r)) rows.push(r); }
@@ -388,9 +388,52 @@
         const p = real(r); if (!p) continue;
         const a = E.addrToStr(p.r, p.c);
         if (mark) { sh.cells[a] = sh.cells[a] || { v: '' }; sh.cells[a].crit = true; } else if (sh.cells[a]) { delete sh.cells[a].crit; App.cleanup(sh, a); }
+        // alerta antigo em outra coluna da mesma linha (ex.: antes ficava na T)
+        for (let c = 1; c <= sh.cols; c++) { if (c === p.c) continue; const b = E.addrToStr(p.r, c); if (sh.cells[b] && sh.cells[b].crit) { delete sh.cells[b].crit; App.cleanup(sh, b); } }
       }
     });
     notify(mark ? `${rows.length} ${rows.length === 1 ? 'container marcado' : 'containers marcados'} como crítico (coluna ${E.numToCol(col)}).` : 'Alerta de crítico removido.');
+  });
+  // Excluir só as células selecionadas: as de baixo sobem (ou as da direita vêm para a esquerda), como no Google Planilhas
+  function deleteCells(dir) {
+    const sh = App.sheet(), R = App.selRect();
+    if (R.r1 === 1 && R.r2 >= sh.rows) return App.run('deleteCols');
+    if (R.c1 === 1 && R.c2 >= sh.cols) return App.run('deleteRows');
+    const used = App.usedRange(sh);
+    const h = R.r2 - R.r1 + 1, w = R.c2 - R.c1 + 1;
+    App.change('Excluir células', () => {
+      const cells = sh.cells;
+      const move = (src, dst) => { if (cells[src]) cells[dst] = cells[src]; else delete cells[dst]; };
+      if (dir === 'up') {
+        for (let c = R.c1; c <= R.c2; c++) for (let r = R.r1; r <= Math.max(used.maxR, R.r2); r++) move(E.addrToStr(r + h, c), E.addrToStr(r, c));
+      } else {
+        for (let r = R.r1; r <= R.r2; r++) for (let c = R.c1; c <= Math.max(used.maxC, R.c2); c++) move(E.addrToStr(r, c + w), E.addrToStr(r, c));
+      }
+    });
+    App.grid.selectRange({ r1: R.r1, c1: R.c1, r2: R.r1, c2: R.c1 });
+  }
+  def('deleteCellsUp', 'Excluir células e deslocar para cima', () => deleteCells('up'));
+  def('deleteCellsLeft', 'Excluir células e deslocar para a esquerda', () => deleteCells('left'));
+
+  // administrador escolhe a coluna do alerta de crítico; os alertas que já existem passam para ela
+  def('critColumn', 'Coluna do alerta de crítico', (col) => {
+    const sh = App.sheet();
+    const real = App.realCell ? App.realCell(1, typeof col === 'number' ? col : App.selRect().c1) : null;
+    const c = real ? real.c : (typeof col === 'number' ? col : App.selRect().c1);
+    let moved = 0;
+    App.change('Coluna do alerta de crítico', () => {
+      sh.critCol = c;
+      for (const a of Object.keys(sh.cells)) {
+        const x = sh.cells[a];
+        if (!x.crit) continue;
+        const p = E.parseAddr(a);
+        if (p.col === c) continue;
+        delete x.crit; App.cleanup(sh, a);
+        const b = E.addrToStr(p.row, c);
+        sh.cells[b] = sh.cells[b] || { v: '' }; sh.cells[b].crit = true; moved++;
+      }
+    });
+    notify(`O alerta de crítico agora fica na coluna ${E.numToCol(c)}${moved ? ` (${moved} ${moved === 1 ? 'alerta foi movido' : 'alertas foram movidos'})` : ''}. Se a coluna tiver caixa de seleção, só a caixa pisca em verde.`);
   });
   def('freezeRows', 'Congelar linhas', (n) => { const sh = App.sheet(); App.change('Congelar', () => { sh.freeze.rows = n === 'current' ? sel.ar : n; }); });
   def('freezeCols', 'Congelar colunas', (n) => { const sh = App.sheet(); App.change('Congelar', () => { sh.freeze.cols = n === 'current' ? sel.ac : n; }); });

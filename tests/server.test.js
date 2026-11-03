@@ -222,6 +222,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     check('conversa', conv.messages.map((m) => m.text), ['Oi Caio', 'Oi Ana']);
     check('estranho não envia', (await api('POST', '/api/messages', { to: bia.user.id, text: 'x' }, caio.token))._status, 403);
 
+    // DSS: apagar o nome do motorista apaga o CPF/CNPJ; apagar o CPF não mexe no nome
+    A.send({ type: 'patch', id: 80, patch: { sheets: { p1: { props: { lookup: { col: 7, cpfCol: 8 } }, cells: { G20: { v: 'JOAO DA SILVA' }, H20: { v: '111.222.333-44', s: { b: true } }, G21: { v: 'MARIA' }, H21: { v: '999' } } } } } });
+    await A.wait('ack', (m) => m.id === 80);
+    A.send({ type: 'patch', id: 81, patch: { sheets: { p1: { cells: { G20: null } } } } });
+    const dssClear = await A.wait('patch', (m) => m.by && m.by.name === 'DSS');
+    check('apagar o nome apaga o CPF (mantém a formatação)', dssClear.patch.sheets.p1.cells.H20, { s: { b: true }, v: '' });
+    A.send({ type: 'patch', id: 82, patch: { sheets: { p1: { cells: { H21: null } } } } });
+    await A.wait('ack', (m) => m.id === 82);
+    await sleep(150);
+    check('apagar o CPF não apaga o nome', A.msgs.some((m) => m.type === 'patch' && m.by && m.by.name === 'DSS' && m.patch.sheets.p1.cells.G21 !== undefined), false);
+
     // remover o acesso pelo link derruba o Caio
     await api('PUT', `/api/docs/${doc.id}/share`, { acl: Object.assign({}, acl, { link: 'none' }) }, ana.token);
     check('acesso removido', (await C.wait('error')).code, 'denied');
