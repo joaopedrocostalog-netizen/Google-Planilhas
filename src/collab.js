@@ -1050,7 +1050,7 @@
   // Os setores são executores: digitam as informações nas colunas liberadas. Todo o resto
   // (formatação, regras, estrutura, filtros, congelar, tamanho de linhas e colunas) é dos administradores,
   // e essas opções nem aparecem para eles.
-  const EXEC_OK = new Set(['messages', 'undo', 'redo', 'cut', 'copy', 'paste', 'pasteValues', 'find', 'findReplace', 'clearValues',
+  const EXEC_OK = new Set(['insertProcess', 'messages', 'undo', 'redo', 'cut', 'copy', 'paste', 'pasteValues', 'find', 'findReplace', 'clearValues',
     'zoom', 'toggleFormulaBar', 'toggleMenus', 'fullscreen', 'toggleGridlines', 'toggleFormulas', 'switchSheet', 'nextSheet', 'prevSheet',
     'selectAll', 'selectColumn', 'selectRow', 'insertDate', 'insertTime', 'insertDateTime', 'fillDown', 'fillRight',
     'print', 'download', 'openCloud', 'share', 'login', 'cellHistory', 'shortcuts', 'about', 'functionList', 'columnStats',
@@ -1107,7 +1107,7 @@
     document.querySelectorAll('#menubar .mb').forEach((b) => {
       let vis = true;
       const menu = App.MENUS[+b.dataset.i];
-      if (ex && EXEC_HIDDEN_MENUS.has(menu.label)) vis = false;
+      if (ex && EXEC_HIDDEN_MENUS.has(menu.label) && menu.label !== 'Inserir') vis = false;
       else if (ex) { try { vis = filterItems(menu.items()).some((x) => x && x !== '-' && !x.header && !x.disabled); } catch (e) { vis = true; } }
       b.hidden = !vis;
     });

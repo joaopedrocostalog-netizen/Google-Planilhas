@@ -280,7 +280,8 @@
       { label: 'Ocultar menus', cmd: 'toggleMenus' },
       { label: 'Tela cheia', cmd: 'fullscreen' },
     ] },
-    { label: 'Inserir', items: () => [
+    { label: 'Inserir', items: () => (App.adminOnly && App.adminOnly() ? [{ label: 'Incluir processo', icon: 'plus', cmd: 'insertProcess' }] : [
+      { label: 'Incluir processo', icon: 'plus', cmd: 'insertProcess' }, '-',
       { label: 'Linhas', sub: () => [{ label: `Inserir ${plural(nRows(), 'linha', 'linhas')} acima`, cmd: 'insertRowsAbove' }, { label: `Inserir ${plural(nRows(), 'linha', 'linhas')} abaixo`, cmd: 'insertRowsBelow' }] },
       { label: 'Colunas', sub: () => [{ label: `Inserir ${plural(nCols(), 'coluna', 'colunas')} à esquerda`, cmd: 'insertColsLeft' }, { label: `Inserir ${plural(nCols(), 'coluna', 'colunas')} à direita`, cmd: 'insertColsRight' }] },
       { label: 'Página', cmd: 'newSheet' }, '-',
@@ -297,7 +298,7 @@
       { label: 'Menu suspenso', icon: 'dropdown', cmd: 'insertDropdown' }, '-',
       { label: 'Comentário', icon: 'comment', cmd: 'insertComment', sc: 'Ctrl+Alt+M' },
       { label: 'Nota', icon: 'note', cmd: 'insertNote', sc: 'Shift+F2' },
-    ] },
+    ]) },
     { label: 'Formatar', items: () => [
       { label: 'Número', icon: 'number', sub: fmtItems },
       { label: 'Texto', sub: [{ cmd: 'bold', icon: 'bold' }, { cmd: 'italic', icon: 'italic' }, { cmd: 'underline' }, { cmd: 'strike', icon: 'strike' }] },

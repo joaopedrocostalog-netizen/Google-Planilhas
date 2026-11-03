@@ -821,3 +821,28 @@ body.executor .doc-title { pointer-events: none; }
 @media (max-width: 700px) { .sheet-chip { display: none; } }
 .ac-sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; border: 1px solid rgba(0,0,0,.15); }
 .autocomplete { max-height: 320px; overflow-y: auto; }
+
+/* ---------- Incluir processo ---------- */
+.pf-modal .modal-body { display: flex; flex-direction: column; gap: 10px; }
+.pf-h { font-size: 15px; margin: 6px 0 0; padding-bottom: 4px; border-bottom: 2px solid var(--red); color: var(--ink, #111); }
+.pf-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 12px; }
+.pf-grid .field { margin: 0; }
+.pf-grid .pf-wide { grid-column: span 2; }
+.pf-grid .field > span { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; }
+.pf-col { font-weight: 500; color: #8a8a8a; background: #f1f1f1; border-radius: 4px; padding: 0 5px; font-size: 10.5px; }
+.pf-col.miss { background: #fde8ea; color: var(--red-dark); }
+.pf-off input { background: #f5f5f5; color: #9a9a9a; }
+.pf-warn { color: var(--red-dark); }
+.pf-qty { display: flex; align-items: flex-end; gap: 14px; }
+.pf-qty .field { width: 220px; margin: 0; }
+.pf-qty .sp-hint { margin: 0 0 8px; }
+.pf-loads { overflow-x: auto; }
+.pf-table { width: 100%; border-collapse: separate; border-spacing: 4px 4px; }
+.pf-table th { text-align: left; font-size: 12px; white-space: nowrap; padding: 0 2px; }
+.pf-table td .input { width: 100%; min-width: 90px; }
+.pf-table .pf-n { width: 26px; text-align: center; font-weight: 700; color: var(--red-dark); }
+.pf-rep { border: 1px solid var(--line, #ddd); background: #fff; border-radius: 4px; padding: 0 5px; font-size: 11px; cursor: pointer; line-height: 16px; }
+.pf-rep:hover { border-color: var(--red); color: var(--red-dark); }
+.pf-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; }
+.input.pf-bad { border-color: #e69138; background: #fff7ec; }
+@media (max-width: 760px) { .pf-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
