@@ -766,7 +766,12 @@
     if (!d || text === '' || (typeof text === 'string' && text[0] === '=')) return true;
     if (d.type === 'checkbox') return App.cbValid(d, text);
     if (d.type === 'dtrange') return !App.DTRANGE_RE || App.DTRANGE_RE.test(String(text).trim());
-    if (d.type === 'list' || d.type === 'range') return App.dvItems(sh, d).some((x) => x.toLowerCase() === String(text).toLowerCase());
+    if (d.type === 'list' || d.type === 'range') {
+      const items = App.dvItems(sh, d);
+      // lista vinda de uma aba que a pessoa não tem: não acusa erro
+      if (d.type === 'range' && !items.length) return true;
+      return items.some((x) => x.toLowerCase() === String(text).toLowerCase());
+    }
     if (d.type === 'number') {
       const n = numOf(text);
       if (isNaN(n)) return false;

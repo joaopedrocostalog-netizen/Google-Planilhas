@@ -278,7 +278,7 @@ function onPatch(c, msg) {
   for (const o of room.clients) {
     if (o === c) continue;
     if (reinit.has(o)) { sendInit(o); continue; }
-    const fp = Perms.filterPatch(p, o.perms);
+    const fp = Perms.filterPatch(p, o.perms, room.data);
     if (fp) o.ws.send({ type: 'patch', patch: fp, version: room.version, by: { cid: c.cid, name: c.user.name } });
   }
   if (accessChanged && !c.perms.admin) sendInit(c);
@@ -287,7 +287,7 @@ function onPatch(c, msg) {
   if (fill) {
     Patch.apply(room.data, fill);
     room.version++;
-    for (const o of room.clients) { const fp = Perms.filterPatch(fill, o.perms); if (fp) o.ws.send({ type: 'patch', patch: fp, version: room.version, by: { cid: 'dss', name: 'DSS' } }); }
+    for (const o of room.clients) { const fp = Perms.filterPatch(fill, o.perms, room.data); if (fp) o.ws.send({ type: 'patch', patch: fp, version: room.version, by: { cid: 'dss', name: 'DSS' } }); }
   }
   scheduleSave(room);
 }
