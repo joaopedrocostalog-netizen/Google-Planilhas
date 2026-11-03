@@ -104,6 +104,15 @@
     });
   }
 
+  // data da linha (coluna DATA da página); sem data, vale o dia de hoje
+  function rowDate(sh, r) {
+    const c = App.colByName ? App.colByName(sh, 'DATA') : null;
+    if (!c) return todayKey();
+    const si = doc.sheets.indexOf(sh);
+    const k = App.withReal(() => dateKey(App.value(si, r, c)));
+    return k || todayKey();
+  }
+
   function escalar() {
     const sh = App.sheet();
     if (!canEscalar(sh)) return notify('Escalar veículo não está liberado para o seu setor. Peça a um administrador.');
@@ -118,13 +127,16 @@
     if (!scol.DATA) return notify(`A aba ${SRC_NAME} não tem a coluna DATA.`);
     if (!list.length) return notify(`Nenhum veículo na ${SRC_NAME} com a data de hoje (${keyLabel(today)}).`);
 
-    // veículos que já aparecem nesta página (pela placa do cavalo)
+    // veículos já escalados nesta página NA MESMA DATA da linha que está sendo escalada (pela placa do cavalo)
     const usedPlates = new Map();
+    const day = rowDate(sh, rows[0]);
     App.withReal(() => {
       const used = App.usedRange(sh);
       for (let r = 1; r <= used.maxR; r++) {
+        if (rows.includes(r)) continue;
         const t = norm(text(doc.active, sh, r, tc.CAVALO));
-        if (t && !rows.includes(r)) { if (!usedPlates.has(t)) usedPlates.set(t, []); usedPlates.get(t).push(r); }
+        if (!t || rowDate(sh, r) !== day) continue;
+        if (!usedPlates.has(t)) usedPlates.set(t, []); usedPlates.get(t).push(r);
       }
     });
 
@@ -216,6 +228,7 @@
           });
         }));
         if (done === false) return;
+        jornada(sh, rows, v, valueFor);
         notify(`Veículo ${v.CAVALO || ''} escalado ${rows.length === 2 ? `nas linhas ${rows[0]} e ${rows[1]}` : `na linha ${rows[0]}`}${ok ? '' : ' — escala NÃO confirmada (em vermelho até confirmar)'}.` +
           (missing.length ? ` Colunas não encontradas: ${missing.join(', ')}.` : '') + (blocked.length ? ` Sem permissão em: ${blocked.join(', ')}.` : ''));
       };
@@ -244,6 +257,167 @@
     });
     return [...out].sort((a, b) => a - b);
   }
+  // 2ª viagem: o mesmo motorista já escalado em outra linha na mesma data → registra na aba JORNADA
+  function jornada(sh, rows, v, valueFor) {
+    const tc = cols(sh), si = doc.sheets.indexOf(sh);
+    const key = (r) => norm(text(si, sh, r, tc.CPF)) || norm(text(si, sh, r, tc.MOTORISTA));
+    const me = norm(v.CPF) || norm(v.MOTORISTA);
+    if (!me) return;
+    const day = rowDate(sh, rows[0]);
+    let first = null;
+    App.withReal(() => {
+      const used = App.usedRange(sh);
+      for (let r = 1; r <= used.maxR && !first; r++) if (!rows.includes(r) && key(r) === me && rowDate(sh, r) === day) first = r;
+    });
+    if (!first) return;
+    const ji = doc.sheets.findIndex((x) => norm(x.name) === norm('JORNADA'));
+    if (ji < 0) { setTimeout(() => notify(`${v.MOTORISTA || 'O motorista'} já tem viagem neste dia (linha ${first}), mas a aba JORNADA não existe ou não está liberada para você.`), 60); return; }
+    const js = doc.sheets[ji];
+    const jc = {};
+    for (const f of ['DATA', 'CLIENTE', 'CAVALO', 'CARRETA', 'MOTORISTA', 'CPF', 'CONTATO']) jc[f] = App.colByName(js, f);
+    const clienteCol = App.colByName(sh, 'CLIENTE');
+    const values = {
+      DATA: keyLabel(day), CLIENTE: clienteCol ? App.withReal(() => text(si, sh, rows[0], clienteCol)) : '',
+      CAVALO: v.CAVALO, CARRETA: rows.map((r, i) => valueFor('CARRETA', i)).filter((x, i, a) => x && a.indexOf(x) === i).join(' + '),
+      MOTORISTA: v.MOTORISTA, CPF: v.CPF, CONTATO: v.CONTATO,
+    };
+    const done = App.change('2ª viagem (JORNADA)', () => App.withReal(() => {
+      const r = Math.max(1, App.usedRange(js).maxR) + 1;
+      if (r > js.rows) js.rows = r + 50;
+      for (const f in jc) if (jc[f] && values[f]) {
+        App.setRaw(js, r, jc[f], String(values[f]));
+        if (f === 'DATA') { const fm = App.autoFormatFor(String(values[f])); if (fm) App.setStyle(js, r, jc[f], (x) => { x.nf = fm; }); }
+      }
+    }));
+    if (done !== false) setTimeout(() => notify(`2ª viagem de ${v.MOTORISTA || 'motorista'} no dia ${keyLabel(day)} (a 1ª está na linha ${first}): registrada na aba JORNADA.`), 60);
+  }
+
+  // ---------- Veículo bloqueado: parece normal; ao tentar mexer, aparece o cadeado fechando ----------
+  function lockedAt(sh, r, c) {
+    const tc = cols(sh);
+    if (!window.Perms.lockedCol(tc, c)) return false;
+    const cav = cavCell(sh, r);
+    return !!(cav && cav.lock);
+  }
+  // usado pelo editor antes de abrir a célula (coordenadas de tela)
+  App.lockGuard = (sh, r, c) => {
+    const p = App.realCell ? App.realCell(r, c) : { r, c };
+    if (!p || !lockedAt(sh, p.r, p.c)) return false;
+    App.emit('lockedAttempt', { sheetId: sh.id, r: p.r, c: p.c });
+    return true;
+  };
+  // usado por App.change: desfaz qualquer troca de valor nas células bloqueadas
+  App.lockViolation = (fwd, inv) => {
+    for (const id in fwd.sheets || {}) {
+      const e = fwd.sheets[id];
+      if (!e.cells) continue;
+      const sh = doc.sheets.find((x) => x.id === id);
+      if (!sh) continue;
+      const tc = cols(sh);
+      if (!tc.CAVALO) continue;
+      const ic = (inv.sheets[id] && inv.sheets[id].cells) || {};
+      for (const a in e.cells) {
+        const p = E.parseAddr(a);
+        if (!p || !window.Perms.lockedCol(tc, p.col)) continue;
+        const ca = E.addrToStr(p.row, tc.CAVALO);
+        const cav = ca in ic ? ic[ca] : sh.cells[ca];
+        if (!cav || !cav.lock) continue;
+        const bv = ic[a] && ic[a].v !== undefined && ic[a].v !== null ? String(ic[a].v) : '';
+        const fv = e.cells[a] && e.cells[a].v !== undefined && e.cells[a].v !== null ? String(e.cells[a].v) : '';
+        if (bv !== fv) return { sheetId: id, r: p.row, c: p.col };
+      }
+    }
+    return null;
+  };
+  let lockAnim = null;
+  App.on('lockedAttempt', (lv) => {
+    const sh = App.sheet();
+    let r, c;
+    if (lv && lv.sheetId === sh.id) { const d = App.dispCell ? App.dispCell(lv.r, lv.c) : { r: lv.r, c: lv.c }; if (d) { r = d.r; c = d.c; } }
+    if (!r) { r = App.sel.ar; c = App.sel.ac; }
+    const rc = App.grid.cellRect(r, c);
+    const wrap = document.getElementById('grid-wrap');
+    if (!lockAnim) { lockAnim = document.createElement('div'); lockAnim.className = 'lock-anim'; wrap.appendChild(lockAnim); }
+    const size = Math.max(24, Math.min(36, rc.h * 1.5));
+    lockAnim.style.left = rc.x + rc.w / 2 - size / 2 + 'px';
+    lockAnim.style.top = rc.y + rc.h / 2 - size / 2 + 'px';
+    lockAnim.style.width = lockAnim.style.height = size + 'px';
+    lockAnim.innerHTML = '<svg viewBox="0 0 24 24" width="100%" height="100%"><path class="la-shackle" d="M7.5 11V8a4.5 4.5 0 0 1 9 0v3" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><rect x="5" y="11" width="14" height="10" rx="2.2" fill="currentColor"/><circle cx="12" cy="16" r="1.6" fill="#fff"/></svg>';
+    lockAnim.classList.remove('play'); void lockAnim.offsetWidth; lockAnim.classList.add('play');
+  });
+
+  // ---------- BASE GERAL: dados do cavalo ao clicar e FRETE obrigatório para terceiros ----------
+  let baseVer = 0, baseCache = null;
+  App.on('change', () => { baseVer++; });
+  App.on('sheet', () => { baseVer++; });
+  function baseMap() {
+    if (baseCache && baseCache.ver === baseVer) return baseCache.map;
+    const bi = doc.sheets.findIndex((x) => norm(x.name) === norm('BASE GERAL'));
+    let map = null;
+    if (bi >= 0) {
+      const bs = doc.sheets[bi];
+      map = new Map();
+      App.withReal(() => {
+        const bc = {};
+        for (const f of ['CAVALO', 'MARCA', 'TIPO', 'CATEGORIA']) bc[f] = App.colByName(bs, f);
+        if (!bc.CAVALO) { map = null; return; }
+        const used = App.usedRange(bs);
+        for (let r = 2; r <= used.maxR; r++) {
+          const k = norm(text(bi, bs, r, bc.CAVALO));
+          if (!k || map.has(k)) continue;
+          map.set(k, { MARCA: text(bi, bs, r, bc.MARCA), TIPO: text(bi, bs, r, bc.TIPO), CATEGORIA: text(bi, bs, r, bc.CATEGORIA) });
+        }
+      });
+    }
+    baseCache = { ver: baseVer, map };
+    return map;
+  }
+  // sem a aba BASE GERAL (ou sem acesso a ela) não dá para saber: não marca nada
+  function vehicleInfo(plate) {
+    const map = baseMap();
+    if (!map || !plate) return null;
+    return map.get(norm(plate)) || { CATEGORIA: 'Terceiro', terceiro: true };
+  }
+  function canSeeInfo(sh) { const p = perms(); return !p || p.admin || !!(sh.escala && (sh.escala.infoSectors || []).includes(p.sectorId)); }
+  // FRETE vazio numa linha com cavalo de terceiro: pisca até preencher (usado pela grade)
+  let freteCache = { ver: -1 };
+  App.freteAlert = (sh, si, r, c) => {
+    if (freteCache.ver !== baseVer || freteCache.sh !== sh) freteCache = { ver: baseVer, sh, col: App.colByName ? App.colByName(sh, 'FRETE') : null, cav: cols(sh).CAVALO };
+    if (!freteCache.col || c !== freteCache.col || !freteCache.cav) return false;
+    const fv = App.value(si, r, c);
+    if (fv !== null && fv !== undefined && String(fv).trim() !== '') return false;
+    const plate = text(si, sh, r, freteCache.cav);
+    if (!plate) return false;
+    const info = vehicleInfo(plate);
+    return !!(info && info.terceiro);
+  };
+  // balão discreto com MARCA, TIPO e CATEGORIA ao clicar numa célula do CAVALO
+  let infoEl = null;
+  function hideInfo() { if (infoEl) infoEl.hidden = true; }
+  function showInfo() {
+    const sh = App.sheet();
+    if (!sh) return hideInfo();
+    const R = App.selRect();
+    if (!(R.r1 === R.r2 && R.c1 === R.c2) || (App.editing && App.editing())) return hideInfo();
+    const p = App.realCell ? App.realCell(R.r1, R.c1) : { r: R.r1, c: R.c1 };
+    const tc = cols(sh);
+    if (!p || !tc.CAVALO || p.c !== tc.CAVALO || !canSeeInfo(sh)) return hideInfo();
+    const plate = App.withReal(() => text(doc.active, sh, p.r, tc.CAVALO));
+    const info = plate ? vehicleInfo(plate) : null;
+    if (!info) return hideInfo();
+    if (!infoEl) { infoEl = document.createElement('div'); infoEl.className = 'cav-info'; document.getElementById('grid-wrap').appendChild(infoEl); }
+    infoEl.innerHTML = info.terceiro ? '<span><i>Categoria</i> <b class="t3">Terceiro</b></span><span class="cav-warn">preencha o FRETE</span>'
+      : ['MARCA', 'TIPO', 'CATEGORIA'].filter((f) => info[f]).map((f) => `<span><i>${f[0] + f.slice(1).toLowerCase()}</i> <b>${esc(info[f])}</b></span>`).join('') || '<span><i>Sem dados na BASE GERAL</i></span>';
+    const rc = App.grid.cellRect(R.r1, R.c1);
+    infoEl.style.left = rc.x + 'px';
+    infoEl.style.top = rc.y + rc.h + 2 + 'px';
+    infoEl.hidden = false;
+  }
+  App.on('selection', () => setTimeout(showInfo, 0));
+  App.on('viewport', () => { if (infoEl && !infoEl.hidden) showInfo(); });
+  App.on('editStart', hideInfo);
+  App.on('sheet', hideInfo);
+
   // muda as marcas da célula do CAVALO nas linhas indicadas
   function setFlags(label, rows, fn, okMsg, target) {
     const sh = target || App.sheet(), c = cols(sh).CAVALO;
@@ -360,12 +534,13 @@
       body: `<p class="sp-hint">Funções do botão direito na coluna <b>CAVALO</b> desta página. Administradores sempre podem usar tudo.</p>
         <p class="sp-label">Escalar veículo e confirmar escala</p><div class="esc-sectors">${boxes('s', cur.sectors)}</div>
         <p class="sp-label">Bloquear e destravar veículo para troca</p><div class="esc-sectors">${boxes('l', cur.lockSectors)}</div>
+        <p class="sp-label">Ver os dados do cavalo (BASE GERAL) ao clicar na célula</p><div class="esc-sectors">${boxes('v', cur.infoSectors)}</div>
         <label class="field"><span>Aba com a escala</span><select class="input" id="esc-src">${doc.sheets.map((s) => `<option value="${esc(s.id)}"${srcNow && srcNow.sh.id === s.id ? ' selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>
         <p class="sp-hint">Os setores da escala precisam ver a aba da escala e editar CAVALO, CARRETA, MOTORISTA, CPF e CONTATO; o setor do bloqueio precisa editar a coluna CAVALO.</p>`,
       buttons: [{ label: 'Cancelar' }, { label: 'Salvar', primary: true, action: (d) => {
         const pick = (k) => [...d.querySelectorAll(`[data-${k}]`)].filter((x) => x.checked).map((x) => x.dataset[k]);
         const srcId = d.querySelector('#esc-src').value;
-        App.change('Escala de veículos (setores)', () => { sh.escala = { sectors: pick('s'), lockSectors: pick('l'), src: srcId }; });
+        App.change('Escala de veículos (setores)', () => { sh.escala = { sectors: pick('s'), lockSectors: pick('l'), infoSectors: pick('v'), src: srcId }; });
         notify('Permissões da escala de veículos salvas.');
       } }],
     });

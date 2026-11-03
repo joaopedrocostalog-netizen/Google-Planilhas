@@ -235,6 +235,11 @@
           if (cav.lock && vehicle) { locked = true; swap = !!cav.swap; }
         }
       }
+      // FRETE obrigatório para cavalo de terceiro (fora da BASE GERAL): pisca até preencher
+      if (App.freteAlert && App.freteAlert(sh, si, r, c)) {
+        st.hasCrit = true;
+        s = Object.assign({}, s, Math.floor(Date.now() / 550) % 2 ? { bg: '#f29900', color: '#ffffff', b: true } : { bg: '#fef0d6', color: '#8a5300', b: true });
+      }
     }
     const isFormula = typeof raw === 'string' && raw[0] === '=';
     let nf = base.nf;
@@ -693,16 +698,6 @@
     if (inf.isErr || invalid) tri(C.err);
     else if (inf.comment) tri(C.comment);
     else if (inf.note) tri(C.note);
-    if (inf.locked) {
-      // veículo bloqueado para troca: moldura azul dupla em CAVALO, CARRETA e MOTORISTA (passe o mouse para ver o aviso)
-      const z = st.z;
-      ctx.save();
-      ctx.strokeStyle = '#1a73e8'; ctx.lineWidth = 2 * z;
-      ctx.strokeRect(it.x + 1.5 * z, it.y + 1.5 * z, it.w - 3 * z, it.h - 3 * z);
-      ctx.fillStyle = '#1a73e8';
-      ctx.fillRect(it.x + 1.5 * z, it.y + it.h - 4.5 * z, it.w - 3 * z, 3 * z);
-      ctx.restore();
-    }
   }
 
   function drawSparkline(sp, it) {

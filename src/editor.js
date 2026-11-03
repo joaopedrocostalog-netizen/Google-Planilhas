@@ -24,6 +24,8 @@
     const g = App.mergeAt(sh, App.sel.ar, App.sel.ac);
     const er = g ? g.r1 : App.sel.ar, ec = g ? g.c1 : App.sel.ac;
     if (App.editGuard) { const err = App.editGuard(sh, er, ec); if (err) { App.emit('notify', err); if (opts.from === 'bar') bar.blur(); App.grid.focus(); return; } }
+    // veículo bloqueado para troca (escala): mostra o cadeado fechando e não abre a célula
+    if (App.lockGuard && App.lockGuard(sh, er, ec)) { if (opts.from === 'bar') bar.blur(); App.grid.focus(); return; }
     // posição real da célula (na visualização de filtro reordenada a posição de tela pode mudar enquanto se digita)
     const realPos = App.realCell ? App.realCell(er, ec) : { r: er, c: ec };
     if (!realPos) return;

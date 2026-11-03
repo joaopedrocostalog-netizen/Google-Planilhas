@@ -47,6 +47,9 @@
     if (escCache) escCache.set(sheet, { key, cols });
     return cols;
   }
+  const LOCK_MSG = 'Veículo bloqueado para troca. Peça ao setor responsável para destravar (use "Pedir troca" no botão direito ou o chat).';
+  // colunas que travam junto com o veículo
+  const lockedCol = (cols, c) => !!c && [cols.CAVALO, cols.CARRETA, cols.MOTORISTA, cols.CPF, cols.CONTATO].includes(c);
   const truthy = (x) => x !== undefined && x !== null && x !== false && x !== '';
   // Regras da escala de veículos para quem não é administrador:
   // escalar/confirmar = setores da escala; bloquear/destravar = setores do bloqueio; veículo bloqueado não troca
@@ -63,10 +66,11 @@
       if (truthy(b.swap) && !truthy(f.swap) && !inLock) return 'Somente o setor responsável pode encerrar o pedido de troca (destravando o veículo).';
       if ((b.esc || '') !== (f.esc || '') && !inEsc) return 'Somente o setor responsável pela escala pode escalar ou confirmar a escala.';
     }
-    if ([cols.CAVALO, cols.CARRETA, cols.MOTORISTA].includes(p.c)) {
+    if (lockedCol(cols, p.c)) {
       const cav = beforeOf(colName(cols.CAVALO) + p.r);
       const bv = b.v === undefined || b.v === null ? '' : String(b.v), fv = f.v === undefined || f.v === null ? '' : String(f.v);
-      if (cav && truthy(cav.lock) && bv !== fv && !inLock) return 'Veículo bloqueado para troca. Peça ao setor responsável para destravar (use "Pedir troca" no botão direito ou o chat).';
+      // bloqueado vale para todos (o setor responsável também destrava antes de trocar)
+      if (cav && truthy(cav.lock) && bv !== fv) return LOCK_MSG;
     }
     return null;
   }
@@ -328,7 +332,7 @@
   // Pode ver a célula?
   const canSee = (perms, sheetId, addr) => sheetVisible(perms, sheetId) && colLevel(perms, sheetId, colOf(addr)) !== 'none';
 
-  const api = { escalaCols, escalaCheck, ESC_FIELDS, normName: nrm, COLS_MSG, FORMAT_MSG, nonValue, execMerge, execAllowed, stable, normCell, EXEC_STYLE, compute, validate, filterDoc, filterPatch, levelOf, colLevel, sheetVisible, bestLevel, hasHiddenCols, hasColRules, blockingProtection, defaultAcl, canSee, colOf, colName, RANK, LEVELS };
+  const api = { LOCK_MSG, lockedCol, escalaCols, escalaCheck, ESC_FIELDS, normName: nrm, COLS_MSG, FORMAT_MSG, nonValue, execMerge, execAllowed, stable, normCell, EXEC_STYLE, compute, validate, filterDoc, filterPatch, levelOf, colLevel, sheetVisible, bestLevel, hasHiddenCols, hasColRules, blockingProtection, defaultAcl, canSee, colOf, colName, RANK, LEVELS };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Perms = api;
 })(typeof window !== 'undefined' ? window : globalThis);
