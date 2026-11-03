@@ -832,6 +832,8 @@
       sh.colW = shiftMap(sh.colW, at, count);
       sh.hiddenCols = shiftMap(sh.hiddenCols, at, count);
       if (sh.colNames) sh.colNames = shiftMap(sh.colNames, at, count);
+      // ordem das colunas nas visualizações: acompanha colunas inseridas ou excluídas
+      if (sh.viewOrder && sh.viewOrder.length) sh.viewOrder = sh.viewOrder.map((c) => (c >= at ? (count < 0 && c < at - count ? null : c + count) : c)).filter((c) => c !== null && c >= 1);
       if (sh.colHdr) sh.colHdr = shiftMap(sh.colHdr, at, count);
       if (sh.colGroups && sh.colGroups.length) sh.colGroups = sh.colGroups.map((g) => { const R = shiftRect({ r1: 1, r2: 1, c1: g.c1, c2: g.c2 }, 'col', at, count); return R ? Object.assign({}, g, { c1: R.c1, c2: R.c2 }) : null; }).filter(Boolean);
       if (sh.access) { const acc = {}; for (const k in sh.access) acc[k] = shiftMap(sh.access[k], at, count); sh.access = acc; }

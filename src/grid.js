@@ -1103,7 +1103,7 @@
       case 'colHdr': {
         // visualização de filtro: segurar a coluna selecionada e arrastar muda a ordem (só para você)
         // basta segurar o cabeçalho e arrastar; Shift+clique seleciona várias colunas para mover juntas
-        if (!e.shiftKey && !e.ctrlKey && !e.metaKey && App.views.has(sh.id)) {
+        if (!e.shiftKey && !e.ctrlKey && !e.metaKey && App.views.has(sh.id) && (!App.canMoveCols || App.canMoveCols())) {
           let Rs = App.selRect();
           if (!(Rs.r1 === 1 && Rs.r2 >= st.nR && h.c >= Rs.c1 && h.c <= Rs.c2)) { selectCols(h.c, h.c); Rs = App.selRect(); }
           st.drag = { kind: 'colMove', d1: Rs.c1, d2: Rs.c2, x0: p.x, px: p.x, to: null, active: false, frozen: Rs.c1 <= st.Fc };
@@ -1353,7 +1353,7 @@
     const p = pos(e);
     const h = hit(p.x, p.y);
     scroller.style.cursor = h.area === 'cell' && GROUP(h.r) ? 'pointer' : h.area === 'colEdge' ? 'col-resize' : h.area === 'rowEdge' ? 'row-resize' : h.area === 'fill' ? 'crosshair'
-      : h.area === 'colHdr' && App.views.has(App.sheet().id) ? 'grab'
+      : h.area === 'colHdr' && App.views.has(App.sheet().id) && (!App.canMoveCols || App.canMoveCols()) ? 'grab'
       : h.area === 'colHdr' || h.area === 'filterHdr' || h.area === 'colGroup' || h.area === 'rowHdr' || h.area === 'unhideCols' || h.area === 'unhideRows' || h.area === 'corner' ? 'pointer'
         : h.area === 'freezeRowBar' ? 'row-resize' : h.area === 'freezeColBar' ? 'col-resize' : 'default';
     const key = h.area === 'cell' ? h.r + ':' + h.c : null;

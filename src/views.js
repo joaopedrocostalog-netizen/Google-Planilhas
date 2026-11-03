@@ -82,7 +82,9 @@
   App.buildVmap = () => {
     const sh = App.sheet();
     const v = sh && App.views.get(sh.id);
-    const needs = v && ((v.order && v.order.length) || (v.groups && v.groups.length) || (v.sort && v.sort.col));
+    // a ordem das colunas nas visualizações é a mesma para todos e só o administrador muda (sh.viewOrder)
+    const order = (sh && sh.viewOrder) || [];
+    const needs = v && (order.length || (v.groups && v.groups.length) || (v.sort && v.sort.col));
     // mantém a célula selecionada no lugar certo quando as linhas mudam de posição
     const sel = App.sel;
     const before = App.vm && sel ? App.realCell(sel.ar, sel.ac) : null;
@@ -133,7 +135,7 @@
       const cols = [0];
       for (let c = 1; c <= fc; c++) cols.push(c);
       const seen = new Set(cols);
-      for (const c of v.order || []) if (c > fc && c <= sh.cols && !seen.has(c)) { cols.push(c); seen.add(c); }
+      for (const c of order) if (c > fc && c <= sh.cols && !seen.has(c)) { cols.push(c); seen.add(c); }
       for (let c = fc + 1; c <= sh.cols; c++) if (!seen.has(c)) cols.push(c);
       const rowPos = new Map(), colPos = new Map();
       rows.forEach((e, i) => { if (e && e.r) rowPos.set(e.r, i); });
@@ -157,9 +159,13 @@
     App.setView(sh, v);
   };
   // move as colunas de tela [d1..d2] para antes da coluna de tela "to"
+  const isAdmin = () => !(App.adminOnly && App.adminOnly());
+  App.canMoveCols = isAdmin;
+  const saveOrder = (sh, order) => App.change('Ordem das colunas (visualizações)', () => { if (order && order.length) sh.viewOrder = order; else delete sh.viewOrder; });
   App.moveViewCols = (d1, d2, to) => {
     const sh = App.sheet(), v = cur(), vm = App.vm;
     if (!v) return null;
+    if (!isAdmin()) { notify('Somente administradores podem mudar a ordem das colunas.'); return null; }
     const fc = Math.min((sh.freeze && sh.freeze.cols) || 0, sh.cols);
     const list = vm ? vm.cols.slice(1) : Array.from({ length: sh.cols }, (_, i) => i + 1);
     const moving = list.slice(d1 - 1, d2);
@@ -168,8 +174,7 @@
     let at = to - 1 - (to > d2 ? moving.length : 0);
     at = Math.max(fc, Math.min(rest.length, at));
     rest.splice(at, 0, ...moving);
-    v.order = rest.filter((c) => c > fc);
-    App.setView(sh, v);
+    saveOrder(sh, rest.filter((c) => c > fc));
     return { from: at + 1, to: at + moving.length };
   };
 
@@ -190,16 +195,16 @@
         <select class="vb-sel" id="vb-group">${opt(allCols.filter((c) => !groups.includes(c)), groups.length ? '+ Agrupar dentro…' : '+ Agrupar por…')}</select></span>
       <span class="vb-sort"><select class="vb-sel" id="vb-sort"><option value="">Classificar por status…</option>${allCols.map((c) => `<option value="${c}"${v.sort && v.sort.col === c ? ' selected' : ''}>Status: ${esc(colLabel(sh, c))}</option>`).join('')}</select>
         ${v.sort && v.sort.col ? '<button class="vb-btn" id="vb-order">Ordem dos status</button>' : ''}</span>
-      <button class="vb-btn" id="vb-colorder" title="Segure o cabeçalho de uma coluna e arraste, ou escolha a ordem numa lista">${icon('columns', 16)} Ordem das colunas</button>
-      ${v.order && v.order.length ? '<button class="vb-btn" id="vb-cols">Restaurar ordem</button>' : '<span class="vb-note">ou segure o cabeçalho da coluna e arraste. Só você vê.</span>'}
+      ${isAdmin() ? `<button class="vb-btn" id="vb-colorder" title="Segure o cabeçalho de uma coluna e arraste, ou escolha a ordem numa lista">${icon('columns', 16)} Ordem das colunas</button>
+      ${sh.viewOrder && sh.viewOrder.length ? '<button class="vb-btn" id="vb-cols">Restaurar ordem</button>' : '<span class="vb-note">ou segure o cabeçalho da coluna e arraste. Vale para todas as visualizações.</span>'}` : ''}
       ${nFilters ? `<button class="vb-btn" id="vb-clear">Limpar filtros (${nFilters})</button>` : ''}
       <button class="vb-x" id="vb-close" title="Fechar visualização" aria-label="Fechar visualização">${icon('close', 18)}</button>`;
     bar.hidden = false;
     bar.querySelector('#vb-close').onclick = () => App.run('closeFilterView');
     const q = (id) => bar.querySelector(id);
     if (q('#vb-clear')) q('#vb-clear').onclick = () => App.run('clearViewFilters');
-    if (q('#vb-cols')) q('#vb-cols').onclick = () => { v.order = []; App.setView(sh, v); };
-    q('#vb-colorder').onclick = colOrderDialog;
+    if (q('#vb-cols')) q('#vb-cols').onclick = () => saveOrder(sh, []);
+    if (q('#vb-colorder')) q('#vb-colorder').onclick = colOrderDialog;
     q('#vb-group').onchange = (e) => { const c = +e.target.value; if (c) create('group', c); };
     bar.querySelectorAll('[data-ungroup]').forEach((b) => (b.onclick = () => { v.groups = groups.filter((c) => c !== +b.dataset.ungroup); v.collapsed = []; App.setView(sh, v); }));
     q('#vb-sort').onchange = (e) => { const c = +e.target.value; v.sort = c ? { col: c, order: (v.sort && v.sort.col === c && v.sort.order) || [] } : null; App.setView(sh, v); };
@@ -236,6 +241,7 @@
   function colOrderDialog() {
     const sh = App.sheet(), v = cur();
     if (!v) return;
+    if (!isAdmin()) return notify('Somente administradores podem mudar a ordem das colunas.');
     const fc = Math.min((sh.freeze && sh.freeze.cols) || 0, sh.cols);
     const used = App.usedRange(sh), last = Math.max(1, used.maxC, ...Object.keys(sh.colNames || {}).map(Number));
     const shown = App.vm ? App.vm.cols.slice(1) : Array.from({ length: sh.cols }, (_, i) => i + 1);
@@ -244,13 +250,12 @@
     const natural = () => Array.from({ length: last }, (_, i) => i + 1).filter(ok);
     const m = App.ui.modal({
       title: 'Ordem das colunas', width: '460px', cls: 'modal-tall', enterSubmits: false,
-      body: `<p class="sp-hint">Segure uma coluna e arraste para cima ou para baixo (ou use as setas). As de cima aparecem primeiro, da esquerda para a direita. Só você vê esta ordem.${fc ? ` As colunas congeladas (${E.numToCol(1)}${fc > 1 ? '–' + E.numToCol(fc) : ''}) ficam fixas.` : ''}</p>
+      body: `<p class="sp-hint">Segure uma coluna e arraste para cima ou para baixo (ou use as setas). As de cima aparecem primeiro, da esquerda para a direita. A ordem vale para as visualizações de todas as pessoas.${fc ? ` As colunas congeladas (${E.numToCol(1)}${fc > 1 ? '–' + E.numToCol(fc) : ''}) ficam fixas.` : ''}</p>
         <input class="input" id="co-find" placeholder="Procurar coluna…" autocomplete="off"><div class="mv-list co-list"></div>
         <button class="btn btn-sm" id="co-reset">Ordem original</button>`,
       buttons: [{ label: 'Cancelar' }, { label: 'Salvar', primary: true, action: () => {
         const nat = natural();
-        v.order = items.join(',') === nat.join(',') ? [] : items.slice();
-        App.setView(sh, v);
+        saveOrder(sh, items.join(',') === nat.join(',') ? [] : items.slice());
       } }],
     });
     const list = m.el.querySelector('.co-list'), find = m.el.querySelector('#co-find');

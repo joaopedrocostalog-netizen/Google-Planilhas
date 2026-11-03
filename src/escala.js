@@ -39,6 +39,9 @@
     return String(App.fmtValue(v, App.style(sh, r, c).nf)).trim();
   };
   const cols = (sh) => (window.Perms ? window.Perms.escalaCols(sh) : {});
+  // primeira linha de dados: com o nome da coluna definido pelo administrador (A = CAVALO), a linha 1 já é dado;
+  // sem nome, a linha 1 é o cabeçalho
+  const firstRow = (sh, c) => (c && sh.colNames && sh.colNames[c] ? 1 : 2);
   const cavCell = (sh, r) => { const c = cols(sh).CAVALO; return c ? sh.cells[E.addrToStr(r, c)] || null : null; };
 
   function srcSheet(sh) {
@@ -294,7 +297,7 @@
     const have = new Set();
     App.withReal(() => {
       const used = App.usedRange(js);
-      for (let r = 2; r <= used.maxR; r++) {
+      for (let r = firstRow(js, jc.DATA || jc.CAVALO); r <= used.maxR; r++) {
         const o = {};
         for (const f in jc) o[f] = jc[f] ? text(ji, js, r, jc[f]) : '';
         const dk = dateKey(App.value(ji, r, jc.DATA));
@@ -388,7 +391,7 @@
         for (const f of ['CAVALO', 'MARCA', 'TIPO', 'CATEGORIA']) bc[f] = App.colByName(bs, f);
         if (!bc.CAVALO) { map = null; return; }
         const used = App.usedRange(bs);
-        for (let r = 2; r <= used.maxR; r++) {
+        for (let r = firstRow(bs, bc.CAVALO); r <= used.maxR; r++) {
           const k = norm(text(bi, bs, r, bc.CAVALO));
           if (!k || map.has(k)) continue;
           map.set(k, { MARCA: text(bi, bs, r, bc.MARCA), TIPO: text(bi, bs, r, bc.TIPO), CATEGORIA: text(bi, bs, r, bc.CATEGORIA) });
@@ -429,7 +432,7 @@
           const kind = /^CLIENTES?IMP/.test(L[c] || '') ? 'IMPO' : /^CLIENTES?EXP/.test(L[c] || '') ? 'EXPO' : null;
           if (!kind) continue;
           const cc = near(c, 'CIDADE'), ac = near(c, 'ENDERECO');
-          for (let r = 2; r <= used.maxR; r++) {
+          for (let r = firstRow(bs, c); r <= used.maxR; r++) {
             const name = text(bi, bs, r, c);
             if (name) out.clients.push({ name, kind, city: cc ? text(bi, bs, r, cc) : '', addr: ac ? text(bi, bs, r, ac) : '' });
           }
@@ -438,7 +441,7 @@
           const t = L.indexOf(tcol), ci = L.indexOf(ccol);
           if (t < 1) continue;
           const seen = new Set();
-          for (let r = 2; r <= used.maxR; r++) {
+          for (let r = firstRow(bs, t); r <= used.maxR; r++) {
             const name = text(bi, bs, r, t), city = ci > 0 ? text(bi, bs, r, ci) : '';
             const k = norm(name) + '|' + norm(city);
             if (name && !seen.has(k)) { seen.add(k); out[key].push({ name, city }); }
@@ -504,7 +507,7 @@
     if (!freteCache.col || c !== freteCache.col || !freteCache.cav) return false;
     const fv = App.value(si, r, c);
     if (fv !== null && fv !== undefined && String(fv).trim() !== '') return false;
-    if (r <= 1) return false;
+    if (r < firstRow(sh, freteCache.cav) || norm(sh.name) === norm('BASE GERAL')) return false;
     const plate = text(si, sh, r, freteCache.cav);
     if (!plate || !isPlate(plate)) return false;
     const info = vehicleInfo(plate);
@@ -520,7 +523,7 @@
     if (!(R.r1 === R.r2 && R.c1 === R.c2) || (App.editing && App.editing())) return hideInfo();
     const p = App.realCell ? App.realCell(R.r1, R.c1) : { r: R.r1, c: R.c1 };
     const tc = cols(sh);
-    if (!p || !canSeeInfo(sh)) return hideInfo();
+    if (!p || !canSeeInfo(sh) || norm(sh.name) === norm('BASE GERAL')) return hideInfo();
     const kind = columnKind(sh, p.c);
     if (kind === 'coleta' || kind === 'vazio') {
       const ti = App.withReal(() => terminalInfo(sh, kind, p.r, p.c));
