@@ -69,7 +69,7 @@ function pgStore(url) {
   const schema = process.env.PGSCHEMA || '';
   if (schema && !/^[a-z_][a-z0-9_]*$/.test(schema)) throw new Error('PGSCHEMA inválido: ' + schema);
   const pool = new Pool({
-    connectionString: url, ssl: noSsl ? false : { rejectUnauthorized: false }, max: 8,
+    connectionString: url, ssl: noSsl ? false : { rejectUnauthorized: false }, max: 8, connectionTimeoutMillis: 10000, idleTimeoutMillis: 30000, keepAlive: true,
     options: schema ? `-c search_path=${schema}` : undefined,
   });
   pool.on('error', (e) => console.error('Erro na conexão com o banco:', e.code || '', e.message));

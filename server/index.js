@@ -96,12 +96,39 @@ function cors(req, res) {
 
 // ---------- Sessões ----------
 const SESSION_DAYS = 60;
+// Guarda as sessões já conferidas por alguns minutos: menos consultas ao banco e, se o banco cair por um tempo,
+// quem já estava conectado continua trabalhando (as alterações ficam no servidor e são salvas quando ele voltar).
+const sessionCache = new Map();
+const SESSION_FRESH = 10 * 60e3, SESSION_GRACE = 12 * 3600e3;
 async function userFromToken(token) {
   if (!token || typeof token !== 'string') return null;
-  const s = await store.getSession(sha(token));
-  if (!s) return null;
-  if (Date.now() - s.created_at > SESSION_DAYS * 864e5) { await store.deleteSession(sha(token)); return null; }
-  return store.getUserById(s.user_id);
+  const key = sha(token);
+  const hit = sessionCache.get(key);
+  if (hit && Date.now() - hit.at < SESSION_FRESH) return hit.user;
+  try {
+    const s = await store.getSession(key);
+    if (!s) { sessionCache.delete(key); return null; }
+    if (Date.now() - s.created_at > SESSION_DAYS * 864e5) { sessionCache.delete(key); await store.deleteSession(key); return null; }
+    const user = await store.getUserById(s.user_id);
+    if (user) sessionCache.set(key, { user, at: Date.now() }); else sessionCache.delete(key);
+    if (sessionCache.size > 5000) sessionCache.delete(sessionCache.keys().next().value);
+    return user;
+  } catch (e) {
+    if (hit && isDbError(e) && Date.now() - hit.at < SESSION_GRACE) return hit.user;
+    throw e;
+  }
+}
+// Falhas de conexão com o banco (banco reiniciando, fora do ar ou rede instável)
+function isDbError(e) {
+  const code = String((e && e.code) || ''), msg = String((e && e.message) || '');
+  return ['ENOTFOUND', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'EPIPE', '57P01', '57P02', '57P03', '53300'].includes(code) || /Connection terminated|timeout exceeded|connect ETIMEDOUT|the database system is (starting|shutting)/i.test(msg);
+}
+const DB_DOWN_MSG = 'O banco de dados está temporariamente fora do ar. Suas alterações ficam guardadas no servidor e são salvas quando ele voltar. Tente de novo em instantes.';
+let lastDbLog = 0;
+function logDbError(where, e) {
+  if (Date.now() - lastDbLog < 60e3) return;
+  lastDbLog = Date.now();
+  console.error(`[banco] indisponível (${where}): ${e.code || ''} ${e.message || e}`);
 }
 const tokenOf = (req) => { const m = /^Bearer\s+(.+)$/.exec(req.headers.authorization || ''); return m ? m[1] : null; };
 async function requireUser(req) {
@@ -144,10 +171,13 @@ async function saveRoom(room) {
   try { await store.saveDoc(room.id, { title: String(room.data.title || 'Planilha sem título').slice(0, 200), data: room.data, version: room.version }); }
   catch (e) {
     room.dirty = true;
-    console.error('Falha ao salvar', room.id, e.message);
+    room.failures = (room.failures || 0) + 1;
+    if (isDbError(e)) logDbError('salvar ' + room.id, e); else console.error('Falha ao salvar', room.id, e.message);
     clearTimeout(room.timer);
-    room.timer = setTimeout(() => saveRoom(room), 5000);
+    room.timer = setTimeout(() => saveRoom(room), Math.min(60e3, 5000 * room.failures));
+    return;
   }
+  if (room.failures) { console.log(`[banco] planilha ${room.id} salva de novo após ${room.failures} tentativa(s).`); room.failures = 0; }
 }
 // quem vê quem: administradores veem todos; os demais só veem pessoas do mesmo setor
 const seesPeer = (viewer, peer) => !!(viewer.perms && peer.perms) && (viewer.perms.admin || (!peer.perms.admin && viewer.perms.sectorId === peer.perms.sectorId));
@@ -213,6 +243,7 @@ function onPatch(c, msg) {
   const err = Perms.validate(p, c.perms, room.data);
   if (err) { c.ws.send({ type: 'reject', id: msg.id, reason: err }); sendInit(c); return; }
   const hist = historyEntries(room, p);
+  const clears = lookupClears(room, p);
   Patch.apply(room.data, p);
   room.version++;
   if (hist.length) store.addHistory(room.id, c.user, hist).catch((e) => console.error('Falha ao gravar histórico', e.message));
@@ -237,7 +268,7 @@ function onPatch(c, msg) {
   }
   if (accessChanged && !c.perms.admin) sendInit(c);
   // completa o CPF/CNPJ do motorista (DSS) e avisa todos, inclusive quem digitou
-  const fill = lookupFills(room, p);
+  const fill = lookupFills(room, p, clears);
   if (fill) {
     Patch.apply(room.data, fill);
     room.version++;
@@ -275,6 +306,7 @@ function onConnection(ws) {
       if (msg.type === 'presence') return onPresence(c, msg);
       if (msg.type === 'ping') return ws.send({ type: 'pong' });
     } catch (e) {
+      if (isDbError(e)) { logDbError('ws ' + msg.type, e); ws.send({ type: 'error', code: 'db', message: DB_DOWN_MSG }); if (msg.type === 'hello' && !c.room) setTimeout(() => ws.close(4503, 'banco'), 100); return; }
       console.error(e);
       ws.send({ type: 'error', code: 'server', message: 'Erro no servidor. Tente recarregar a página.' });
     }
@@ -341,7 +373,7 @@ route('POST', '/api/login', async (req) => {
   if (!user || !checkPass(b.password || '', user.pass)) throw httpError(401, 'E-mail ou senha incorretos.');
   return { token: await newSession(user), user: await meUser(user) };
 });
-route('POST', '/api/logout', async (req) => { const t = tokenOf(req); if (t) await store.deleteSession(sha(t)); return { ok: true }; });
+route('POST', '/api/logout', async (req) => { const t = tokenOf(req); if (t) { sessionCache.delete(sha(t)); await store.deleteSession(sha(t)); } return { ok: true }; });
 route('GET', '/api/me', async (req) => meUser(await requireUser(req)));
 route('PUT', '/api/me', async (req) => {
   const user = await requireUser(req);
@@ -377,6 +409,7 @@ route('PUT', '/api/me/prefs', async (req) => {
   if (b.views && typeof b.views === 'object' && JSON.stringify(b.views).length < 200000) prefs.views = b.views;
   if (b.fviews && typeof b.fviews === 'object' && JSON.stringify(b.fviews).length < 300000) prefs.fviews = b.fviews;
   await store.savePrefs(user.id, prefs);
+  user.prefs = prefs;
   return prefs;
 });
 // a pessoa pode trocar a própria cor, desde que nenhuma outra pessoa use a mesma
@@ -615,8 +648,32 @@ route('GET', '/api/dss/motoristas', async (req) => {
   return { motoristas: d.items, atualizado: d.at || null, aviso: d.error || null };
 });
 // Ao digitar um motorista conhecido na coluna configurada, o servidor completa o CPF/CNPJ (vale também para quem não edita a coluna do CPF)
-function lookupFills(room, p) {
+// Nome do motorista apagado: o CPF/CNPJ da mesma linha também é apagado (o contrário não: apagar o CPF não mexe no nome)
+function lookupClears(room, p) {
+  const list = [];
+  for (const id in p.sheets || {}) {
+    const e = p.sheets[id];
+    const sh = room.data.sheets.find((s) => s.id === id);
+    const lk = sh && sh.lookup;
+    if (!e.cells || !lk || !lk.col || !lk.cpfCol) continue;
+    for (const a in e.cells) {
+      const m = /^([A-Z]+)(\d+)$/.exec(a);
+      if (!m || Perms.colOf(a) !== lk.col) continue;
+      const before = String(((sh.cells || {})[a] || {}).v || '').trim(), after = String((e.cells[a] || {}).v || '').trim();
+      if (before && !after) list.push({ id, target: Perms.colName(lk.cpfCol) + m[2] });
+    }
+  }
+  return list;
+}
+function lookupFills(room, p, clears) {
   const out = {};
+  for (const c of clears || []) {
+    const sh = room.data.sheets.find((s) => s.id === c.id);
+    const cur = sh && (sh.cells || {})[c.target];
+    if (!cur || cur.v === undefined || cur.v === null || cur.v === '') continue;
+    const keep = Object.assign({}, cur); delete keep.v;
+    (out[c.id] = out[c.id] || { cells: {} }).cells[c.target] = Object.keys(keep).length ? Object.assign(keep, { v: '' }) : null;
+  }
   for (const id in p.sheets || {}) {
     const e = p.sheets[id];
     const sh = room.data.sheets.find((s) => s.id === id);
@@ -664,6 +721,7 @@ const server = http.createServer(async (req, res) => {
     if (!m) continue;
     try { return sendJson(res, 200, await r.fn(req, m.groups || {})); }
     catch (e) {
+      if (!e.status && isDbError(e)) { logDbError(url.pathname, e); return sendJson(res, 503, { error: DB_DOWN_MSG }); }
       if (!e.status) console.error(e);
       return sendJson(res, e.status || 500, { error: e.status ? e.message : 'Erro no servidor. Tente novamente.' });
     }

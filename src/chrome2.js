@@ -70,11 +70,13 @@
   }
 
   // ---------- Abas ----------
+  // cor do texto que dá leitura sobre a cor da aba
+  const inkFor = (hex) => { const m = /^#?([0-9a-f]{6})$/i.exec(hex || ''); if (!m) return '#ffffff'; const n = parseInt(m[1], 16), r = n >> 16, g = (n >> 8) & 255, b = n & 255; return (r * 299 + g * 587 + b * 114) / 1000 > 150 ? '#1a1a1a' : '#ffffff'; };
   function renderTabs() {
     const box = $('tabs');
     box.innerHTML = doc.sheets.map((s, i) => s.hidden ? '' :
-      `<div class="tab${i === doc.active ? ' active' : ''}" data-i="${i}" draggable="true" title="${esc(s.name)}">
-        ${s.color ? `<i class="tab-color" style="background:${s.color}"></i>` : ''}<span class="tab-name">${esc(s.name)}</span>
+      `<div class="tab${i === doc.active ? ' active' : ''}${s.color ? ' colored' : ''}" data-i="${i}" draggable="true" title="${esc(s.name)}"${s.color ? ` style="--tab:${esc(s.color)};--tab-ink:${inkFor(s.color)}"` : ''}>
+        ${s.color ? `<i class="tab-color"></i>` : ''}<span class="tab-name">${esc(s.name)}</span>
         ${i === doc.active ? `<button class="tab-caret" data-caret="${i}" aria-label="Opções da planilha">${icon('chevDown', 14)}</button>` : ''}</div>`).join('');
     const act = box.querySelector('.tab.active');
     if (act) act.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -232,9 +234,9 @@
       const rowsTxt = (n) => `${n} ${n === 1 ? 'linha' : 'linhas'}`, colsTxt = (n) => `${n} ${n === 1 ? 'coluna' : 'colunas'}`;
       const rl = nr === 1 ? `linha ${R.r1}` : `linhas ${R.r1} - ${R.r2}`;
       const cl = nc === 1 ? `coluna ${E.numToCol(R.c1)}` : `colunas ${E.numToCol(R.c1)} - ${E.numToCol(R.c2)}`;
-      // container crítico (coluna T): marcar ou desmarcar as linhas selecionadas
+      // container crítico: marcar ou desmarcar as linhas selecionadas
       const critItem = () => {
-        const col = sh.critCol || 20;
+        const col = App.critCol(sh);
         let all = true;
         for (let r = R.r1; r <= Math.min(R.r2, R.r1 + 500); r++) { const p = App.realCell ? App.realCell(r, 1) : { r }; if (!p) continue; const x = sh.cells[E.addrToStr(p.r, col)]; if (!(x && x.crit)) { all = false; break; } }
         return all ? { label: `Remover alerta de crítico (${nr === 1 ? 'linha ' + R.r1 : nr + ' linhas'})`, cmd: 'markCritical', arg: false }
@@ -247,6 +249,7 @@
         items = [...base,
           { label: `Renomear coluna ${E.numToCol(R.c1)}`, cmd: 'renameCol', arg: R.c1 },
           { label: 'Personalizar cabeçalho da coluna', cmd: 'colHeaderStyle' },
+          ...(App.adminOnly && App.adminOnly() ? [] : [{ label: App.critCol(sh) === R.c1 ? `Alerta de crítico já fica na coluna ${E.numToCol(R.c1)}` : `Usar a coluna ${E.numToCol(R.c1)} para o alerta de crítico`, cmd: 'critColumn', arg: R.c1, disabled: App.critCol(sh) === R.c1 }]),
           (sh.colGroups || []).some((g) => !(g.c2 < R.c1 || g.c1 > R.c2)) ? { label: `Desagrupar ${cl}`, cmd: 'ungroupCols' } : { label: `Agrupar ${cl} (com +)`, cmd: 'groupCols' },
           { label: `Inserir ${colsTxt(nc)} à esquerda`, cmd: 'insertColsLeft' }, { label: `Inserir ${colsTxt(nc)} à direita`, cmd: 'insertColsRight' },
           { label: `Excluir ${cl}`, cmd: 'deleteCols' }, { label: `Limpar ${cl}`, cmd: 'clearValues' }, { label: `Ocultar ${cl}`, cmd: 'hideCols' },
@@ -268,7 +271,8 @@
           critItem(),
           { label: `Inserir ${rowsTxt(nr)} acima`, cmd: 'insertRowsAbove' }, { label: `Inserir ${colsTxt(nc)} à esquerda`, cmd: 'insertColsLeft' },
           { label: 'Inserir células', sub: [{ label: `Inserir ${rowsTxt(nr)} abaixo`, cmd: 'insertRowsBelow' }, { label: `Inserir ${colsTxt(nc)} à direita`, cmd: 'insertColsRight' }] },
-          { label: `Excluir ${rl}`, cmd: 'deleteRows' }, { label: `Excluir ${cl}`, cmd: 'deleteCols' }, '-',
+          { label: `Excluir ${rl}`, cmd: 'deleteRows' }, { label: `Excluir ${cl}`, cmd: 'deleteCols' },
+          { label: nr * nc === 1 ? 'Excluir esta célula' : 'Excluir células', sub: [{ label: 'Deslocar para cima', cmd: 'deleteCellsUp' }, { label: 'Deslocar para a esquerda', cmd: 'deleteCellsLeft' }] }, '-',
           { label: 'Criar um filtro', cmd: 'toggleFilter', disabled: !!sh.filter }, { label: 'Classificar intervalo', sub: [{ label: 'A a Z', cmd: 'sortRange', arg: false }, { label: 'Z a A', cmd: 'sortRange', arg: true }, { label: 'Opções avançadas', cmd: 'sortAdvanced' }] }, '-',
           { label: 'Inserir link', icon: 'link', cmd: 'insertLink' }, { label: 'Comentário', icon: 'comment', cmd: 'insertComment' }, { label: 'Inserir nota', icon: 'note', cmd: 'insertNote' },
           { label: 'Menu suspenso', icon: 'dropdown', cmd: 'insertDropdown' }, '-',

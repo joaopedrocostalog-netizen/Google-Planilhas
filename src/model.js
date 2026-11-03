@@ -651,7 +651,7 @@
     const key = si + ':' + rule.id;
     if (App._cfCache.has(key)) return App._cfCache.get(key);
     let min = Infinity, max = -Infinity;
-    const R = rule.range;
+    const R = rule.toEnd ? Object.assign({}, rule.range, { r2: sh.rows }) : rule.range;
     const maxR = Math.min(R.r2, usedRange(sh).maxR || R.r2);
     for (let r = R.r1; r <= maxR; r++) for (let c = R.c1; c <= R.c2; c++) {
       const v = App.value(si, r, c);
@@ -689,7 +689,8 @@
     if (!sh.cf.length) return st;
     let v;
     for (const rule of sh.cf) {
-      if (!inRect(rule.range, r, c)) continue;
+      // "até a última linha": vale também para as linhas adicionadas depois
+      if (!(rule.toEnd ? r >= rule.range.r1 && c >= rule.range.c1 && c <= rule.range.c2 : inRect(rule.range, r, c))) continue;
       if (v === undefined) v = App.value(si, r, c);
       if (rule.kind === 'scale') {
         if (typeof v !== 'number') continue;
@@ -708,6 +709,14 @@
       }
     }
     return st;
+  };
+
+  // Coluna do alerta de container crítico: a escolhida pelo administrador, senão a coluna chamada IMO, senão T
+  App.critCol = (sh) => {
+    if (sh.critCol) return sh.critCol;
+    const names = sh.colNames || {};
+    for (const k in names) if (/^\s*IMO\s*$/i.test(String(names[k]))) return +k;
+    return 20;
   };
 
   // ---------- Validação de dados ----------

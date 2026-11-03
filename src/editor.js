@@ -341,8 +341,31 @@
     renderAc();
     return true;
   }
+  // Menu suspenso: ao digitar, as opções que combinam com o texto vão aparecendo (como na lista do DSS)
+  function dvAc() {
+    const sh = doc.sheets[ed.si];
+    const real = ed.real || { r: ed.r, c: ed.c };
+    if (!sh || !sh.dv || !sh.dv.length || ta.value[0] === '=') return false;
+    const d = App.withReal(() => App.dvAt(sh, real.r, real.c));
+    if (!d || (d.type !== 'list' && d.type !== 'range')) return false;
+    let items = [];
+    try { items = App.withReal(() => App.dvItems(sh, d)) || []; } catch (e) { items = []; }
+    const q = fold(ta.value.trim());
+    const seen = new Set(), starts = [], has = [];
+    for (const it of items) {
+      const t = String(it); if (!t || seen.has(t)) continue; seen.add(t);
+      const n = fold(t);
+      if (!q || n.startsWith(q)) starts.push(t); else if (n.includes(q)) has.push(t);
+    }
+    ed.ac = starts.concat(has).slice(0, 12).map((t) => ({ show: t, args: null, desc: 'Opção do menu suspenso', dvItem: true, color: (d.colors || {})[t] || null }));
+    if (!ed.ac.length || (ed.ac.length === 1 && fold(ed.ac[0].show) === q)) { hideAc(); return true; }
+    ed.acIndex = Math.min(ed.acIndex, ed.ac.length - 1);
+    renderAc();
+    return true;
+  }
   function updateAc() {
     if (lookupAc()) return;
+    if (dvAc()) return;
     const w = currentWord();
     if (!w || w.word.length < 1) { hideAc(); return; }
     const q = fold(w.word);
@@ -365,7 +388,7 @@
   }
   function renderAc() {
     acEl.innerHTML = ed.ac.map((it, i) =>
-      `<div class="ac-item${i === ed.acIndex ? ' on' : ''}" data-i="${i}"><div class="ac-name"><b>${esc(it.show)}</b>${it.args !== null ? `<span>(${esc(it.args)})</span>` : ''}</div>${i === ed.acIndex ? `<div class="ac-desc">${esc(it.desc)}</div>` : ''}</div>`
+      `<div class="ac-item${i === ed.acIndex ? ' on' : ''}" data-i="${i}"><div class="ac-name">${it.dvItem ? `<i class="ac-sw" style="background:${esc(it.color || '#ececec')}"></i>` : ''}<b>${esc(it.show)}</b>${it.args !== null ? `<span>(${esc(it.args)})</span>` : ''}</div>${i === ed.acIndex ? `<div class="ac-desc">${esc(it.desc)}</div>` : ''}</div>`
     ).join('');
     positionPopup(acEl);
     acEl.hidden = false;
@@ -374,6 +397,12 @@
   function acceptAc() {
     const it = ed.ac[ed.acIndex];
     if (!it) return false;
+    if (it.dvItem) {
+      setText(it.show, it.show.length);
+      hideAc();
+      commit(1, 0);
+      return true;
+    }
     if (it.lookup) {
       // escolheu o motorista: grava o nome e completa o CPF/CNPJ
       ed.pick = it.lookup;

@@ -78,6 +78,25 @@
       if (bodyRef && !bodyRef.contains(document.activeElement)) render(bodyRef);
     });
     const finish = () => { save(); alive = false; };
+    const rangeLabel = (r) => r.toEnd ? `${E.numToCol(r.range.c1)}${r.range.r1}:${E.numToCol(r.range.c2)}` : App.rangeText(r.range);
+    const move = (id, dir) => {
+      // sobe/desce a regra em relação à vizinha que aparece na lista
+      const shown = listed();
+      const k = shown.findIndex((r) => r.id === id), other = shown[k + dir];
+      if (k < 0 || !other) return;
+      const i = work.findIndex((r) => r.id === id), j = work.findIndex((r) => r.id === other.id);
+      [work[i], work[j]] = [work[j], work[i]];
+      preview(true);
+    };
+    const dropOn = (fromId, toId) => {
+      const i = work.findIndex((r) => r.id === fromId);
+      if (i < 0 || fromId === toId) return;
+      const [x] = work.splice(i, 1);
+      const j = work.findIndex((r) => r.id === toId);
+      work.splice(j < 0 ? work.length : (i <= j ? j + 1 : j), 0, x);
+      preview(true);
+    };
+    let listed = () => work;
     const duplicate = (id) => {
       const i = work.findIndex((r) => r.id === id);
       if (i < 0) return;
@@ -96,9 +115,10 @@
       const inSel = sh.cf.filter((r) => !(r.range.r2 < R.r1 || r.range.r1 > R.r2 || r.range.c2 < R.c1 || r.range.c1 > R.c2));
       const all = showAll || !inSel.length;
       const rules = all ? sh.cf : inSel;
-      body.innerHTML = `<p class="sp-hint">${all ? (sh.cf.length ? `Todas as regras desta página (${sh.cf.length}):` : 'Nenhuma regra nesta página.') : 'Regras que se aplicam à seleção atual:'}</p>
+      listed = () => (showAll || !inSel.length ? work : work.filter((r) => inSel.some((x) => x.id === r.id)));
+      body.innerHTML = `<p class="sp-hint">${all ? (sh.cf.length ? `Todas as regras desta página (${sh.cf.length}):` : 'Nenhuma regra nesta página.') : 'Regras que se aplicam à seleção atual:'}${rules.length > 1 ? '<br>A regra de cima tem prioridade. Segure ⠿ e arraste, ou use as setas, para mudar a ordem.' : ''}</p>
         ${sh.cf.length > inSel.length && inSel.length ? `<button class="btn btn-sm cf-all">${showAll ? 'Mostrar só as da seleção' : `Ver todas as regras da página (${sh.cf.length})`}</button>` : ''}
-        <div class="cf-list">${rules.map((r) => `<div class="cf-item" data-id="${r.id}">${r.kind === 'scale' ? `<span class="cf-chip" style="background:linear-gradient(90deg,${r.min},${r.mid || r.min},${r.max})">&nbsp;</span>` : styleChip(r.style)}<div><b>${esc(r.kind === 'scale' ? 'Escala de cores' : (App.CONDITIONS.find((c) => c[0] === r.cond.type) || [, ''])[1] + (r.cond.a ? ' ' + r.cond.a : '') + (r.cond.b ? ' e ' + r.cond.b : ''))}</b><small>${esc(App.rangeText(r.range))}</small></div><button class="icon-btn cf-dup" title="Duplicar regra">${icon('copy', 16)}</button><button class="icon-btn cf-del" title="Excluir regra">${icon('close', 16)}</button></div>`).join('')}</div>
+        <div class="cf-list">${rules.map((r, i) => `<div class="cf-item" draggable="true" data-id="${r.id}">${rules.length > 1 ? `<span class="cf-grip" title="Segure e arraste para mudar a ordem">⠿</span>` : ''}${r.kind === 'scale' ? `<span class="cf-chip" style="background:linear-gradient(90deg,${r.min},${r.mid || r.min},${r.max})">&nbsp;</span>` : styleChip(r.style)}<div><b>${esc(r.kind === 'scale' ? 'Escala de cores' : (App.CONDITIONS.find((c) => c[0] === r.cond.type) || [, ''])[1] + (r.cond.a ? ' ' + r.cond.a : '') + (r.cond.b ? ' e ' + r.cond.b : ''))}</b><small>${esc(rangeLabel(r))}</small></div>${rules.length > 1 ? `<span class="cf-ord"><button class="icon-btn cf-up" title="Subir (mais prioridade)"${i === 0 ? ' disabled' : ''}>▲</button><button class="icon-btn cf-down" title="Descer"${i === rules.length - 1 ? ' disabled' : ''}>▼</button></span>` : ''}<button class="icon-btn cf-dup" title="Duplicar regra">${icon('copy', 16)}</button><button class="icon-btn cf-del" title="Excluir regra">${icon('close', 16)}</button></div>`).join('')}</div>
         <button class="btn sp-add">${icon('plus', 16)} Adicionar outra regra</button>
         <div class="sp-foot"><button class="btn btn-primary sp-done">Concluído</button></div>`;
       body.querySelector('.sp-add').onclick = () => {
@@ -110,8 +130,14 @@
         el.onclick = (e) => {
           if (e.target.closest('.cf-del')) { sh.cf = sh.cf.filter((r) => r.id !== el.dataset.id); preview(true); render(body); return; }
           if (e.target.closest('.cf-dup')) { duplicate(el.dataset.id); render(body); return; }
+          if (e.target.closest('.cf-up')) { move(el.dataset.id, -1); render(body); return; }
+          if (e.target.closest('.cf-down')) { move(el.dataset.id, 1); render(body); return; }
           editingId = el.dataset.id; render(body);
         };
+        el.addEventListener('dragstart', (e) => { el.classList.add('dragging'); try { e.dataTransfer.setData('text/plain', el.dataset.id); e.dataTransfer.effectAllowed = 'move'; } catch (er) { /* ignora */ } });
+        el.addEventListener('dragend', () => { el.classList.remove('dragging'); body.querySelectorAll('.drop-on').forEach((x) => x.classList.remove('drop-on')); });
+        el.addEventListener('dragover', (e) => { e.preventDefault(); body.querySelectorAll('.drop-on').forEach((x) => x !== el && x.classList.remove('drop-on')); el.classList.add('drop-on'); });
+        el.addEventListener('drop', (e) => { e.preventDefault(); let from = ''; try { from = e.dataTransfer.getData('text/plain'); } catch (er) { /* ignora */ } if (from) { dropOn(from, el.dataset.id); render(body); } });
       });
       body.querySelector('.sp-done').onclick = closePanel;
       const ab = body.querySelector('.cf-all');
@@ -121,7 +147,9 @@
       const r = work.find((x) => x.id === editingId);
       body.innerHTML = `
         <div class="sp-tabs"><button data-k="single" class="${r.kind !== 'scale' ? 'on' : ''}">Cor única</button><button data-k="scale" class="${r.kind === 'scale' ? 'on' : ''}">Escala de cores</button></div>
-        <label class="field"><span>Aplicar ao intervalo</span><input class="input" data-f="range" value="${esc(App.rangeText(r.range))}"></label>
+        <label class="field"><span>Aplicar ao intervalo</span><input class="input" data-f="range" value="${esc(rangeLabel(r))}"></label>
+        <div class="cf-range-btns"><button class="btn btn-sm${r.toEnd ? ' on' : ''}" data-act="toEnd" title="A regra vale da linha inicial até a última linha da página, inclusive as linhas adicionadas depois">↧ Até a última linha</button>
+          <button class="btn btn-sm" data-act="selRange" title="Usar o intervalo selecionado na planilha">Usar a seleção</button></div>
         ${r.kind === 'scale' ? `
           <div class="cf-scale-prev" style="background:linear-gradient(90deg,${r.min},${r.mid || r.min},${r.max})"></div>
           <div class="cf-scale-presets">${[['#ffffff', null, '#e30613'], ['#e30613', '#ffffff', '#57bb8a'], ['#57bb8a', '#ffd666', '#e67c73'], ['#ffffff', null, '#0d0d0d'], ['#f3f3f3', null, '#4a86e8']].map((p, i) => `<button class="cf-sp" data-p="${i}" style="background:linear-gradient(90deg,${p[0]},${p[1] || p[0]},${p[2]})"></button>`).join('')}</div>
@@ -144,7 +172,19 @@
         preview(); renderRule(body);
       });
       const q = (f) => body.querySelector(`[data-f="${f}"]`);
-      q('range').onchange = () => { const R = rangeFromInput(q('range').value); if (R) { r.range = R; preview(); } };
+      q('range').onchange = () => {
+        const t = q('range').value.trim().toUpperCase().replace(/\$/g, '');
+        const open = /^([A-Z]+)(\d+):([A-Z]+)$/.exec(t);
+        if (open) { r.range = { r1: +open[2], c1: E.colToNum(open[1]), r2: S().rows, c2: E.colToNum(open[3]) }; r.toEnd = true; preview(); renderRule(body); return; }
+        const R = rangeFromInput(t);
+        if (R) { r.range = R; r.toEnd = R.r2 >= S().rows; preview(); }
+      };
+      body.querySelector('[data-act="toEnd"]').onclick = () => {
+        if (r.toEnd) { r.toEnd = false; r.range = Object.assign({}, r.range, { r2: Math.max(r.range.r1, Math.min(r.range.r2, App.usedRange(S()).maxR || r.range.r1)) }); }
+        else { r.toEnd = true; r.range = Object.assign({}, r.range, { r2: S().rows }); }
+        preview(true); renderRule(body);
+      };
+      body.querySelector('[data-act="selRange"]').onclick = () => { const R = App.selRect(); r.range = Object.assign({}, R); r.toEnd = R.r2 >= S().rows; preview(true); renderRule(body); };
       if (r.kind === 'scale') {
         body.querySelectorAll('.cf-sp').forEach((b) => b.onclick = () => { const p = [['#ffffff', null, '#e30613'], ['#e30613', '#ffffff', '#57bb8a'], ['#57bb8a', '#ffd666', '#e67c73'], ['#ffffff', null, '#0d0d0d'], ['#f3f3f3', null, '#4a86e8']][+b.dataset.p]; r.min = p[0]; r.mid = p[1]; r.max = p[2]; preview(); renderRule(body); });
         q('min').oninput = () => { r.min = q('min').value; preview(); };

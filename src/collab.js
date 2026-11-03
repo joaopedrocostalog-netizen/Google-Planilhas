@@ -454,6 +454,8 @@
   }
 
   function onError(m) {
+    // banco de dados fora do ar por um tempo (ou erro passageiro): avisa e continua tentando reconectar
+    if (m.code === 'db' || m.code === 'server') { setStatus('offline'); notify(m.message); return; }
     cloud.closing = true;
     if (m.code === 'auth') {
       setToken(null, null);
