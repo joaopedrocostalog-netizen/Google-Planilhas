@@ -29,8 +29,33 @@ function checkPass(p, stored) {
   const a = crypto.scryptSync(String(p), salt, 32), b = Buffer.from(h, 'hex');
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
-const COLORS = ['#e30613', '#1a73e8', '#188038', '#9334e6', '#e37400', '#d01884', '#12b5cb', '#5f6368', '#b06000', '#0b8043'];
-const colorFor = (id) => COLORS[[...String(id)].reduce((a, c) => a + c.charCodeAt(0), 0) % COLORS.length];
+// ---------- Cores: cada pessoa tem uma cor só dela (cursor, avatar, histórico e mensagens) ----------
+const COLORS = ['#1a73e8', '#188038', '#9334e6', '#e37400', '#d01884', '#00897b', '#5e35b1', '#c62828', '#0277bd', '#7cb342',
+  '#f4511e', '#8e24aa', '#3949ab', '#00acc1', '#6d4c41', '#afb42b', '#ad1457', '#2e7d32', '#ef6c00', '#546e7a', '#039be5', '#6a1b9a', '#00695c', '#bf360c'];
+const userColors = new Map();
+const HEX = /^#[0-9a-f]{6}$/;
+function hsl(h, s, l) {
+  s /= 100; l /= 100;
+  const f = (n) => { const k = (n + h / 30) % 12; const c = l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1)); return Math.round(255 * c).toString(16).padStart(2, '0'); };
+  return '#' + f(0) + f(8) + f(4);
+}
+function nextColor() {
+  const used = new Set(userColors.values());
+  for (const c of COLORS) if (!used.has(c)) return c;
+  for (let i = 0; ; i++) { const c = hsl((i * 137.508 + 23) % 360, 60 + (i % 3) * 10, 36 + (i % 4) * 5); if (!used.has(c)) return c; }
+}
+const colorTaken = (color, exceptId) => [...userColors].some(([id, c]) => c === color && id !== exceptId);
+async function loadColors() {
+  const rows = await store.userColors();
+  const fix = [];
+  for (const r of rows) {
+    const c = String(r.color || '').toLowerCase();
+    if (HEX.test(c) && !colorTaken(c)) userColors.set(r.id, c); else fix.push(r.id);
+  }
+  for (const id of fix) { const c = nextColor(); userColors.set(id, c); await store.setUserColor(id, c); }
+}
+async function giveColor(id) { if (userColors.has(id)) return; const c = nextColor(); userColors.set(id, c); await store.setUserColor(id, c); }
+const colorFor = (id) => userColors.get(id) || COLORS[[...String(id)].reduce((a, c) => a + c.charCodeAt(0), 0) % COLORS.length];
 const publicUser = (u) => ({ id: u.id, email: u.email, name: u.name, color: colorFor(u.id) });
 async function isGlobalAdmin(u) {
   if (ADMIN_EMAILS.includes(String(u.email).toLowerCase())) return true;
@@ -126,7 +151,7 @@ async function saveRoom(room) {
 }
 // quem vê quem: administradores veem todos; os demais só veem pessoas do mesmo setor
 const seesPeer = (viewer, peer) => !!(viewer.perms && peer.perms) && (viewer.perms.admin || (!peer.perms.admin && viewer.perms.sectorId === peer.perms.sectorId));
-const peerInfo = (c) => ({ cid: c.cid, name: c.user.name, email: c.user.email, color: colorFor(c.user.id), presence: c.presence });
+const peerInfo = (c) => ({ cid: c.cid, uid: c.user.id, name: c.user.name, email: c.user.email, color: colorFor(c.user.id), presence: c.presence });
 function sendInit(c) {
   const room = c.room;
   c.ws.send({
@@ -305,6 +330,7 @@ route('POST', '/api/register', async (req) => {
   if (await store.getUserByEmail(email)) throw httpError(409, 'Já existe uma conta com este e-mail. Use "Entrar".');
   const user = { id: uid(9), email, name, pass: hashPass(pass) };
   await store.createUser(user);
+  await giveColor(user.id);
   return { token: await newSession(user), user: await meUser(user) };
 });
 route('POST', '/api/login', async (req) => {
@@ -328,6 +354,7 @@ route('PUT', '/api/me', async (req) => {
     f.pass = hashPass(String(b.password));
   }
   await store.updateUser(user.id, f);
+  userCache.delete(user.id);
   return meUser(Object.assign(user, f));
 });
 // pessoas que criaram conta e ainda não têm acesso a nenhuma planilha (para o administrador liberar)
@@ -352,6 +379,109 @@ route('PUT', '/api/me/prefs', async (req) => {
   await store.savePrefs(user.id, prefs);
   return prefs;
 });
+// a pessoa pode trocar a própria cor, desde que nenhuma outra pessoa use a mesma
+route('GET', '/api/me/color', async (req) => {
+  const user = await requireUser(req);
+  return { color: colorFor(user.id), palette: COLORS, taken: [...userColors].filter(([id]) => id !== user.id).map(([, c]) => c) };
+});
+route('PUT', '/api/me/color', async (req) => {
+  const user = await requireUser(req);
+  const b = await readBody(req, 10000);
+  const color = String(b.color || '').toLowerCase();
+  if (!HEX.test(color)) throw httpError(400, 'Cor inválida.');
+  if (colorTaken(color, user.id)) throw httpError(409, 'Essa cor já é de outra pessoa. Escolha outra.');
+  userColors.set(user.id, color);
+  await store.setUserColor(user.id, color);
+  for (const room of rooms.values()) for (const c of room.clients) {
+    if (!c.user || c.user.id !== user.id) continue;
+    for (const o of room.clients) if (o !== c && seesPeer(o, c)) o.ws.send({ type: 'presence', peer: peerInfo(c) });
+  }
+  return { color };
+});
+
+// ---------- Mensagens diretas ----------
+// Com quem a pessoa pode conversar nesta planilha: administradores falam com todos; os demais, com o próprio setor e com os administradores
+async function contactsFor(user, room) {
+  const me = Perms.compute(permDoc(room), user);
+  if (!me) throw httpError(403, 'Você não tem acesso a esta planilha.');
+  const byEmail = new Map((await store.listUsers()).map((u) => [u.email, u]));
+  const cand = new Map();
+  const owner = await store.getUserById(room.ownerId);
+  if (owner) cand.set(owner.id, owner);
+  for (const m of room.acl.members || []) { const u = byEmail.get(m.email); if (u) cand.set(u.id, u); }
+  for (const c of room.clients) if (c.user) cand.set(c.user.id, c.user);
+  cand.delete(user.id);
+  const online = new Set([...room.clients].map((c) => c.user && c.user.id));
+  const out = [];
+  for (const u of cand.values()) {
+    const p = Perms.compute(permDoc(room), u);
+    if (!p) continue;
+    if (!(me.admin || p.admin || (p.sectorId && p.sectorId === me.sectorId))) continue;
+    out.push({ id: u.id, name: u.name, email: u.email, color: colorFor(u.id), admin: !!p.admin, sector: p.sectorName || null, online: online.has(u.id) });
+  }
+  return out.sort((a, b) => (b.online - a.online) || a.name.localeCompare(b.name, 'pt-BR'));
+}
+const userCache = new Map();
+async function userBrief(id) {
+  if (!userCache.has(id)) { const u = await store.getUserById(id); userCache.set(id, u ? { id: u.id, name: u.name, email: u.email } : { id, name: 'Pessoa removida', email: '' }); }
+  return Object.assign({}, userCache.get(id), { color: colorFor(id) });
+}
+const pubMsg = (m) => ({ id: m.id, from: m.from_id, to: m.to_id, doc: m.doc_id || null, text: m.text, ref: m.ref || null, at: m.at, read: !!m.read_at });
+function deliver(userIds, msg) {
+  const ids = new Set(userIds);
+  for (const room of rooms.values()) for (const c of room.clients) if (c.user && ids.has(c.user.id)) c.ws.send(msg);
+}
+route('GET', '/api/docs/:id/contacts', async (req, p) => {
+  const user = await requireUser(req);
+  const room = await getRoom(p.id);
+  if (!room) throw httpError(404, 'Planilha não encontrada.');
+  return contactsFor(user, room);
+});
+route('GET', '/api/messages', async (req) => {
+  const user = await requireUser(req);
+  const list = await store.recentMessages(user.id, 1000);
+  const conv = new Map();
+  for (const m of list) {
+    const other = m.from_id === user.id ? m.to_id : m.from_id;
+    if (!conv.has(other)) conv.set(other, { last: m, unread: 0 });
+    if (m.to_id === user.id && !m.read_at) conv.get(other).unread++;
+  }
+  const out = [];
+  for (const [id, x] of conv) out.push({ with: await userBrief(id), last: Object.assign(pubMsg(x.last), { mine: x.last.from_id === user.id }), unread: x.unread });
+  return { conversations: out, unread: out.reduce((a, x) => a + x.unread, 0) };
+});
+route('GET', '/api/messages/:uid', async (req, p) => {
+  const user = await requireUser(req);
+  const list = await store.conversation(user.id, p.uid, 300);
+  return { with: await userBrief(p.uid), messages: list.map(pubMsg) };
+});
+route('POST', '/api/messages/:uid/read', async (req, p) => {
+  const user = await requireUser(req);
+  const n = await store.markRead(user.id, p.uid);
+  if (n) deliver([p.uid, user.id], { type: 'dmRead', by: user.id, with: p.uid });
+  return { ok: true, n };
+});
+route('POST', '/api/messages', async (req) => {
+  const user = await requireUser(req);
+  const b = await readBody(req, 20000);
+  const text = String(b.text || '').trim().slice(0, 2000);
+  const to = String(b.to || '');
+  if (!text) throw httpError(400, 'Escreva a mensagem.');
+  if (!to || to === user.id) throw httpError(400, 'Escolha para quem enviar.');
+  if (rateLimited('msg:' + user.id)) throw httpError(429, 'Muitas mensagens em pouco tempo. Aguarde um minuto.');
+  // pode enviar para quem é contato nesta planilha ou para quem já mandou mensagem para a pessoa (responder)
+  let ok = await store.hasMessage(to, user.id);
+  const room = b.doc ? await getRoom(String(b.doc)) : null;
+  if (!ok && room) ok = (await contactsFor(user, room)).some((c) => c.id === to);
+  if (!ok) throw httpError(403, 'Você não pode enviar mensagem para esta pessoa.');
+  let ref = null;
+  if (b.ref && typeof b.ref === 'object') ref = { sheet: String(b.ref.sheet || '').slice(0, 40), addr: String(b.ref.addr || '').slice(0, 30), label: String(b.ref.label || '').slice(0, 120), doc: room ? room.id : null, title: room ? String(room.data.title || '').slice(0, 120) : '' };
+  const m = await store.addMessage({ from_id: user.id, to_id: to, doc_id: room ? room.id : null, text, ref });
+  const out = Object.assign(pubMsg(m), { fromUser: await userBrief(user.id) });
+  deliver([to, user.id], { type: 'dm', msg: out });
+  return out;
+});
+
 route('GET', '/api/docs', async (req) => {
   const user = await requireUser(req);
   const rows = await store.listDocsFor(user);
@@ -574,7 +704,7 @@ function describeDbError(e) {
 
 (async function start() {
   for (let attempt = 1; ; attempt++) {
-    try { await store.init(); break; }
+    try { await store.init(); await loadColors(); break; }
     catch (e) {
       console.error(`Não foi possível iniciar o banco de dados (tentativa ${attempt}/6): ${describeDbError(e)}`);
       if (attempt >= 6) process.exit(1);

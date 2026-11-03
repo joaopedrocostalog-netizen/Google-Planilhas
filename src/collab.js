@@ -167,7 +167,8 @@
     App.ui.menuPopup(anchor, [
       { header: cloud.user.name + ' · ' + cloud.user.email },
       { label: 'Planilhas na nuvem', icon: 'cloud', cmd: 'openCloud' },
-      { label: 'Alterar nome ou senha', action: profileDialog }, '-',
+      { label: 'Alterar nome ou senha', action: profileDialog },
+      { label: 'Minha cor', action: colorDialog }, '-',
       { label: 'Sair', action: logout },
     ], { right: true });
   }
@@ -184,6 +185,30 @@
         api('PUT', '/api/me', body).then((u) => { cloud.user = u; renderAccount(); notify('Conta atualizada.'); }).catch((e) => notify(e.message));
       } }],
     });
+  }
+  // cada pessoa tem uma cor só dela; aqui ela pode escolher outra que ninguém esteja usando
+  async function colorDialog() {
+    let info;
+    try { info = await api('GET', '/api/me/color'); } catch (e) { return notify(e.message); }
+    const taken = new Set(info.taken);
+    let chosen = info.color;
+    const m = App.ui.modal({
+      title: 'Minha cor', width: '420px',
+      body: `<p class="sp-hint">É a cor do seu cursor e do seu nome para as outras pessoas na planilha. Cada pessoa tem uma cor diferente; as cores riscadas já são de alguém.</p>
+        <div class="mycolor-grid">${info.palette.map((c) => `<button class="mycolor${c === chosen ? ' on' : ''}${taken.has(c) ? ' taken' : ''}" data-c="${c}" style="background:${c}" title="${taken.has(c) ? 'Já é de outra pessoa' : c}"${taken.has(c) ? ' disabled' : ''}></button>`).join('')}</div>
+        <label class="field mycolor-custom"><span>Outra cor</span><input type="color" id="mc-custom" value="${chosen}"></label>
+        <div class="mycolor-prev"><span class="avatar" id="mc-prev" style="background:${chosen}">${esc((cloud.user.name || '?').trim()[0].toUpperCase())}</span> <b>${esc(cloud.user.name)}</b></div>`,
+      buttons: [{ label: 'Cancelar' }, { label: 'Salvar', primary: true, action: () => {
+        api('PUT', '/api/me/color', { color: chosen }).then((r) => { cloud.user.color = r.color; renderAccount(); notify('Sua cor foi atualizada.'); }).catch((e) => notify(e.message));
+      } }],
+    });
+    const set = (c) => { chosen = c; m.el.querySelector('#mc-prev').style.background = c; m.el.querySelectorAll('.mycolor').forEach((b) => b.classList.toggle('on', b.dataset.c === c)); };
+    m.el.querySelectorAll('.mycolor:not([disabled])').forEach((b) => (b.onclick = () => set(b.dataset.c)));
+    m.el.querySelector('#mc-custom').oninput = (e) => {
+      const c = e.target.value.toLowerCase();
+      if (taken.has(c)) return notify('Essa cor já é de outra pessoa. Escolha outra.');
+      set(c);
+    };
   }
   async function logout() {
     try { await api('POST', '/api/logout'); } catch (e) { /* ignora */ }
@@ -322,6 +347,8 @@
       case 'join': cloud.peers.set(m.peer.cid, m.peer); renderPeers(); notify(`${m.peer.name} entrou na planilha.`); break;
       case 'presence': cloud.peers.set(m.peer.cid, m.peer); renderPeers(); break;
       case 'leave': cloud.peers.delete(m.cid); renderPeers(); break;
+      case 'dm': App.emit('dm', m.msg); break;
+      case 'dmRead': App.emit('dmRead', m); break;
       case 'error': onError(m); break;
     }
   }
@@ -489,12 +516,20 @@
       const shown = list.slice(0, 5);
       box.innerHTML = shown.map((p) => `<button class="peer" data-cid="${esc(p.cid)}" style="background:${p.color}" title="${esc(p.name)} (${esc(p.email)})">${esc((p.name || '?').trim()[0].toUpperCase())}</button>`).join('') +
         (list.length > 5 ? `<span class="peer more" title="${list.slice(5).map((p) => esc(p.name)).join(', ')}">+${list.length - 5}</span>` : '');
-      box.querySelectorAll('.peer[data-cid]').forEach((b) => (b.onclick = () => {
-        const p = cloud.peers.get(b.dataset.cid);
-        if (!p || !p.presence || !p.presence.sel) return;
+      const goTo = (p) => {
+        if (!p || !p.presence || !p.presence.sel) return notify(`${p ? p.name : 'A pessoa'} ainda não selecionou nenhuma célula.`);
         const i = doc.sheets.findIndex((s) => s.id === p.presence.sheetId);
         if (i >= 0 && i !== doc.active) App.run('switchSheet', i);
         App.grid.select(p.presence.sel.r1, p.presence.sel.c1);
+      };
+      box.querySelectorAll('.peer[data-cid]').forEach((b) => (b.onclick = () => {
+        const p = cloud.peers.get(b.dataset.cid);
+        if (!p) return;
+        App.ui.menuPopup(b, [
+          { header: `${p.name} · ${p.email}` },
+          { label: 'Ir até onde a pessoa está', action: () => goTo(p) },
+          ...(p.uid && App.chat ? [{ label: 'Enviar mensagem', icon: 'comment', action: () => App.chat.open(p.uid) }] : []),
+        ], { right: true });
       }));
     }
     const visibleSel = (p) => {
@@ -1013,7 +1048,7 @@
   // Os setores são executores: digitam as informações nas colunas liberadas. Todo o resto
   // (formatação, regras, estrutura, filtros, congelar, tamanho de linhas e colunas) é dos administradores,
   // e essas opções nem aparecem para eles.
-  const EXEC_OK = new Set(['undo', 'redo', 'cut', 'copy', 'paste', 'pasteValues', 'find', 'findReplace', 'clearValues',
+  const EXEC_OK = new Set(['messages', 'undo', 'redo', 'cut', 'copy', 'paste', 'pasteValues', 'find', 'findReplace', 'clearValues',
     'zoom', 'toggleFormulaBar', 'toggleMenus', 'fullscreen', 'toggleGridlines', 'toggleFormulas', 'switchSheet', 'nextSheet', 'prevSheet',
     'selectAll', 'selectColumn', 'selectRow', 'insertDate', 'insertTime', 'insertDateTime', 'fillDown', 'fillRight',
     'print', 'download', 'openCloud', 'share', 'login', 'cellHistory', 'shortcuts', 'about', 'functionList', 'columnStats',

@@ -13,6 +13,7 @@
   App.io.init();
   App.collab.init();
   App.viewsInit();
+  App.chat.init();
 
   // Barra "Adicionar mais linhas"
   $('add-rows-btn').addEventListener('click', () => App.run('addRows', parseInt($('add-rows-n').value, 10) || 1000));
