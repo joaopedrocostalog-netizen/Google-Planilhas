@@ -47,6 +47,7 @@
     if (escCache) escCache.set(sheet, { key, cols });
     return cols;
   }
+  const CRIT_MSG = 'Marcar container como crítico não está liberado para o seu setor. Peça a um administrador.';
   const LOCK_MSG = 'Veículo bloqueado para troca. Peça ao setor responsável para destravar (use "Pedir troca" no botão direito ou o chat).';
   // colunas que travam junto com o veículo
   const lockedCol = (cols, c) => !!c && [cols.CAVALO, cols.CARRETA, cols.MOTORISTA, cols.CPF, cols.CONTATO].includes(c);
@@ -273,6 +274,8 @@
           }
           const beforeOf = (x) => (invCells && x in invCells ? invCells[x] : sheet ? (sheet.cells || {})[x] || null : null);
           const before = invCells ? (a in invCells ? invCells[a] : null) : sheet ? (sheet.cells || {})[a] || null : null;
+          // container crítico: se o administrador escolheu os setores, só eles marcam ou desmarcam
+          if (sheet && Array.isArray(sheet.critSectors) && truthy((before || {}).crit) !== truthy((e.cells[a] || {}).crit) && !sheet.critSectors.includes(perms.sectorId)) return CRIT_MSG;
           if (sheet) { const ee = escalaCheck(perms, sheet, a, before, e.cells[a], beforeOf); if (ee) return ee; }
           if (!execAllowed(before, e.cells[a])) return FORMAT_MSG;
         }
