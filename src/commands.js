@@ -483,6 +483,17 @@
     let R = App.selRect();
     // coluna inteira selecionada: filtro a partir da coluna
     if (R.r1 === 1 && R.r2 >= sh.rows && !(R.c1 === 1 && R.c2 >= sh.cols)) { App.run('filterFromColumn'); return; }
+    // colunas com nome (ex.: A = DATA): o cabeçalho já é o nome da coluna, então o filtro fica no cabeçalho, não na linha 1
+    const named = Object.keys(sh.colNames || {}).map(Number).filter((c) => sh.colNames[c]);
+    if (named.length && (R.r1 === 1 || (R.r1 === R.r2 && R.c1 === R.c2))) {
+      const used = App.usedRange(sh);
+      let c1 = R.c1, c2 = R.c2;
+      if (R.c1 === R.c2 && (R.r1 === R.r2 || R.r2 >= sh.rows)) { const reg = App.dataRegion(si(), sel.ar, sel.ac); c1 = reg.c1; c2 = reg.c2; }
+      if (c1 === c2 && R.r1 === R.r2) { c1 = 1; c2 = Math.max(used.maxC, ...named); }
+      if (R.c1 === 1 && R.c2 >= sh.cols) c2 = Math.max(used.maxC, ...named, 1);
+      App.change('Criar filtro', () => { sh.filter = { r1: 0, c1, c2, r2: sh.rows, crit: {} }; });
+      return;
+    }
     if (R.r1 === R.r2 && R.c1 === R.c2) R = App.dataRegion(si(), sel.ar, sel.ac);
     if (R.r1 === 1 && R.r2 >= sh.rows) R = Object.assign({}, R, { r2: Math.max(2, App.usedRange(sh).maxR) });
     App.change('Criar filtro', () => { sh.filter = Object.assign({}, R, { crit: {} }); });

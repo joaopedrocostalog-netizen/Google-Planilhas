@@ -3,9 +3,10 @@
 const fs = require('fs');
 
 function memoryStore(file) {
-  let db = { users: {}, sessions: {}, docs: {}, history: {} };
+  let db = { users: {}, sessions: {}, docs: {}, history: {}, messages: [], msgSeq: 0 };
   if (file && fs.existsSync(file)) { try { db = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { /* começa vazio */ } }
   db.history = db.history || {};
+  db.messages = db.messages || []; db.msgSeq = db.msgSeq || 0;
   let timer = null;
   const persist = () => {
     if (!file) return;
@@ -22,6 +23,14 @@ function memoryStore(file) {
     async updateUser(id, fields) { Object.assign(db.users[id], fields); persist(); },
     async savePrefs(id, prefs) { if (db.users[id]) { db.users[id].prefs = clone(prefs); persist(); } },
     async listUsers() { return Object.values(db.users).map((u) => ({ id: u.id, email: u.email, name: u.name, created_at: u.created_at })); },
+    async userColors() { return Object.values(db.users).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))).map((u) => ({ id: u.id, color: u.color || null })); },
+    async setUserColor(id, color) { if (db.users[id]) { db.users[id].color = color; persist(); } },
+    // mensagens diretas entre pessoas
+    async addMessage(m) { const x = Object.assign({ id: ++db.msgSeq, at: new Date().toISOString(), read_at: null }, clone(m)); db.messages.push(x); if (db.messages.length > 50000) db.messages.splice(0, db.messages.length - 50000); persist(); return clone(x); },
+    async conversation(a, b, limit) { return db.messages.filter((m) => (m.from_id === a && m.to_id === b) || (m.from_id === b && m.to_id === a)).slice(-limit).map(clone); },
+    async recentMessages(userId, limit) { return db.messages.filter((m) => m.from_id === userId || m.to_id === userId).slice(-limit).reverse().map(clone); },
+    async markRead(userId, fromId) { const at = new Date().toISOString(); let n = 0; for (const m of db.messages) if (m.to_id === userId && m.from_id === fromId && !m.read_at) { m.read_at = at; n++; } if (n) persist(); return n; },
+    async hasMessage(fromId, toId) { return db.messages.some((m) => m.from_id === fromId && m.to_id === toId); },
     async allDocAcls() { return Object.values(db.docs).map((d) => ({ owner_id: d.owner_id, acl: clone(d.acl) })); },
     async createSession(hash, userId) { db.sessions[hash] = { user_id: userId, created_at: Date.now() }; persist(); },
     async getSession(hash) { return clone(db.sessions[hash]); },
@@ -74,6 +83,7 @@ function pgStore(url) {
         id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, name TEXT NOT NULL, pass TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
       await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS prefs JSONB');
+      await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS color TEXT');
       await q(`CREATE TABLE IF NOT EXISTS sessions (
         token TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
@@ -88,6 +98,11 @@ function pgStore(url) {
         sheet_id TEXT NOT NULL, addr TEXT NOT NULL, user_id TEXT, user_name TEXT,
         at TIMESTAMPTZ NOT NULL DEFAULT now(), before TEXT, after TEXT)`);
       await q('CREATE INDEX IF NOT EXISTS cell_history_cell ON cell_history(doc_id, sheet_id, addr, id DESC)');
+      await q(`CREATE TABLE IF NOT EXISTS messages (
+        id BIGSERIAL PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT NOT NULL, doc_id TEXT,
+        text TEXT NOT NULL, ref JSONB, at TIMESTAMPTZ NOT NULL DEFAULT now(), read_at TIMESTAMPTZ)`);
+      await q('CREATE INDEX IF NOT EXISTS messages_to ON messages(to_id, id DESC)');
+      await q('CREATE INDEX IF NOT EXISTS messages_from ON messages(from_id, id DESC)');
     },
     getUserByEmail: (email) => row('SELECT * FROM users WHERE email = $1', [email]),
     getUserById: (id) => row('SELECT * FROM users WHERE id = $1', [id]),
@@ -95,6 +110,22 @@ function pgStore(url) {
     async updateUser(id, f) { if (f.name) await q('UPDATE users SET name = $2 WHERE id = $1', [id, f.name]); if (f.pass) await q('UPDATE users SET pass = $2 WHERE id = $1', [id, f.pass]); },
     async listUsers() { const r = await q('SELECT id, email, name, created_at FROM users ORDER BY created_at DESC LIMIT 1000'); return r.rows; },
     async allDocAcls() { const r = await q('SELECT owner_id, acl FROM docs'); return r.rows; },
+    async userColors() { const r = await q('SELECT id, color FROM users ORDER BY created_at, id'); return r.rows; },
+    async setUserColor(id, color) { await q('UPDATE users SET color = $2 WHERE id = $1', [id, color]); },
+    async addMessage(m) {
+      const r = await q('INSERT INTO messages (from_id, to_id, doc_id, text, ref) VALUES ($1, $2, $3, $4, $5) RETURNING id, at', [m.from_id, m.to_id, m.doc_id || null, m.text, m.ref ? JSON.stringify(m.ref) : null]);
+      return Object.assign({}, m, { id: Number(r.rows[0].id), at: r.rows[0].at, read_at: null });
+    },
+    async conversation(a, b, limit) {
+      const r = await q(`SELECT * FROM (SELECT * FROM messages WHERE (from_id = $1 AND to_id = $2) OR (from_id = $2 AND to_id = $1) ORDER BY id DESC LIMIT $3) x ORDER BY id`, [a, b, limit]);
+      return r.rows.map((m) => Object.assign(m, { id: Number(m.id) }));
+    },
+    async recentMessages(userId, limit) {
+      const r = await q('SELECT * FROM messages WHERE from_id = $1 OR to_id = $1 ORDER BY id DESC LIMIT $2', [userId, limit]);
+      return r.rows.map((m) => Object.assign(m, { id: Number(m.id) }));
+    },
+    async markRead(userId, fromId) { const r = await q('UPDATE messages SET read_at = now() WHERE to_id = $1 AND from_id = $2 AND read_at IS NULL', [userId, fromId]); return r.rowCount; },
+    async hasMessage(fromId, toId) { const r = await q('SELECT 1 FROM messages WHERE from_id = $1 AND to_id = $2 LIMIT 1', [fromId, toId]); return r.rows.length > 0; },
     async savePrefs(id, prefs) { await q('UPDATE users SET prefs = $2 WHERE id = $1', [id, JSON.stringify(prefs)]); },
     async createSession(hash, userId) { await q('INSERT INTO sessions (token, user_id) VALUES ($1, $2)', [hash, userId]); },
     async getSession(hash) { const r = await row('SELECT user_id, extract(epoch from created_at) * 1000 AS created_at FROM sessions WHERE token = $1', [hash]); return r ? { user_id: r.user_id, created_at: Number(r.created_at) } : null; },

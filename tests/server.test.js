@@ -190,6 +190,38 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await sleep(150);
     check('setores diferentes não se veem', [B.msgs.some((m) => (m.type === 'presence' || m.type === 'join') && m.peer.name === 'Caio'), ic.peers.some((p) => p.name === 'Bia')], [false, false]);
 
+    // cores: cada pessoa tem uma cor diferente
+    const extra = [];
+    for (let i = 0; i < 14; i++) extra.push((await api('POST', '/api/register', { name: 'P' + i, email: `p${i}@empresa.com`, password: 'segredo1' })).user.color);
+    const allColors = [ana.user.color, bia.user.color, caio.user.color, ...extra];
+    check('cores diferentes para todos', new Set(allColors).size, allColors.length);
+    check('cor de outra pessoa não pode', (await api('PUT', '/api/me/color', { color: bia.user.color }, ana.token))._status, 409);
+    const free = (await api('GET', '/api/me/color', null, bia.token));
+    const pick = free.palette.concat(['#123456']).find((c) => !free.taken.includes(c) && c !== free.color);
+    check('trocar a própria cor', (await api('PUT', '/api/me/color', { color: pick }, bia.token)).color, pick);
+    check('nova cor aparece para quem está na planilha', (await A.wait('presence', (m) => m.peer.name === 'Bia' && m.peer.color === pick)).peer.color, pick);
+
+    // mensagens diretas
+    const cBia = await api('GET', `/api/docs/${doc.id}/contacts`, null, bia.token);
+    const cAna = await api('GET', `/api/docs/${doc.id}/contacts`, null, ana.token);
+    check('contatos do setor: administradores e o próprio setor', cBia.map((c) => c.name), ['Ana']);
+    check('administrador fala com todos', cAna.map((c) => c.name).sort(), ['Bia', 'Caio']);
+    check('outro setor não recebe', (await api('POST', '/api/messages', { to: caio.user.id, text: 'oi', doc: doc.id }, bia.token))._status, 403);
+    const m1 = await api('POST', '/api/messages', { to: ana.user.id, text: 'Pode ver a linha 5?', doc: doc.id, ref: { sheet: 'p1', addr: 'B5', label: 'Página1!B5' } }, bia.token);
+    check('mensagem enviada', [m1.text, m1.ref.addr, m1.fromUser.name], ['Pode ver a linha 5?', 'B5', 'Bia']);
+    const dm = await A.wait('dm');
+    check('mensagem chega na hora', [dm.msg.text, dm.msg.from], ['Pode ver a linha 5?', bia.user.id]);
+    let inbox = await api('GET', '/api/messages', null, ana.token);
+    check('não lida', [inbox.unread, inbox.conversations[0].with.name], [1, 'Bia']);
+    await api('POST', `/api/messages/${bia.user.id}/read`, null, ana.token);
+    inbox = await api('GET', '/api/messages', null, ana.token);
+    check('marcada como lida', inbox.unread, 0);
+    await api('POST', '/api/messages', { to: caio.user.id, text: 'Oi Caio', doc: doc.id }, ana.token);
+    check('responder sem estar na mesma planilha', (await api('POST', '/api/messages', { to: ana.user.id, text: 'Oi Ana' }, caio.token)).text, 'Oi Ana');
+    const conv = await api('GET', `/api/messages/${caio.user.id}`, null, ana.token);
+    check('conversa', conv.messages.map((m) => m.text), ['Oi Caio', 'Oi Ana']);
+    check('estranho não envia', (await api('POST', '/api/messages', { to: bia.user.id, text: 'x' }, caio.token))._status, 403);
+
     // remover o acesso pelo link derruba o Caio
     await api('PUT', `/api/docs/${doc.id}/share`, { acl: Object.assign({}, acl, { link: 'none' }) }, ana.token);
     check('acesso removido', (await C.wait('error')).code, 'denied');
