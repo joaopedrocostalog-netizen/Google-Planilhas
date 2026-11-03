@@ -23,7 +23,9 @@ function memoryStore(file) {
     async updateUser(id, fields) { Object.assign(db.users[id], fields); persist(); },
     async savePrefs(id, prefs) { if (db.users[id]) { db.users[id].prefs = clone(prefs); persist(); } },
     async listUsers() { return Object.values(db.users).map((u) => ({ id: u.id, email: u.email, name: u.name, created_at: u.created_at })); },
-    async userColors() { return Object.values(db.users).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))).map((u) => ({ id: u.id, color: u.color || null })); },
+    async userColors() { return Object.values(db.users).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))).map((u) => ({ id: u.id, color: u.color || null, avatar_v: u.avatar_v || null })); },
+    async setAvatar(id, data, v) { if (db.users[id]) { db.users[id].avatar = data; db.users[id].avatar_v = data ? v : null; persist(); } },
+    async getAvatar(id) { const u = db.users[id]; return u && u.avatar ? { avatar: u.avatar, avatar_v: u.avatar_v } : null; },
     async setUserColor(id, color) { if (db.users[id]) { db.users[id].color = color; persist(); } },
     // mensagens diretas entre pessoas
     async addMessage(m) { const x = Object.assign({ id: ++db.msgSeq, at: new Date().toISOString(), read_at: null }, clone(m)); db.messages.push(x); if (db.messages.length > 50000) db.messages.splice(0, db.messages.length - 50000); persist(); return clone(x); },
@@ -88,6 +90,8 @@ function pgStore(url) {
         created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
       await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS prefs JSONB');
       await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS color TEXT');
+      await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar TEXT');
+      await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_v BIGINT');
       await q(`CREATE TABLE IF NOT EXISTS sessions (
         token TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
@@ -116,7 +120,9 @@ function pgStore(url) {
     async updateUser(id, f) { if (f.name) await q('UPDATE users SET name = $2 WHERE id = $1', [id, f.name]); if (f.pass) await q('UPDATE users SET pass = $2 WHERE id = $1', [id, f.pass]); },
     async listUsers() { const r = await q('SELECT id, email, name, created_at FROM users ORDER BY created_at DESC LIMIT 1000'); return r.rows; },
     async allDocAcls() { const r = await q('SELECT owner_id, acl FROM docs'); return r.rows; },
-    async userColors() { const r = await q('SELECT id, color FROM users ORDER BY created_at, id'); return r.rows; },
+    async userColors() { const r = await q('SELECT id, color, avatar_v FROM users ORDER BY created_at, id'); return r.rows; },
+    async setAvatar(id, data, v) { await q('UPDATE users SET avatar = $2, avatar_v = $3 WHERE id = $1', [id, data, data ? v : null]); },
+    async getAvatar(id) { return row('SELECT avatar, avatar_v FROM users WHERE id = $1 AND avatar IS NOT NULL', [id]); },
     async setUserColor(id, color) { await q('UPDATE users SET color = $2 WHERE id = $1', [id, color]); },
     async addMessage(m) {
       const r = await q('INSERT INTO messages (from_id, to_id, doc_id, text, ref) VALUES ($1, $2, $3, $4, $5) RETURNING id, at', [m.from_id, m.to_id, m.doc_id || null, m.text, m.ref ? JSON.stringify(m.ref) : null]);

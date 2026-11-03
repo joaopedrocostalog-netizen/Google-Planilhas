@@ -10,7 +10,7 @@
 
   const st = { inbox: new Map(), unread: 0, contacts: [], contactsDoc: null, open: false, with: null, msgs: [], withUser: null, ref: false, loadedFor: null };
   const initial = (n) => esc(String(n || '?').trim()[0] || '?').toUpperCase();
-  const av = (u, size) => `<span class="avatar chat-av" style="background:${esc(u.color || '#5f6368')}${size ? `;width:${size}px;height:${size}px;font-size:${Math.round(size * 0.45)}px` : ''}">${initial(u.name)}</span>`;
+  const av = (u, size) => (App.avatarHtml ? App.avatarHtml(u, size, 'chat-av') : `<span class="avatar chat-av" style="background:${esc(u.color || '#5f6368')}">${initial(u.name)}</span>`);
   const when = (t) => {
     const d = new Date(t), now = new Date();
     const hm = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
@@ -121,7 +121,7 @@
     body.innerHTML = `<div class="chat-head"><button class="icon-btn chat-back" title="Voltar" aria-label="Voltar">←</button>${av(u, 32)}
         <span class="chat-who"><b>${esc(u.name)}</b><small>${u.online ? 'Na planilha agora' : u.admin ? 'Administrador' : u.sector ? 'Setor ' + esc(u.sector) : esc(u.email || '')}</small></span></div>
       <div class="chat-msgs" id="chat-msgs">${loading && !st.msgs.length ? '<p class="sp-hint">Carregando…</p>' : st.msgs.length ? st.msgs.map((m) => `<div class="chat-msg${m.from === me ? ' mine' : ''}" style="${m.from === me ? '' : `--who:${esc(u.color || '#5f6368')}`}">
-          <div class="chat-bubble">${esc(m.text).replace(/\n/g, '<br>')}${m.ref ? `<button class="chat-ref" data-m="${m.id}" title="Ir para a célula">📍 ${esc(m.ref.label || m.ref.addr)}${m.ref.doc && m.ref.doc !== cloud.id && m.ref.title ? ' · ' + esc(m.ref.title) : ''}</button>` : ''}</div>
+          <div class="chat-bubble">${esc(m.text).replace(/\n/g, '<br>')}${m.ref ? `<button class="chat-ref" data-m="${m.id}" title="Ir para a célula">📍 ${esc(m.ref.label || m.ref.addr)}${m.ref.doc && m.ref.doc !== cloud.id && m.ref.title ? ' · ' + esc(m.ref.title) : ''}</button>` : ''}${unlockBtn(m)}</div>
           <small>${when(m.at)}${m === lastMine && m.read ? ' · Visto' : ''}</small></div>`).join('') : `<p class="sp-hint">Mande a primeira mensagem para ${esc(u.name.split(' ')[0])}. Só vocês dois veem esta conversa.</p>`}</div>
       <div class="chat-compose">
         <div class="chat-refbar" ${st.ref ? '' : 'hidden'}>📍 Vai junto: <b id="chat-reflbl">${esc(refLabel().label)}</b><button class="icon-btn" id="chat-refx" title="Tirar a célula" aria-label="Tirar a célula">${icon('close', 14)}</button></div>
@@ -140,6 +140,20 @@
     const rx = body.querySelector('#chat-refx');
     if (rx) rx.onclick = () => { st.ref = false; renderConversation(); };
     body.querySelectorAll('.chat-ref').forEach((b) => (b.onclick = () => goRef(st.msgs.find((m) => String(m.id) === b.dataset.m).ref)));
+    body.querySelectorAll('.chat-unlock:not([disabled])').forEach((b) => (b.onclick = async () => {
+      const m = st.msgs.find((x) => String(x.id) === b.dataset.m);
+      b.disabled = true;
+      await App.escala.unlockFromChat(m.ref, m.from);
+      if (st.body) renderConversation();
+    }));
+  }
+  // pedido de troca de veículo: quem pode destravar faz isso direto pela mensagem
+  function unlockBtn(m) {
+    if (!m.ref || m.ref.act !== 'unlock' || m.from === meId() || !App.escala) return '';
+    const u = App.escala.chatUnlockState(m.ref);
+    if (!u || !u.can) return '';
+    return u.locked.length ? `<button class="chat-unlock" data-m="${m.id}">🔓 Destravar para troca (${u.locked.length === 1 ? 'linha ' + u.locked[0] : 'linhas ' + u.locked.join(' e ')})</button>`
+      : `<button class="chat-unlock done" data-m="${m.id}" disabled>✓ Já destravado</button>`;
   }
   let sending = false;
   async function send() {

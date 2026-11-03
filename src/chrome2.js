@@ -210,6 +210,7 @@
       else if (info.dv && info.raw !== '' && info.dv.type !== 'checkbox' && !App.validate(sh, h.r, h.c, String(info.raw))) html += `<div class="tip-err"><b>Entrada inválida</b><p>${esc(info.dv.help || 'O conteúdo não atende à regra de validação de dados.')}</p></div>`;
       if (info.comment) html += info.cell.comments.map((cm) => `<div class="tip-comment"><div class="cm-head"><span class="avatar">${esc((cm.author || 'V')[0])}</span><b>${esc(cm.author || 'Você')}</b><time>${esc(new Date(cm.time).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }))}</time></div><p>${esc(cm.text)}</p></div>`).join('');
       if (info.note) html += `<div class="tip-note">${esc(info.note)}</div>`;
+      if (info.locked) html += `<div class="tip-lock"><b>Veículo bloqueado para troca</b><p>${info.swap ? 'Há um pedido de troca esperando o setor responsável destravar.' : 'Para trocar, use "Pedir troca do veículo" no botão direito.'}</p></div>`;
       if (!html) { tip.hidden = true; return; }
       tip.innerHTML = html;
       tip.hidden = false;

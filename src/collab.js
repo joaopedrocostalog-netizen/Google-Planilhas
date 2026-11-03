@@ -36,6 +36,11 @@
     return j;
   }
   const docLink = (id) => location.origin + location.pathname + '#nuvem=' + id;
+  // foto do perfil (ou a inicial na cor da pessoa)
+  App.apiBase = API;
+  App.avatarUrl = (u) => (u && u.avatar && u.id ? `${API}/api/avatar/${encodeURIComponent(u.id)}?v=${encodeURIComponent(u.avatar)}` : null);
+  App.avatarInner = (u) => { const url = App.avatarUrl(u); return url ? `<img class="av-img" src="${esc(url)}" alt="" loading="lazy" draggable="false">` : esc(String((u && u.name) || '?').trim()[0] || '?').toUpperCase(); };
+  App.avatarHtml = (u, size, cls) => `<span class="avatar${cls ? ' ' + cls : ''}${App.avatarUrl(u) ? ' has-img' : ''}" style="background:${esc((u && u.color) || '#5f6368')}${size ? `;width:${size}px;height:${size}px;font-size:${Math.round(size * 0.45)}px` : ''}">${App.avatarInner(u)}</span>`;
 
   // ---------- Conta ----------
   function setToken(t, user) {
@@ -153,7 +158,8 @@
       const color = cloud.user.color || '#e30613';
       b.className = 'account-btn avatar-btn';
       b.style.background = color;
-      b.textContent = (cloud.user.name || '?').trim()[0].toUpperCase();
+      b.innerHTML = App.avatarInner(cloud.user);
+      b.classList.toggle('has-img', !!cloud.user.avatar);
       b.title = `${cloud.user.name} (${cloud.user.email})`;
     } else {
       b.className = 'account-btn';
@@ -167,24 +173,63 @@
     App.ui.menuPopup(anchor, [
       { header: cloud.user.name + ' · ' + cloud.user.email },
       { label: 'Planilhas na nuvem', icon: 'cloud', cmd: 'openCloud' },
-      { label: 'Alterar nome ou senha', action: profileDialog },
+      { label: 'Foto, nome e senha', action: profileDialog },
       { label: 'Minha cor', action: colorDialog }, '-',
       { label: 'Sair', action: logout },
     ], { right: true });
   }
+  // reduz e recorta a foto (quadrada, 160 px) antes de enviar
+  function shrinkPhoto(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        const size = 160, k = Math.min(img.width, img.height);
+        const cv = document.createElement('canvas'); cv.width = cv.height = size;
+        const ctx = cv.getContext('2d');
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, size, size);
+        ctx.drawImage(img, (img.width - k) / 2, (img.height - k) / 2, k, k, 0, 0, size, size);
+        URL.revokeObjectURL(url);
+        resolve(cv.toDataURL('image/jpeg', 0.86));
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Não foi possível ler a imagem. Use uma foto JPG ou PNG.')); };
+      img.src = url;
+    });
+  }
   function profileDialog() {
-    App.ui.modal({
+    let photo; // undefined = sem mudança, null = remover, texto = nova foto
+    const m = App.ui.modal({
       title: 'Sua conta', width: '420px',
-      body: `<label class="field"><span>Nome</span><input class="input" id="pf-name" value="${esc(cloud.user.name)}"></label>
+      body: `<div class="pf-photo"><span id="pf-av">${App.avatarHtml(cloud.user, 72)}</span><div><b>Foto do perfil</b><small>Aparece para as outras pessoas na planilha, no chat e no histórico.</small>
+          <div class="pf-photo-btns"><label class="btn btn-sm">Escolher foto<input type="file" id="pf-file" accept="image/*" hidden></label><button class="btn btn-sm" id="pf-rm"${cloud.user.avatar ? '' : ' hidden'}>Remover</button></div></div></div>
+        <label class="field"><span>Nome</span><input class="input" id="pf-name" value="${esc(cloud.user.name)}"></label>
         <p class="sp-label">Trocar senha (opcional)</p>
         <label class="field"><span>Senha atual</span><input class="input" id="pf-cur" type="password" autocomplete="current-password"></label>
         <label class="field"><span>Nova senha</span><input class="input" id="pf-new" type="password" autocomplete="new-password"></label>`,
       buttons: [{ label: 'Cancelar' }, { label: 'Salvar', primary: true, action: (d) => {
         const body = { name: d.querySelector('#pf-name').value };
         if (d.querySelector('#pf-new').value) { body.password = d.querySelector('#pf-new').value; body.current = d.querySelector('#pf-cur').value; }
-        api('PUT', '/api/me', body).then((u) => { cloud.user = u; renderAccount(); notify('Conta atualizada.'); }).catch((e) => notify(e.message));
+        (async () => {
+          try {
+            if (photo !== undefined) { const r = await api('PUT', '/api/me/avatar', { data: photo }); cloud.user.avatar = r.avatar; }
+            const u = await api('PUT', '/api/me', body);
+            cloud.user = Object.assign(cloud.user, u); renderAccount(); notify('Conta atualizada.');
+          } catch (e) { notify(e.message); }
+        })();
       } }],
     });
+    const el = m.el;
+    const preview = (u) => { el.querySelector('#pf-av').innerHTML = App.avatarHtml(u, 72); };
+    el.querySelector('#pf-file').onchange = async (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      try {
+        photo = await shrinkPhoto(f);
+        el.querySelector('#pf-av').innerHTML = `<span class="avatar has-img" style="width:72px;height:72px"><img class="av-img" src="${photo}" alt=""></span>`;
+        el.querySelector('#pf-rm').hidden = false;
+      } catch (er) { notify(er.message); }
+    };
+    el.querySelector('#pf-rm').onclick = (e) => { e.preventDefault(); photo = null; preview(Object.assign({}, cloud.user, { avatar: null })); e.currentTarget.hidden = true; };
   }
   // cada pessoa tem uma cor só dela; aqui ela pode escolher outra que ninguém esteja usando
   async function colorDialog() {
@@ -516,7 +561,7 @@
     const list = [...cloud.peers.values()];
     if (box) {
       const shown = list.slice(0, 5);
-      box.innerHTML = shown.map((p) => `<button class="peer" data-cid="${esc(p.cid)}" style="background:${p.color}" title="${esc(p.name)} (${esc(p.email)})">${esc((p.name || '?').trim()[0].toUpperCase())}</button>`).join('') +
+      box.innerHTML = shown.map((p) => `<button class="peer${p.avatar ? ' has-img' : ''}" data-cid="${esc(p.cid)}" style="background:${p.color};${p.avatar ? `box-shadow:0 0 0 2px ${p.color};` : ''}" title="${esc(p.name)} (${esc(p.email)})">${App.avatarInner({ id: p.uid, name: p.name, avatar: p.avatar })}</button>`).join('') +
         (list.length > 5 ? `<span class="peer more" title="${list.slice(5).map((p) => esc(p.name)).join(', ')}">+${list.length - 5}</span>` : '');
       const goTo = (p) => {
         if (!p || !p.presence || !p.presence.sel) return notify(`${p ? p.name : 'A pessoa'} ainda não selecionou nenhuma célula.`);
@@ -800,7 +845,7 @@
         <p class="sp-hint">A pessoa precisa entrar com este e-mail. Se ainda não tiver conta, o acesso fica reservado até ela se cadastrar. Em <b>Permissões</b> você escolhe as páginas e colunas que cada pessoa pode ver ou editar.</p>
         ${(st.pending || []).filter((u) => !acl.members.some((x) => x.email === u.email)).length ? `<div class="pending"><b>Aguardando acesso:</b> ${(st.pending || []).filter((u) => !acl.members.some((x) => x.email === u.email)).map((u) => `<button class="chip-btn" data-pend="${esc(u.email)}" title="${esc(u.email)}">${icon('plus', 14)} ${esc(u.name)}</button>`).join('')}</div>` : ''}
         <div class="share-list">
-          ${st.owner ? `<div class="share-row"><span class="avatar" style="background:${st.owner.color}">${esc(st.owner.name[0].toUpperCase())}</span><div class="sr-who"><b>${esc(st.owner.name)}</b><small>${esc(st.owner.email)}</small></div><span class="sr-fixed">Dono · administrador</span></div>` : ''}
+          ${st.owner ? `<div class="share-row">${App.avatarHtml(st.owner)}<div class="sr-who"><b>${esc(st.owner.name)}</b><small>${esc(st.owner.email)}</small></div><span class="sr-fixed">Dono · administrador</span></div>` : ''}
           ${acl.members.map((mb, i) => {
             const own = Object.keys(mb.sheets || {}).length + totalRules(mb.rid);
             return `<div class="share-row"><span class="avatar" style="background:${mb.registered === false ? '#9a9a9a' : '#5f6368'}">${esc((mb.name || mb.email)[0].toUpperCase())}</span>
@@ -1023,7 +1068,7 @@
         const what = h.before === null && h.after !== null ? `Adicionou ${val(h.after)}`
           : h.after === null ? `Excluiu ${val(h.before, 'old')}`
             : `Substituiu ${val(h.before, 'old')} por ${val(h.after)}`;
-        body = `<div class="hist-who"><span class="avatar" style="background:${esc(h.color)}">${esc((h.name || '?').trim()[0].toUpperCase())}</span><div><b>${esc(h.name)}</b><small>${esc(fmt(h.at))}</small></div></div><p class="hist-what">${what}</p>`;
+        body = `<div class="hist-who">${App.avatarHtml({ id: h.uid, name: h.name, color: h.color, avatar: h.avatar })}<div><b>${esc(h.name)}</b><small>${esc(fmt(h.at))}</small></div></div><p class="hist-what">${what}</p>`;
       }
       card.innerHTML = `<div class="hist-head"><b>Histórico de edições · ${esc(a)}</b>
           <button class="icon-btn" data-n="1" title="Edição anterior"${i >= list.length - 1 ? ' disabled' : ''}>‹</button>
