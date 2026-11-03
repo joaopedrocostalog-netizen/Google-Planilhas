@@ -915,3 +915,10 @@ body.executor .doc-title { pointer-events: none; }
 .cav-info b { color: #202124; font-weight: 600; }
 .cav-info b.t3 { color: #b06000; }
 .cav-info .cav-warn { color: #b06000; font-weight: 600; }
+/* data com horário inicial e final */
+.dtr-pop { padding: 12px; width: 280px; display: flex; flex-direction: column; gap: 8px; }
+.dtr-pop .field { margin: 0; }
+.dtr-times { display: flex; gap: 8px; }
+.dtr-times .field { flex: 1; }
+.dtr-prev { font-size: 13px; font-weight: 600; color: var(--ink, #111); background: #f6f6f6; border-radius: 6px; padding: 6px 8px; text-align: center; }
+.dtr-btns { display: flex; justify-content: space-between; }

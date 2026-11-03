@@ -214,7 +214,7 @@
   const EXEC_STYLE = ['nf', 'ff', 'fs', 'b', 'i', 'st', 'color', 'bg'];
   // Célula resultante quando um setor altera "before" para "after": só o valor e a formatação liberada mudam
   // marcas de linha que os setores podem mudar (quem pode cada uma é conferido em escalaCheck)
-  const FLAG_KEYS = ['crit', 'esc', 'lock', 'swap'];
+  const FLAG_KEYS = ['crit', 'esc', 'lock', 'swap', 'city'];
   function execMerge(before, after) {
     const out = {}, s = {};
     if (before) for (const k in before) if (k !== 'v' && k !== 's' && !FLAG_KEYS.includes(k) && k[0] !== '_') out[k] = before[k];
