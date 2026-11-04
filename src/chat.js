@@ -149,7 +149,13 @@
   }
   // pedido de troca de veículo: quem pode destravar faz isso direto pela mensagem
   function unlockBtn(m) {
-    if (!m.ref || m.ref.act !== 'unlock' || m.from === meId() || !App.escala) return '';
+    if (!m.ref || m.ref.act !== 'unlock' || !App.escala) return '';
+    // pedido já atendido: aparece como efetuado para quem pediu e para todo o setor responsável
+    if (m.ref.done) {
+      const d = m.ref.done;
+      return `<button class="chat-unlock done" disabled>✓ Troca liberada${d.name ? ' por ' + esc(d.name.split(' ')[0]) : ''}${d.at ? ' · ' + when(d.at) : ''}</button>`;
+    }
+    if (m.from === meId()) return m.ref.req ? '<span class="chat-unlock wait">⏳ Aguardando destravar</span>' : '';
     const u = App.escala.chatUnlockState(m.ref);
     if (!u || !u.can) return '';
     return u.locked.length ? `<button class="chat-unlock" data-m="${m.id}">🔓 Destravar para troca (${u.locked.length === 1 ? 'linha ' + u.locked[0] : 'linhas ' + u.locked.join(' e ')})</button>`
@@ -227,6 +233,12 @@
     toastTimer = setTimeout(() => { toastEl.hidden = true; }, 9000);
   }
   App.on('dm', (m) => addMsg(m));
+  // pedido de troca atendido (por qualquer pessoa do setor): troca o botão por "efetuado"
+  App.on('dmDone', (e) => {
+    let hit = false;
+    for (const m of st.msgs) if (e.ids.includes(m.id) && m.ref) { m.ref.done = e.done; hit = true; }
+    if (hit && st.body && st.with) renderConversation();
+  });
   App.on('dmRead', (e) => {
     // a outra pessoa leu: mostra "Visto"
     if (e.by !== meId() && st.with === e.by) { st.msgs.forEach((m) => { if (m.from === meId()) m.read = true; }); if (st.body) renderConversation(); }

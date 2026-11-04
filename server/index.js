@@ -182,6 +182,7 @@ async function saveRoom(room) {
     try {
       await store.saveDoc(room.id, { title: String(room.data.title || 'Planilha sem título').slice(0, 200), data: room.data, version: room.version });
       room.lastSave = Date.now();
+      await autoVersion(room);
       if (room.failures) { console.log(`[banco] planilha ${room.id} salva de novo após ${room.failures} tentativa(s).`); room.failures = 0; }
     } catch (e) {
       room.dirty = true;
@@ -193,6 +194,44 @@ async function saveRoom(room) {
   await room.saving;
   room.saving = null;
   if (room.again || (room.dirty && !room.timer)) { room.again = false; if (room.dirty && !room.timer) scheduleSave(room); }
+}
+// ---------- Versões (backups) ----------
+// uma versão automática a cada 30 min de edição (e sempre antes de restaurar uma versão antiga)
+const VERSION_EVERY = Number(process.env.VERSION_EVERY_MS || 30 * 60 * 1000);
+async function autoVersion(room, force) {
+  try {
+    if (room.lastVersionAt === undefined) { const l = await store.listVersions(room.id); room.lastVersionAt = l.length ? new Date(l[0].at).getTime() : 0; }
+    if (!force && Date.now() - room.lastVersionAt < VERSION_EVERY) return null;
+    room.lastVersionAt = Date.now();
+    return await store.addVersion(room.id, Object.assign({ auto: true, data: room.data }, force || {}));
+  } catch (e) { console.error('Falha ao guardar versão', room.id, e.message); return null; }
+}
+// células que mudaram entre duas versões: { idDaPágina: { endereço: valor anterior } } (e páginas novas/excluídas)
+function versionDiff(prev, cur) {
+  const out = { cells: {}, added: [], removed: [] };
+  const val = (x) => (x && x.v !== undefined && x.v !== null ? String(x.v) : '');
+  const prevBy = new Map(((prev && prev.sheets) || []).map((s) => [s.id, s]));
+  let n = 0;
+  for (const s of (cur && cur.sheets) || []) {
+    const p = prevBy.get(s.id);
+    if (!p) { out.added.push(s.id); continue; }
+    const a = s.cells || {}, b = p.cells || {}, ch = {};
+    for (const k in a) if (val(a[k]) !== val(b[k])) { ch[k] = val(b[k]); n++; }
+    for (const k in b) if (!(k in a) && val(b[k]) !== '') { ch[k] = val(b[k]); n++; }
+    if (Object.keys(ch).length) out.cells[s.id] = ch;
+    prevBy.delete(s.id);
+  }
+  out.removed = [...prevBy.values()].map((s) => ({ id: s.id, name: s.name }));
+  out.count = n;
+  return out;
+}
+async function versionRoom(req, id) {
+  const user = await requireUser(req);
+  const room = await getRoom(id);
+  if (!room) throw httpError(404, 'Planilha não encontrada.');
+  const perms = Perms.compute(permDoc(room), user);
+  if (!perms || !perms.admin) throw httpError(403, 'Somente administradores veem e restauram as versões da planilha.');
+  return { user, room };
 }
 // quem vê quem: administradores veem todos; os demais só veem pessoas do mesmo setor
 const seesPeer = (viewer, peer) => !!(viewer.perms && peer.perms) && (viewer.perms.admin || (!peer.perms.admin && viewer.perms.sectorId === peer.perms.sectorId));
@@ -491,8 +530,9 @@ async function contactsFor(user, room) {
   for (const u of cand.values()) {
     const p = Perms.compute(permDoc(room), u);
     if (!p) continue;
-    if (!(me.admin || p.admin || (p.sectorId && p.sectorId === me.sectorId) || (p.sectorId && lockSectors.has(p.sectorId)) || (me.sectorId && lockSectors.has(me.sectorId)))) continue;
-    out.push({ id: u.id, name: u.name, email: u.email, color: colorFor(u.id), avatar: avatarOf(u.id), admin: !!p.admin, sector: p.sectorName || null, sectorId: p.sectorId || null, online: online.has(u.id) });
+    const inLock = (x) => Perms.inList([...lockSectors], x);
+    if (!(me.admin || p.admin || (p.sectorId && p.sectorId === me.sectorId) || inLock(p) || inLock(me))) continue;
+    out.push({ id: u.id, name: u.name, email: u.email, color: colorFor(u.id), avatar: avatarOf(u.id), admin: !!p.admin, sector: p.sectorName || null, sectorId: p.sectorId || null, keys: (p.ruleKeys || []).filter((k) => k !== 'link'), online: online.has(u.id) });
   }
   return out.sort((a, b) => (b.online - a.online) || a.name.localeCompare(b.name, 'pt-BR'));
 }
@@ -553,12 +593,80 @@ route('POST', '/api/messages', async (req) => {
   if (b.ref && typeof b.ref === 'object') {
     ref = { sheet: String(b.ref.sheet || '').slice(0, 40), addr: String(b.ref.addr || '').slice(0, 30), label: String(b.ref.label || '').slice(0, 120), doc: room ? room.id : null, title: room ? String(room.data.title || '').slice(0, 120) : '' };
     // pedido de troca de veículo: o setor responsável destrava pela própria mensagem
-    if (b.ref.act === 'unlock' && Array.isArray(b.ref.rows)) { ref.act = 'unlock'; ref.rows = b.ref.rows.map(Number).filter((n) => Number.isInteger(n) && n > 0 && n < 1e6).slice(0, 10); }
+    if (b.ref.act === 'unlock' && Array.isArray(b.ref.rows)) {
+      ref.act = 'unlock'; ref.rows = b.ref.rows.map(Number).filter((n) => Number.isInteger(n) && n > 0 && n < 1e6).slice(0, 10);
+      if (typeof b.ref.req === 'string' && /^[a-z0-9]{4,40}$/i.test(b.ref.req)) ref.req = b.ref.req;
+    }
   }
   const m = await store.addMessage({ from_id: user.id, to_id: to, doc_id: room ? room.id : null, text, ref });
   const out = Object.assign(pubMsg(m), { fromUser: await userBrief(user.id) });
   deliver([to, user.id], { type: 'dm', msg: out });
   return out;
+});
+
+// ---------- Rotas das versões ----------
+route('GET', '/api/docs/:id/versions', async (req, p) => {
+  const { room } = await versionRoom(req, p.id);
+  let list = await store.listVersions(room.id);
+  // primeira vez: guarda a versão atual para já ter algo no histórico
+  if (!list.length) { await saveRoom(room); await autoVersion(room, { auto: true }); list = await store.listVersions(room.id); }
+  return { versions: list };
+});
+route('POST', '/api/docs/:id/versions', async (req, p) => {
+  const { user, room } = await versionRoom(req, p.id);
+  const b = await readBody(req, 4000);
+  await saveRoom(room);
+  const v = await autoVersion(room, { auto: !b.name, name: String(b.name || '').trim().slice(0, 120), by_name: user.name });
+  if (!v) throw httpError(500, 'Não foi possível guardar a versão.');
+  return v;
+});
+route('PUT', '/api/docs/:id/versions/:vid', async (req, p) => {
+  const { room } = await versionRoom(req, p.id);
+  const b = await readBody(req, 4000);
+  await store.renameVersion(room.id, p.vid, String(b.name || '').trim().slice(0, 120));
+  return { ok: true };
+});
+// uma versão com o que mudou nela em relação à versão anterior
+route('GET', '/api/docs/:id/versions/:vid', async (req, p) => {
+  const { room } = await versionRoom(req, p.id);
+  const v = await store.getVersion(room.id, p.vid);
+  if (!v) throw httpError(404, 'Versão não encontrada.');
+  const list = await store.listVersions(room.id);
+  const i = list.findIndex((x) => x.id === v.id);
+  const prevMeta = i >= 0 ? list[i + 1] : null;
+  const prev = prevMeta ? await store.getVersion(room.id, prevMeta.id) : null;
+  return { id: v.id, at: v.at, name: v.name, by_name: v.by_name, auto: v.auto, data: v.data, diff: prev ? versionDiff(prev.data, v.data) : null, prevAt: prev ? prev.at : null };
+});
+// cria uma planilha nova a partir de uma versão (fica só com quem criou; depois é só compartilhar)
+route('POST', '/api/docs/:id/versions/:vid/copy', async (req, p) => {
+  const { user, room } = await versionRoom(req, p.id);
+  const v = await store.getVersion(room.id, p.vid);
+  if (!v) throw httpError(404, 'Versão não encontrada.');
+  const when = new Date(v.at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' });
+  const title = `Cópia de ${room.data.title || 'Planilha'} (${v.name || when})`.slice(0, 200);
+  const data = Object.assign({}, v.data, { title });
+  const id = uid(9);
+  await store.createDoc({ id, title, owner_id: user.id, data, acl: Perms.defaultAcl() });
+  return { id, title };
+});
+
+// pedido de troca atendido: todas as mensagens do pedido passam a mostrar "efetuado"
+route('POST', '/api/messages/done', async (req) => {
+  const user = await requireUser(req);
+  const b = await readBody(req, 2000);
+  const reqId = String(b.req || '');
+  if (!/^[a-z0-9]{4,40}$/i.test(reqId)) throw httpError(400, 'Pedido inválido.');
+  const room = await getRoom(String(b.doc || ''));
+  if (!room) throw httpError(404, 'Planilha não encontrada.');
+  if (!Perms.compute(permDoc(room), user)) throw httpError(403, 'Sem acesso a esta planilha.');
+  const done = { by: user.id, name: user.name, at: new Date().toISOString() };
+  const list = await store.markRefDone(room.id, reqId, done);
+  if (list.length) {
+    const who = new Set();
+    for (const m of list) { who.add(m.from_id); who.add(m.to_id); }
+    deliver([...who], { type: 'dmDone', ids: list.map((m) => m.id), done });
+  }
+  return { ok: true, n: list.length };
 });
 
 route('GET', '/api/docs', async (req) => {

@@ -394,6 +394,7 @@
       case 'leave': cloud.peers.delete(m.cid); renderPeers(); break;
       case 'dm': App.emit('dm', m.msg); break;
       case 'dmRead': App.emit('dmRead', m); break;
+      case 'dmDone': App.emit('dmDone', m); break;
       case 'error': onError(m); break;
     }
   }
@@ -1101,14 +1102,14 @@
   const EXEC_OK = new Set(['insertProcess', 'informCriticals', 'sendStatus', 'escalarVeiculo', 'confirmarEscala', 'bloquearVeiculo', 'destravarVeiculo', 'pedirTroca', 'messages', 'undo', 'redo', 'cut', 'copy', 'paste', 'pasteValues', 'find', 'findReplace', 'clearValues',
     'zoom', 'toggleFormulaBar', 'toggleMenus', 'fullscreen', 'toggleGridlines', 'toggleFormulas', 'switchSheet', 'nextSheet', 'prevSheet',
     'selectAll', 'selectColumn', 'selectRow', 'insertDate', 'insertTime', 'insertDateTime', 'fillDown', 'fillRight',
-    'print', 'download', 'openCloud', 'share', 'login', 'cellHistory', 'shortcuts', 'about', 'functionList', 'columnStats',
+    'print', 'download', 'openCloud', 'share', 'login', 'cellHistory', 'shortcuts', 'about', 'updates', 'functionList', 'columnStats',
     // barra de ferramentas liberada para os setores
     'menuSearch', 'paintFormat', 'format', 'customFormat', 'fmt_number', 'fmt_time', 'fmt_date', 'fmt_currency', 'fmt_percent', 'fmt_scientific',
     'decDec', 'decInc', 'fontFamily', 'fontSize', 'fontSizeInc', 'fontSizeDec', 'bold', 'italic', 'strike', 'textColor', 'fillColor',
     // visualizações de filtro (pessoais, não mudam a planilha dos outros)
     'createFilterView', 'createGroupedView', 'closeFilterView', 'clearViewFilters', 'toggleOldRows', 'myView', 'markCritical']);
   const COL_CMDS = new Set(['renameCol', 'insertColsLeft', 'insertColsRight', 'deleteCols', 'hideCols', 'unhideCols', 'resizeCols', 'autofitCols', 'addCols']);
-  const EXEC_HIDDEN_MENUS = new Set(['Inserir', 'Formatar', 'Dados', 'Extensões']);
+  const EXEC_HIDDEN_MENUS = new Set(['Inserir', 'Formatar', 'Dados', 'Extensões', 'Administrador']);
   App.adminOnly = () => !!(App.cloudMode && cloud.perms && !cloud.perms.admin);
   App.valuesOnly = App.adminOnly;
   function filterItems(list) {
@@ -1165,39 +1166,63 @@
       const at = items.findIndex((x) => x && x.label === 'Ver mais ações da célula');
       items.splice(at >= 0 ? at : items.length, 0, { label: 'Mostrar histórico de edições', icon: 'history', cmd: 'cellHistory' });
     }
-    if ((hit.area === 'colHdr' || hit.area === 'colEdge') && App.cloudMode && cloud.perms && cloud.perms.admin) {
-      items.push('-', { label: 'Nome e permissões da coluna', icon: 'lock', cmd: 'columnAccess' });
-    }
   });
+
+  // ---------- "Quem pode": setores e pessoas ----------
+  // Lista para os painéis de permissões (escala, container crítico, proteções): setores e pessoas (não administradoras)
+  App.whoOptions = async () => {
+    if (!App.cloudMode || !cloud.id) return { sectors: [], people: [] };
+    const st = await api('GET', `/api/docs/${cloud.id}/share`);
+    const acl = JSON.parse(JSON.stringify(st.acl));
+    let changed = false;
+    acl.members.forEach((mb) => { if (!mb.rid) { mb.rid = newId('m'); changed = true; } });
+    if (changed) await api('PUT', `/api/docs/${cloud.id}/share`, { acl });
+    const secName = (id) => ((acl.sectors.find((x) => x.id === id) || {}).name || '');
+    return {
+      sectors: acl.sectors.map((x) => ({ id: x.id, name: x.name })),
+      people: acl.members.filter((mb) => mb.role !== 'admin').map((mb) => ({ id: mb.rid, name: mb.name || mb.email, sub: mb.sector ? 'setor ' + secName(mb.sector) : mb.email })),
+    };
+  };
+  // caixas de marcar: setores e, abaixo, pessoas (data-<key>="id")
+  App.whoBoxes = (key, list, who, opts) => {
+    opts = opts || {};
+    // "todos": os setores aparecem marcados; as pessoas são exceções (por nome), então ficam desmarcadas
+    const on = (id, person) => ((opts.all && !person) || (!opts.all && (list || []).includes(id)) ? ' checked' : '') + (opts.all ? ' disabled' : '');
+    const sec = who.sectors.map((x) => `<label class="inline"><input type="checkbox" data-${key}="${esc(x.id)}"${on(x.id)}> ${esc(x.name)}</label>`).join('');
+    const ppl = who.people.map((x) => `<label class="inline" title="${esc(x.sub || '')}"><input type="checkbox" data-person="1" data-${key}="${esc(x.id)}"${on(x.id, true)}> 👤 ${esc(x.name)}</label>`).join('');
+    if (!sec && !ppl) return '<p class="sp-hint">Nenhum setor nem pessoa ainda (Compartilhar › Pessoas e setores).</p>';
+    return (sec ? `<div class="who-group"><small>Setores</small><div class="esc-sectors">${sec}</div></div>` : '')
+      + (ppl ? `<div class="who-group"><small>Pessoas</small><div class="esc-sectors">${ppl}</div></div>` : '');
+  };
+  App.whoName = (id, who) => { const x = who.sectors.find((y) => y.id === id) || who.people.find((y) => y.id === id); return x ? x.name : '?'; };
 
   // ---------- Proteger páginas e intervalos ----------
   function protectRanges() {
     if (!App.cloudMode) { App.ui.modal({ title: 'Proteger intervalos', width: '460px', body: '<p class="modal-text">A proteção de intervalos vale para planilhas na nuvem, compartilhadas com setores. Salve esta planilha na nuvem para usar este recurso.</p>', buttons: [{ label: 'Fechar' }, ...(canCreate() ? [{ label: 'Salvar na nuvem', primary: true, action: () => { saveToCloud(true); } }] : [])] }); return; }
     if (!cloud.perms.admin) return notify('Somente administradores podem proteger intervalos.');
     const sh = App.sheet();
-    api('GET', `/api/docs/${cloud.id}/share`).then((st) => {
+    App.whoOptions().then((who) => {
       const list = JSON.parse(JSON.stringify(sh.protected || []));
-      const sectors = st.acl.sectors;
       const m = App.ui.modal({
         title: `Intervalos protegidos em "${sh.name}"`, width: '600px',
-        body: `<p class="sp-hint">Somente administradores e os setores marcados podem editar as células protegidas. As demais pessoas continuam vendo os dados.</p><div id="pr-list"></div>
+        body: `<p class="sp-hint">Somente administradores e os setores ou pessoas marcados podem editar as células protegidas. As demais pessoas continuam vendo os dados.</p><div id="pr-list"></div>
           <div class="pr-form"><p class="sp-label">Novo intervalo protegido</p>
             <div class="field-row"><label class="field"><span>Intervalo</span><input class="input" id="pr-range" value="${esc(App.rangeText(App.selRect()))}"></label><label class="field"><span>Descrição (opcional)</span><input class="input" id="pr-desc" placeholder="Ex.: Metas do mês"></label></div>
-            <p class="sp-label">Setores que podem editar</p>
-            <div class="pr-sectors">${sectors.map((s) => `<label class="check"><input type="checkbox" value="${esc(s.id)}"> ${esc(s.name)}</label>`).join('') || '<span class="sp-hint">Nenhum setor criado: só administradores poderão editar.</span>'}</div>
+            <p class="sp-label">Quem pode editar (setores e pessoas)</p>
+            <div class="pr-sectors">${App.whoBoxes('pr', [], who)}</div>
             <button class="btn" id="pr-add">${icon('plus', 16)} Proteger intervalo</button></div>`,
         buttons: [{ label: 'Cancelar' }, { label: 'Salvar', primary: true, action: () => { App.change('Proteger intervalos', () => { sh.protected = list; }); notify('Proteções salvas.'); } }],
       });
       const d = m.el;
       const renderList = () => {
-        d.querySelector('#pr-list').innerHTML = list.length ? list.map((p, i) => `<div class="cf-item"><span class="cf-chip">${icon('lock', 16)}</span><div><b>${esc(App.rangeText(p.range))}${p.desc ? ' · ' + esc(p.desc) : ''}</b><small>Podem editar: administradores${p.sectors.length ? ', ' + p.sectors.map((id) => esc((sectors.find((s) => s.id === id) || { name: '?' }).name)).join(', ') : ''}</small></div><button class="icon-btn" data-prm="${i}" title="Remover proteção">${icon('close', 16)}</button></div>`).join('') : '<p class="sp-hint">Nenhum intervalo protegido nesta página.</p>';
+        d.querySelector('#pr-list').innerHTML = list.length ? list.map((p, i) => `<div class="cf-item"><span class="cf-chip">${icon('lock', 16)}</span><div><b>${esc(App.rangeText(p.range))}${p.desc ? ' · ' + esc(p.desc) : ''}</b><small>Podem editar: administradores${p.sectors.length ? ', ' + p.sectors.map((id) => esc(App.whoName(id, who))).join(', ') : ''}</small></div><button class="icon-btn" data-prm="${i}" title="Remover proteção">${icon('close', 16)}</button></div>`).join('') : '<p class="sp-hint">Nenhum intervalo protegido nesta página.</p>';
         d.querySelectorAll('[data-prm]').forEach((b) => (b.onclick = () => { list.splice(+b.dataset.prm, 1); renderList(); }));
       };
       renderList();
       d.querySelector('#pr-add').onclick = () => {
         const p = App.parseRange(d.querySelector('#pr-range').value);
         if (!p || p.si !== doc.active) return notify('Intervalo inválido. Use algo como A1:D20.');
-        list.push({ id: Math.random().toString(36).slice(2, 8), range: p.R, desc: d.querySelector('#pr-desc').value.trim(), sectors: [...d.querySelectorAll('.pr-sectors input:checked')].map((x) => x.value) });
+        list.push({ id: Math.random().toString(36).slice(2, 8), range: p.R, desc: d.querySelector('#pr-desc').value.trim(), sectors: [...d.querySelectorAll('.pr-sectors input:checked')].map((x) => x.dataset.pr) });
         d.querySelector('#pr-desc').value = '';
         renderList();
       };
@@ -1221,9 +1246,35 @@
   dataMenu.items = () => {
     const list = origData();
     const at = list.findIndex((x) => x && x.cmd === 'namedRanges');
-    list.splice(at + 1, 0, { label: 'Proteger páginas e intervalos', icon: 'lock', cmd: 'protectRanges' }, { label: 'Permissões por coluna', icon: 'lock', cmd: 'columnAccess' }, { label: 'Motoristas do DSS…', cmd: 'dssLookup' });
+    list.splice(at + 1, 0, { label: 'Permissões e controles (Administrador)…', icon: 'lock', cmd: 'adminPanel' });
     return list;
   };
+
+  // ---------- Controle do administrador: todas as permissões num lugar só ----------
+  function adminPanel() {
+    const E = App.E;
+    if (App.adminOnly()) return notify('Somente administradores acessam o controle do administrador.');
+    const sh = App.sheet();
+    const n = (x) => (Array.isArray(x) ? x.length : 0);
+    const esc2 = sh.escala || {};
+    const cards = [
+      { cmd: 'share', t: 'Pessoas, setores e páginas', d: 'Convide pessoas, crie setores e escolha, por setor ou por pessoa, quais páginas cada um vê ou edita.', s: App.cloudMode ? 'Planilha na nuvem' : 'Disponível depois de salvar na nuvem' },
+      { cmd: 'columnAccess', t: 'Permissões por coluna', d: 'Para cada setor ou pessoa: coluna oculta, só ver ou editar. Selecione as colunas antes de abrir.', s: `Colunas selecionadas: ${E.numToCol(App.selRect().c1)}${App.selRect().c2 > App.selRect().c1 ? ' a ' + E.numToCol(App.selRect().c2) : ''}` },
+      { cmd: 'protectRanges', t: 'Proteger páginas e intervalos', d: 'Só administradores e os setores ou pessoas escolhidos editam o intervalo protegido.', s: `${n(sh.protected)} intervalo(s) protegido(s) nesta página` },
+      { cmd: 'critSectors', t: 'Container crítico: quem pode marcar', d: 'Setores e pessoas que podem marcar e desmarcar container crítico (e usar Informar críticos).', s: Array.isArray(sh.critSectors) ? `${n(sh.critSectors)} escolhido(s)` : 'Todos podem marcar' },
+      { cmd: 'escalaConfig', t: 'Escala de veículos: quem pode usar', d: 'Quem escala e confirma, quem bloqueia e destrava para troca, e quem vê os dados do cavalo.', s: `Escala: ${n(esc2.sectors)} · Bloqueio: ${n(esc2.lockSectors)} · Dados do cavalo: ${n(esc2.infoSectors)}` },
+      { cmd: 'critColumn', arg: App.selRect().c1, t: 'Coluna do alerta de crítico', d: 'Coluna onde o alerta de container crítico pisca. Selecione a coluna antes de usar.', s: `Agora: coluna ${E.numToCol(App.critCol(sh))} · usar a coluna ${E.numToCol(App.selRect().c1)}` },
+      { cmd: 'dssLookup', t: 'Motoristas do DSS', d: 'Coluna do motorista e do CPF/CNPJ preenchidos com a lista do DSS.', s: sh.lookup ? `Motorista na coluna ${E.numToCol(sh.lookup.col)} · CPF na ${E.numToCol(sh.lookup.cpfCol)}` : 'Desativado nesta página' },
+    ];
+    const m = App.ui.modal({
+      title: 'Controle do administrador', width: '640px', cls: 'adm-modal',
+      body: `<p class="sp-hint">Tudo o que define quem pode ver, editar ou usar cada função desta planilha (página <b>${esc(sh.name)}</b>). As escolhas podem ser por setor e também por pessoa.</p>
+        <div class="adm-list">${cards.map((c, i) => `<div class="adm-card"><div><b>${esc(c.t)}</b><p>${esc(c.d)}</p><small>${esc(c.s)}</small></div><button class="btn btn-sm" data-i="${i}">Abrir</button></div>`).join('')}</div>`,
+      buttons: [{ label: 'Fechar' }],
+    });
+    m.el.querySelectorAll('.adm-card [data-i]').forEach((b) => (b.onclick = () => { const c = cards[+b.dataset.i]; m.close ? m.close() : m.el.close(); App.run(c.cmd, c.arg); }));
+  }
+  def('adminPanel', 'Controle do administrador', adminPanel);
 
   def('openCloud', 'Planilhas na nuvem', openCloudDialog);
   def('saveToCloud', 'Salvar na nuvem', () => saveToCloud(false));

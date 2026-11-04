@@ -369,7 +369,9 @@
       const n = fold(t);
       if (!q || n.startsWith(q)) starts.push(t); else if (n.includes(q)) has.push(t);
     }
-    ed.ac = starts.concat(has).slice(0, ed.acAll ? 200 : 12).map((t) => ({ show: t, args: null, desc: '', dvItem: true, color: (d.colors || {})[t] || null }));
+    // cores de cada opção: as da própria lista ou, se não tiver, as da formatação condicional (ex.: STATUS pintando a linha)
+    const cfc = (t) => { try { return App.cfPreview ? App.cfPreview(sh, ed.si, real.r, real.c, t) : null; } catch (e) { return null; } };
+    ed.ac = starts.concat(has).slice(0, ed.acAll ? 200 : 12).map((t) => { const own = (d.colors || {})[t]; const cf = own ? null : cfc(t); return { show: t, args: null, desc: '', dvItem: true, color: own || (cf && cf.bg) || null, fg: cf && cf.color }; });
     if (!ed.ac.length || (!ed.acAll && ed.ac.length === 1 && fold(ed.ac[0].show) === q)) { hideAc(); return true; }
     if (ed.acAll) { const cur = ed.ac.findIndex((x) => fold(x.show) === fold(ta.value.trim())); ed.acIndex = cur >= 0 ? cur : 0; }
     ed.acIndex = Math.min(ed.acIndex, ed.ac.length - 1);
@@ -417,7 +419,7 @@
   }
   function renderAc() {
     acEl.innerHTML = ed.ac.map((it, i) =>
-      `<div class="ac-item${i === ed.acIndex ? ' on' : ''}" data-i="${i}"><div class="ac-name">${it.dvItem ? `<i class="ac-sw" style="background:${esc(it.color || '#ececec')}"></i>` : ''}<b>${esc(it.show)}</b>${it.args !== null ? `<span>(${esc(it.args)})</span>` : ''}</div>${(i === ed.acIndex || it.sug) && it.desc ? `<div class="ac-desc">${esc(it.desc)}</div>` : ''}</div>`
+      `<div class="ac-item${i === ed.acIndex ? ' on' : ''}" data-i="${i}"><div class="ac-name">${it.dvItem ? `<i class="ac-sw" style="background:${esc(it.color || '#ececec')}"></i>` : ''}<b${it.dvItem && it.color ? ` class="ac-chip" style="background:${esc(it.color)};color:${esc(it.fg || App.textOn(it.color))}"` : ''}>${esc(it.show)}</b>${it.args !== null ? `<span>(${esc(it.args)})</span>` : ''}</div>${(i === ed.acIndex || it.sug) && it.desc ? `<div class="ac-desc">${esc(it.desc)}</div>` : ''}</div>`
     ).join('');
     acEl.hidden = false;
     positionPopup(acEl);

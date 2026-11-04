@@ -418,33 +418,176 @@
     try { localStorage.setItem(vkey(), JSON.stringify(keep)); }
     catch (e) { try { localStorage.setItem(vkey(), JSON.stringify(keep.slice(0, 8))); } catch (e2) { /* sem espaço */ } }
   }
-  function versionHistory() {
-    saveVersion('', true);
-    const render = (body) => {
-      const list = loadVersions();
-      body.innerHTML = `<p class="sp-hint">As versões ficam guardadas neste navegador. Uma versão é salva automaticamente a cada 5 minutos de edição.</p>
-        <div class="vh-list">${list.map((v, i) => `<div class="vh-item" data-i="${i}"><div><b>${esc(v.name || new Date(v.time).toLocaleString('pt-BR', { dateStyle: 'long', timeStyle: 'short' }))}</b>${v.name ? `<small>${esc(new Date(v.time).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }))}</small>` : ''}${i === 0 ? '<small class="vh-cur">Versão atual</small>' : ''}</div>
-          ${i > 0 ? '<button class="btn vh-restore">Restaurar</button>' : ''}</div>`).join('')}</div>
-        <button class="btn sp-add">Nomear versão atual</button>`;
-      body.querySelectorAll('.vh-restore').forEach((b) => b.onclick = () => {
-        const v = loadVersions()[+b.closest('.vh-item').dataset.i];
-        App.ui.confirm('Restaurar esta versão?', 'A planilha voltará a esta versão. Você pode desfazer com Ctrl+Z.', 'Restaurar', () => {
-          const d = JSON.parse(v.data);
-          App.change('Restaurar versão', () => {
-            doc.sheets = d.sheets.map(App.normalizeSheet);
-            doc.active = Math.min(d.active || 0, doc.sheets.length - 1);
-            doc.names = d.names || {};
-          });
-          App.emit('sheet');
-          render(body);
-        });
-      });
-      body.querySelector('.sp-add').onclick = () => App.run('nameVersion');
+  // Histórico de versões: lista à esquerda; à direita a prévia da versão escolhida, com as mudanças daquele backup em destaque.
+  // Na nuvem as versões ficam no servidor (só administradores); fora dela, neste navegador.
+  const fmtWhen = (t) => new Date(t).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+  function diffData(prev, cur) {
+    const out = { cells: {}, added: [], removed: [], count: 0 };
+    const val = (x) => (x && x.v !== undefined && x.v !== null ? String(x.v) : '');
+    const prevBy = new Map(((prev && prev.sheets) || []).map((x) => [x.id, x]));
+    for (const sh of (cur && cur.sheets) || []) {
+      const p = prevBy.get(sh.id);
+      if (!p) { out.added.push(sh.id); continue; }
+      const A = sh.cells || {}, B = p.cells || {}, ch = {};
+      for (const k in A) if (val(A[k]) !== val(B[k])) { ch[k] = val(B[k]); out.count++; }
+      for (const k in B) if (!(k in A) && val(B[k]) !== '') { ch[k] = val(B[k]); out.count++; }
+      if (Object.keys(ch).length) out.cells[sh.id] = ch;
+      prevBy.delete(sh.id);
+    }
+    out.removed = [...prevBy.values()].map((x) => ({ id: x.id, name: x.name }));
+    return out;
+  }
+  function versionProvider() {
+    if (App.cloudMode && App.cloud && App.cloud.id) {
+      const base = `/api/docs/${App.cloud.id}/versions`;
+      const api = App.collab.api;
+      return {
+        cloud: true,
+        list: async () => (await api('GET', base)).versions.map((v) => ({ id: v.id, at: new Date(v.at).getTime(), name: v.name, by: v.by_name, auto: v.auto })),
+        get: async (id) => { const r = await api('GET', `${base}/${id}`); return { data: r.data, diff: r.diff, prevAt: r.prevAt ? new Date(r.prevAt).getTime() : null }; },
+        save: (name) => api('POST', base, { name: name || '' }),
+        rename: (id, name) => api('PUT', `${base}/${id}`, { name }),
+        copy: async (id) => { const r = await api('POST', `${base}/${id}/copy`, {}); return r; },
+      };
+    }
+    return {
+      cloud: false,
+      list: async () => { saveVersion('', true); return loadVersions().map((v) => ({ id: v.id, at: v.time, name: v.name, auto: v.auto })); },
+      get: async (id) => {
+        const list = loadVersions(), i = list.findIndex((v) => v.id === id);
+        const data = JSON.parse(list[i].data), prev = list[i + 1] ? JSON.parse(list[i + 1].data) : null;
+        return { data, diff: prev ? diffData(prev, data) : null, prevAt: prev ? list[i + 1].time : null };
+      },
+      save: async (name) => saveVersion(name || '', !name),
+      rename: async (id, name) => { const list = loadVersions(); const v = list.find((x) => x.id === id); if (v) { v.name = name; try { localStorage.setItem(vkey(), JSON.stringify(list)); } catch (e) { /* sem espaço */ } } },
+      copy: null,
     };
-    openPanel('Histórico de versões', render);
+  }
+  async function versionHistory() {
+    if (App.adminOnly && App.adminOnly()) return notify('Somente administradores veem e restauram as versões da planilha.');
+    const pv = versionProvider();
+    let list = [], cur = null, curSheet = null, onlyChanged = true;
+    const m = App.ui.modal({
+      title: 'Histórico de versões', width: 'min(1500px, 98vw)', cls: 'vh-modal', enterSubmits: false,
+      body: `<div class="vh-wrap"><aside class="vh-side"><button class="btn btn-sm" id="vh-save">${icon('plus', 14)} Salvar versão agora</button><div class="vh-items" id="vh-items"><p class="sp-hint">Carregando…</p></div>
+        <p class="sp-hint vh-note">${pv.cloud ? 'Uma versão é guardada no servidor a cada 30 minutos de edição e sempre antes de restaurar outra.' : 'As versões ficam neste navegador (uma a cada 5 minutos de edição).'}</p></aside>
+        <section class="vh-main"><div class="vh-top" id="vh-top"><span class="sp-hint">Escolha uma versão à esquerda para ver a prévia.</span></div><div class="vh-tabs" id="vh-tabs"></div><div class="vh-table" id="vh-table"></div></section></div>`,
+      buttons: [{ label: 'Fechar' }],
+    });
+    const d = m.el, $q = (x) => d.querySelector(x);
+    const drawList = () => {
+      $q('#vh-items').innerHTML = list.length ? list.map((v, i) => `<button class="vh-ver${cur && cur.id === v.id ? ' on' : ''}" data-id="${esc(String(v.id))}"><b>${esc(v.name || fmtWhen(v.at))}</b><small>${v.name ? esc(fmtWhen(v.at)) + ' · ' : ''}${i === 0 ? 'mais recente' : v.auto ? 'automática' : 'salva'}${v.by ? ' · ' + esc(v.by.split(' ')[0]) : ''}</small></button>`).join('') : '<p class="sp-hint">Nenhuma versão guardada ainda. Clique em "Salvar versão agora".</p>';
+      d.querySelectorAll('.vh-ver').forEach((b) => (b.onclick = () => open(list.find((v) => String(v.id) === b.dataset.id))));
+    };
+    const load = async () => { try { list = await pv.list(); } catch (e) { $q('#vh-items').innerHTML = `<p class="sp-hint">${esc(e.message)}</p>`; return; } drawList(); if (!cur && list.length) open(list[0]); };
+    async function open(meta) {
+      if (!meta) return;
+      cur = { id: meta.id, meta, loading: true };
+      drawList();
+      $q('#vh-top').innerHTML = '<span class="sp-hint">Carregando a prévia…</span>'; $q('#vh-table').innerHTML = ''; $q('#vh-tabs').innerHTML = '';
+      let v;
+      try { v = await pv.get(meta.id); } catch (e) { $q('#vh-top').innerHTML = `<span class="sp-hint">${esc(e.message)}</span>`; return; }
+      if (!cur || cur.id !== meta.id) return;
+      cur = Object.assign({ id: meta.id, meta }, v);
+      const sheets = (v.data.sheets || []).filter((x) => !x.shadow);
+      if (!curSheet || !sheets.some((x) => x.id === curSheet)) {
+        const withCh = sheets.find((x) => v.diff && v.diff.cells[x.id]);
+        curSheet = (sheets.find((x) => x.id === (App.sheet() || {}).id && v.diff && v.diff.cells[x.id]) || withCh || sheets.find((x) => x.id === (App.sheet() || {}).id) || sheets[0] || {}).id;
+      }
+      const dff = v.diff;
+      const summary = !dff ? 'Primeira versão guardada: não há uma anterior para comparar.'
+        : dff.count || dff.added.length || dff.removed.length ? `Mudanças desde ${fmtWhen(v.prevAt)}: <b>${dff.count}</b> ${dff.count === 1 ? 'célula' : 'células'}${dff.added.length ? ` · ${dff.added.length} página(s) nova(s)` : ''}${dff.removed.length ? ` · página(s) excluída(s): ${dff.removed.map((x) => esc(x.name)).join(', ')}` : ''}`
+          : `Sem mudanças nos valores desde ${fmtWhen(v.prevAt)}.`;
+      $q('#vh-top').innerHTML = `<div class="vh-title"><b>${esc(meta.name || fmtWhen(meta.at))}</b><button class="icon-btn" id="vh-ren" title="Dar nome a esta versão">✎</button><small>${summary}</small></div>
+        <label class="inline vh-only"><input type="checkbox" id="vh-only"${onlyChanged ? ' checked' : ''}> Só linhas alteradas</label>
+        ${pv.copy ? '<button class="btn btn-sm" id="vh-copy">Criar uma cópia</button>' : '<button class="btn btn-sm" id="vh-copy">Abrir como cópia</button>'}
+        <button class="btn btn-primary btn-sm" id="vh-restore">Restaurar esta versão</button>`;
+      $q('#vh-only').onchange = (e) => { onlyChanged = e.target.checked; drawSheet(); };
+      $q('#vh-restore').onclick = restore;
+      $q('#vh-copy').onclick = copy;
+      $q('#vh-ren').onclick = () => App.ui.prompt('Nome da versão', 'Nome', meta.name || '', async (n) => { try { await pv.rename(meta.id, n.trim()); meta.name = n.trim(); drawList(); open(meta); } catch (e) { notify(e.message); } });
+      $q('#vh-tabs').innerHTML = sheets.map((x) => { const n = dff && dff.cells[x.id] ? Object.keys(dff.cells[x.id]).length : 0; const isNew = dff && dff.added.includes(x.id); return `<button class="vh-tab${x.id === curSheet ? ' on' : ''}" data-s="${esc(x.id)}">${esc(x.name)}${n ? ` <em>${n}</em>` : ''}${isNew ? ' <em class="new">nova</em>' : ''}</button>`; }).join('');
+      d.querySelectorAll('.vh-tab').forEach((b) => (b.onclick = () => { curSheet = b.dataset.s; d.querySelectorAll('.vh-tab').forEach((x) => x.classList.toggle('on', x === b)); drawSheet(); }));
+      drawSheet();
+    }
+    function drawSheet() {
+      const sh = (cur.data.sheets || []).find((x) => x.id === curSheet);
+      const box = $q('#vh-table');
+      if (!sh) { box.innerHTML = ''; return; }
+      const ch = (cur.diff && cur.diff.cells[sh.id]) || {};
+      const cells = sh.cells || {};
+      let maxR = 1, maxC = 1;
+      for (const a in cells) { const p = E.parseAddr(a); if (p && cells[a] && cells[a].v !== undefined && cells[a].v !== '') { maxR = Math.max(maxR, p.row); maxC = Math.max(maxC, p.col); } }
+      for (const a in ch) { const p = E.parseAddr(a); if (p) { maxR = Math.max(maxR, p.row); maxC = Math.max(maxC, p.col); } }
+      maxC = Math.min(maxC, 80);
+      const names = sh.colNames || {};
+      const hasNames = Object.keys(names).length > 0;
+      const chRows = [...new Set(Object.keys(ch).map((a) => (E.parseAddr(a) || {}).row).filter(Boolean))].sort((a, b) => a - b);
+      let rows;
+      const LIMIT = 600;
+      if (onlyChanged && Object.keys(ch).length) rows = chRows.slice(0, LIMIT);
+      else { rows = []; for (let r = 1; r <= Math.min(maxR, LIMIT); r++) rows.push(r); }
+      if (!hasNames && rows[0] !== 1) rows.unshift(1);
+      const colW = (c) => Math.max(50, Math.min(320, ((sh.colW || {})[c] || App.DEF_W || 100)));
+      const txt = (x) => (x && x.v !== undefined && x.v !== null ? String(x.v) : '');
+      let html = `<table class="vh-grid"><thead><tr><th class="vh-rh"></th>`;
+      for (let c = 1; c <= maxC; c++) html += `<th style="min-width:${colW(c)}px;max-width:${colW(c)}px">${esc(E.numToCol(c))}${names[c] ? `<small>${esc(names[c])}</small>` : ''}</th>`;
+      html += '</tr></thead><tbody>';
+      for (const r of rows) {
+        html += `<tr><th class="vh-rh">${r}</th>`;
+        for (let c = 1; c <= maxC; c++) {
+          const a = E.addrToStr(r, c), x = cells[a], t = txt(x);
+          const st = (x && x.s) || {};
+          const style = [st.bg ? 'background:' + st.bg : '', st.color ? 'color:' + st.color : '', st.b ? 'font-weight:600' : ''].filter(Boolean).join(';');
+          if (a in ch) {
+            const before = ch[a];
+            if (t === '' && before !== '') html += `<td class="vh-del" title="Apagado. Antes: ${esc(before)}"><s>${esc(before)}</s></td>`;
+            else html += `<td class="vh-ch" title="${before === '' ? 'Preenchido nesta versão' : 'Antes: ' + esc(before)}">${esc(t)}</td>`;
+          } else html += `<td${style ? ` style="${esc(style)}"` : ''}>${esc(t)}</td>`;
+        }
+        html += '</tr>';
+      }
+      html += '</tbody></table>';
+      const more = onlyChanged && Object.keys(ch).length ? (chRows.length > LIMIT ? `<p class="sp-hint">Mostrando ${LIMIT} de ${chRows.length} linhas alteradas.</p>` : '') : maxR > LIMIT ? `<p class="sp-hint">Mostrando as primeiras ${LIMIT} de ${maxR} linhas.</p>` : '';
+      const empty = onlyChanged && !Object.keys(ch).length && cur.diff ? '<p class="sp-hint">Nenhuma célula desta página mudou nesta versão. Desmarque "Só linhas alteradas" para ver a página inteira.</p>' : '';
+      box.innerHTML = `<div class="vh-legend"><span class="vh-ch">Alterado / preenchido</span><span class="vh-del"><s>Apagado</s></span><span class="sp-hint">Passe o mouse para ver o valor anterior.</span></div>${empty}${html}${more}`;
+    }
+    function restore() {
+      const meta = cur.meta;
+      App.ui.confirm('Restaurar esta versão?', `A planilha volta a ficar como em ${fmtWhen(meta.at)}${pv.cloud ? ' para todos' : ''}. Antes disso, a versão atual é guardada no histórico (dá para voltar).`, 'Restaurar', async () => {
+        try { await pv.save('Antes de restaurar (' + fmtWhen(Date.now()) + ')'); } catch (e) { return notify('Não foi possível guardar a versão atual antes de restaurar: ' + e.message); }
+        const v = cur.data;
+        const ok = App.change('Restaurar versão', () => {
+          doc.sheets = v.sheets.filter((x) => !x.shadow).map(App.normalizeSheet);
+          doc.active = Math.min(doc.active, doc.sheets.length - 1);
+          doc.names = v.names || {};
+        });
+        if (ok === false) return;
+        App.emit('sheet');
+        notify(`Versão de ${fmtWhen(meta.at)} restaurada.`);
+        m.close();
+      });
+    }
+    async function copy() {
+      const meta = cur.meta;
+      if (pv.copy) {
+        try {
+          const r = await pv.copy(meta.id);
+          App.ui.confirm('Cópia criada', `"${r.title}" foi criada na nuvem (só você tem acesso; compartilhe se precisar). Abrir agora?`, 'Abrir a cópia', () => { m.close(); location.hash = '#nuvem=' + r.id; });
+        } catch (e) { notify(e.message); }
+        return;
+      }
+      const data = JSON.parse(JSON.stringify(cur.data));
+      data.title = `Cópia de ${doc.title} (${meta.name || fmtWhen(meta.at)})`;
+      m.close();
+      App.newDocument(data);
+      notify('Cópia da versão aberta como uma planilha nova.');
+    }
+    $q('#vh-save').onclick = () => App.ui.prompt('Salvar versão agora', 'Nome da versão (opcional)', '', async (n) => { try { await pv.save(n.trim() || 'Versão salva'); cur = null; await load(); notify('Versão salva.'); } catch (e) { notify(e.message); } });
+    load();
   }
   let lastAuto = Date.now();
-  App.on('change', () => { if (Date.now() - lastAuto > 5 * 60 * 1000) { lastAuto = Date.now(); saveVersion('', true); } });
+  App.on('change', () => { if (App.cloudMode) return; if (Date.now() - lastAuto > 5 * 60 * 1000) { lastAuto = Date.now(); saveVersion('', true); } });
 
   // ---------- Tabela dinâmica (com fórmulas, atualiza sozinha) ----------
   const AGG = [['SUM', 'SOMA'], ['COUNTA', 'CONT.VALORES'], ['AVERAGE', 'MÉDIA'], ['MAX', 'MÁXIMO'], ['MIN', 'MÍNIMO'], ['COUNTUNIQUE', 'CONTAR.ÚNICOS']];
@@ -589,7 +732,9 @@
   def('columnStats', 'Estatísticas da coluna', columnStats);
   def('namedRanges', 'Intervalos nomeados', namedRanges);
   def('versionHistory', 'Ver histórico de versões', versionHistory);
-  def('nameVersion', 'Nomear versão atual', () => App.ui.prompt('Nomear versão atual', 'Nome da versão', '', (n) => { saveVersion(n.trim() || 'Versão sem nome', false); notify('Versão salva.'); if (current) current.render(current.body); }));
+  def('nameVersion', 'Nomear versão atual', () => App.ui.prompt('Nomear versão atual', 'Nome da versão', '', async (n) => {
+    try { await versionProvider().save(n.trim() || 'Versão sem nome'); notify('Versão salva.'); } catch (e) { notify(e.message); }
+  }));
   def('pivotTable', 'Tabela dinâmica', pivotTable);
   def('pivotEditor', 'Editar tabela dinâmica', pivotEditor);
   App.on('sheet', () => { const sh = App.sheet(); const btn = $('pivot-chip'); if (btn) btn.hidden = !sh.pivot; });

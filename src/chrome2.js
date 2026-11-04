@@ -210,6 +210,8 @@
       else if (info.dv && info.raw !== '' && info.dv.type !== 'checkbox' && !App.validate(sh, h.r, h.c, String(info.raw))) html += `<div class="tip-err"><b>Entrada inválida</b><p>${esc(info.dv.help || 'O conteúdo não atende à regra de validação de dados.')}</p></div>`;
       if (info.comment) html += info.cell.comments.map((cm) => `<div class="tip-comment"><div class="cm-head"><span class="avatar">${esc((cm.author || 'V')[0])}</span><b>${esc(cm.author || 'Você')}</b><time>${esc(new Date(cm.time).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }))}</time></div><p>${esc(cm.text)}</p></div>`).join('');
       if (info.note) html += `<div class="tip-note">${esc(info.note)}</div>`;
+      const dup = App.progDuplicates && App.withReal(() => { const p = App.realCell ? App.realCell(h.r, h.c) : { r: h.r, c: h.c }; const d = p ? App.progDuplicates(sh, App.doc.active, p.r, p.c) : null; return d ? d.filter((x) => x !== p.r) : null; });
+      if (dup) html += `<div class="tip-err"><b>PROG. duplicado</b><p>Este número de programação também está ${dup.length === 1 ? 'na linha' : 'nas linhas'} ${dup.join(', ')}. Ajuste para não repetir.</p></div>`;
       if (!html) { tip.hidden = true; return; }
       tip.innerHTML = html;
       tip.hidden = false;
@@ -286,7 +288,6 @@
           { label: 'Personalizar cabeçalho da coluna', cmd: 'colHeaderStyle' },
           { label: 'Mover para a esquerda', cmd: 'moveColumns', arg: { dir: -1 }, disabled: R.c1 <= 1 },
           { label: 'Mover para a direita', cmd: 'moveColumns', arg: { dir: 1 }, disabled: R.c2 >= sh.cols },
-          ...(App.adminOnly && App.adminOnly() ? [] : [{ label: App.critCol(sh) === R.c1 ? `Alerta de crítico já fica na coluna ${E.numToCol(R.c1)}` : `Usar a coluna ${E.numToCol(R.c1)} para o alerta de crítico`, cmd: 'critColumn', arg: R.c1, disabled: App.critCol(sh) === R.c1 }]),
           (sh.colGroups || []).some((g) => !(g.c2 < R.c1 || g.c1 > R.c2)) ? { label: `Desagrupar ${cl}`, cmd: 'ungroupCols' } : { label: `Agrupar ${cl} (com +)`, cmd: 'groupCols' },
           { label: `Inserir ${colsTxt(nc)} à esquerda`, cmd: 'insertColsLeft' }, { label: `Inserir ${colsTxt(nc)} à direita`, cmd: 'insertColsRight' },
           { label: `Excluir ${cl}`, cmd: 'deleteCols' }, { label: `Limpar ${cl}`, cmd: 'clearValues' }, { label: `Ocultar ${cl}`, cmd: 'hideCols' },
@@ -297,7 +298,7 @@
           { label: 'Estatísticas da coluna', cmd: 'columnStats' }, { label: 'Validação de dados', cmd: 'dataValidation' }, { label: 'Formatação condicional', cmd: 'condFormat' }];
       } else if (hit.area === 'rowHdr' || hit.area === 'rowEdge') {
         items = [...base,
-          critItem(), ...(App.adminOnly && App.adminOnly() ? [] : [{ label: 'Container crítico: quem pode marcar…', cmd: 'critSectors' }]),
+          critItem(),
           { label: `Inserir ${rowsTxt(nr)} acima`, cmd: 'insertRowsAbove' }, { label: `Inserir ${rowsTxt(nr)} abaixo`, cmd: 'insertRowsBelow' },
           { label: `Excluir ${rl}`, cmd: 'deleteRows' }, { label: `Limpar ${rl}`, cmd: 'clearValues' }, { label: `Ocultar ${rl}`, cmd: 'hideRows' },
           { label: `Redimensionar ${rl}`, cmd: 'resizeRows' }, '-',
@@ -305,7 +306,7 @@
           { label: 'Formatação condicional', cmd: 'condFormat' }, { label: 'Validação de dados', cmd: 'dataValidation' }];
       } else if (hit.area === 'cell' || hit.area === 'fill') {
         items = [...base,
-          critItem(), ...(App.adminOnly && App.adminOnly() ? [] : [{ label: 'Container crítico: quem pode marcar…', cmd: 'critSectors' }]),
+          critItem(),
           { label: `Inserir ${rowsTxt(nr)} acima`, cmd: 'insertRowsAbove' }, { label: `Inserir ${colsTxt(nc)} à esquerda`, cmd: 'insertColsLeft' },
           { label: 'Inserir células', sub: [{ label: `Inserir ${rowsTxt(nr)} abaixo`, cmd: 'insertRowsBelow' }, { label: `Inserir ${colsTxt(nc)} à direita`, cmd: 'insertColsRight' }] },
           { label: `Excluir ${rl}`, cmd: 'deleteRows' }, { label: `Excluir ${cl}`, cmd: 'deleteCols' },

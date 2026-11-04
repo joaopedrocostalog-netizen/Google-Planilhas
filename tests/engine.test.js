@@ -2,7 +2,7 @@
 'use strict';
 global.window = global;
 const path = require('path');
-for (const f of ['engine.js', 'functions.js', 'functions2.js']) require(path.join(__dirname, '..', 'src', f));
+for (const f of ['engine.js', 'functions.js', 'functions2.js', 'functions3.js']) require(path.join(__dirname, '..', 'src', f));
 const E = global.GridEngine;
 
 function book(sheets) {
@@ -55,6 +55,45 @@ check('FILTER', [v('L1'), v('L2'), v('L3')], ['Ana', 'Bia', 'Caio']);
 check('UNIQUE', [v('M1'), v('M2'), v('M3'), v('M4')], ['Ana', 'Bia', 'Caio', null]);
 check('SOMARPRODUTO', v('N1'), 10 * 30 + 20 * 5);
 check('PGTO', Math.round(v('O1') * 100) / 100, 88.85);
+
+// funções novas (parte 3)
+const S3 = {
+  A1: '10', A2: '20', A3: '30', A4: '40', B1: '1', B2: '2', B3: '3', B4: '4',
+  C1: '=SUBTOTAL(9;A1:A4)', C2: '=SUBTOTAL(1;A1:A4)', C3: '=INCLINAÇÃO(A1:A4;B1:B4)', C4: '=INTERCEPÇÃO(A1:A4;B1:B4)',
+  C5: '=PREVISÃO(5;A1:A4;B1:B4)', C6: '=MÉDIA.GEOMÉTRICA(1;4)', C7: '=ROMANO(2026)', C8: '=ARÁBICO("MMXXVI")',
+  C9: '=DIATRABALHO.INTL(DATA(2026;11;6);1;11)', C10: '=DIATRABALHOTOTAL.INTL(DATA(2026;11;2);DATA(2026;11;8);1)',
+  C11: '=NÚMSEMANAISO(DATA(2026;1;1))', C12: '=DIAS360(DATA(2026;1;1);DATA(2026;12;31))', C13: '=ISEMAIL("a@b.com")',
+  C14: '=SOMA(EMPILHARV(A1:A2;B1:B2))', C15: '=DIST.NORM.N(0;0;1;VERDADEIRO)', C16: '=ARRED(INV.NORMP.N(0,975);2)',
+  C17: '=ARRED(IPGTO(0,01;1;12;1000);2)', C18: '=ARRED(EFETIVA(0,12;12);4)', C19: '=DPD(1000;100;9)', C20: '=TEXTOANTES("PCIU-123";"-")',
+  C21: '=ADD(2;3)', C22: '=ISBETWEEN(5;1;10)', C23: '=RQUAD(A1:A4;B1:B4)', C24: '=MODO.ÚNICO(1;2;2;3)', C25: '=SOMA(FREQÜÊNCIA(A1:A4;{15;35}))',
+};
+const wb3 = book({ S3 });
+const v3 = (a) => { const p = E.parseAddr(a); return wb3.value(0, p.row, p.col); };
+check('SUBTOTAL 9', v3('C1'), 100);
+check('SUBTOTAL 1', v3('C2'), 25);
+check('INCLINAÇÃO', v3('C3'), 10);
+check('INTERCEPÇÃO', v3('C4'), 0);
+check('PREVISÃO', v3('C5'), 50);
+check('MÉDIA.GEOMÉTRICA', v3('C6'), 2);
+check('ROMANO', v3('C7'), 'MMXXVI');
+check('ARÁBICO', v3('C8'), 2026);
+check('DIATRABALHO.INTL só domingo de folga', v3('C9'), wb3.value(0, 1, 1) * 0 + 46333);
+check('DIATRABALHOTOTAL.INTL', v3('C10'), 5);
+check('NÚMSEMANAISO', v3('C11'), 1);
+check('DIAS360', v3('C12'), 360);
+check('ISEMAIL', v3('C13'), true);
+check('EMPILHARV', v3('C14'), 33);
+check('DIST.NORM.N', v3('C15'), 0.5);
+check('INV.NORMP.N', v3('C16'), 1.96);
+check('IPGTO', v3('C17'), -10);
+check('EFETIVA', v3('C18'), 0.1268);
+check('DPD', v3('C19'), 100);
+check('TEXTOANTES', v3('C20'), 'PCIU');
+check('ADD', v3('C21'), 5);
+check('ISBETWEEN', v3('C22'), true);
+check('RQUAD', v3('C23'), 1);
+check('MODO.ÚNICO', v3('C24'), 2);
+check('FREQÜÊNCIA', v3('C25'), 4);
 
 check('formato moeda', E.formatValue(1234.5, '"R$" #,##0.00'), 'R$ 1.234,50');
 check('formato porcentagem', E.formatValue(0.256, '0.0%'), '25,6%');

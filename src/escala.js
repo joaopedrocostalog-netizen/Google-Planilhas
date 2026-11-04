@@ -52,9 +52,9 @@
   }
   const perms = () => (App.cloudMode && App.cloud && App.cloud.perms) || null;
   // escalar e confirmar: administradores e os setores da escala
-  function canEscalar(sh) { const p = perms(); return !p || p.admin || !!(sh.escala && (sh.escala.sectors || []).includes(p.sectorId)); }
+  function canEscalar(sh) { const p = perms(); return !p || p.admin || !!(sh.escala && window.Perms.inList(sh.escala.sectors || [], p)); }
   // bloquear e destravar: administradores e os setores do bloqueio
-  function canLock(sh) { const p = perms(); return !p || p.admin || !!(sh.escala && (sh.escala.lockSectors || []).includes(p.sectorId)); }
+  function canLock(sh) { const p = perms(); return !p || p.admin || !!(sh.escala && window.Perms.inList(sh.escala.lockSectors || [], p)); }
 
   // linhas reais da seleção (todas as seleções, inclusive Ctrl+clique)
   function selRows(limit) {
@@ -351,13 +351,21 @@
       const tc = cols(sh);
       if (!tc.CAVALO) continue;
       const ic = (inv.sheets[id] && inv.sheets[id].cells) || {};
-      const rows = new Set();
+      const rows = new Set(), cleared = new Set();
       for (const a in e.cells) {
         const p = E.parseAddr(a);
         if (!p || !window.Perms.lockedCol(tc, p.col) || p.row < firstRow(sh, tc.CAVALO)) continue;
         const bv = ic[a] && ic[a].v !== undefined && ic[a].v !== null ? String(ic[a].v) : '';
         const fv = e.cells[a] && e.cells[a].v !== undefined && e.cells[a].v !== null ? String(e.cells[a].v) : '';
         if (bv !== fv && fv.trim()) rows.add(p.row);
+        else if (bv !== fv) cleared.add(p.row);
+      }
+      // veículo todo apagado (CAVALO, CARRETA e MOTORISTA vazios): a linha deixa de ter escala
+      const has = (r, c) => c && String((sh.cells[E.addrToStr(r, c)] || {}).v || '').trim() !== '';
+      for (const r of (canEscalar(sh) ? cleared : [])) {
+        if (rows.has(r) || has(r, tc.CAVALO) || has(r, tc.CARRETA) || has(r, tc.MOTORISTA)) continue;
+        const cav = sh.cells[E.addrToStr(r, tc.CAVALO)];
+        if (cav && cav.esc && !cav.lock) { delete cav.esc; delete cav.swap; App.cleanup(sh, E.addrToStr(r, tc.CAVALO)); changed = true; }
       }
       for (const r of rows) {
         const a = E.addrToStr(r, tc.CAVALO);
@@ -528,7 +536,7 @@
   const colsOf = (sh) => {
     if (colCache.ver !== baseVer || colCache.sh !== sh) {
       const L = App.withReal(() => labels(sh));
-      colCache = { ver: baseVer, sh, chegada: L.indexOf('CHEGADANOCLIENTE'), arm: L.indexOf('ARM'), dem: L.indexOf('DEM') };
+      colCache = { ver: baseVer, sh, chegada: L.indexOf('CHEGADANOCLIENTE'), arm: L.indexOf('ARM'), dem: L.indexOf('DEM'), prog: L.indexOf('PROG') >= 0 ? L.indexOf('PROG') : L.indexOf('PROGRAMACAO') };
     }
     return colCache;
   };
@@ -563,6 +571,48 @@
     return k === dayKeyOf(now) || k === dayKeyOf(tomorrow);
   };
 
+  // PROG. (número da programação) repetido em mais de uma linha: destaca para a pessoa corrigir
+  let dupCache = { ver: -1 };
+  const dupMap = (sh, si) => {
+    if (dupCache.ver === baseVer && dupCache.sh === sh) return dupCache;
+    const c = colsOf(sh).prog;
+    const map = new Map();
+    if (c > 0) App.withReal(() => {
+      const used = App.usedRange(sh);
+      for (let r = firstRow(sh, c); r <= used.maxR; r++) {
+        const k = norm(text(si, sh, r, c));
+        if (!k) continue;
+        if (!map.has(k)) map.set(k, []);
+        map.get(k).push(r);
+      }
+    });
+    for (const [k, rows] of map) if (rows.length < 2) map.delete(k);
+    dupCache = { ver: baseVer, sh, col: c, map };
+    return dupCache;
+  };
+  App.progDuplicates = (sh, si, r, c) => {
+    const d = dupMap(sh, si);
+    if (!(d.col > 0) || c !== d.col || !d.map.size) return null;
+    const rows = d.map.get(norm(text(si, sh, r, c)));
+    return rows && rows.includes(r) ? rows : null;
+  };
+  // ao digitar/colar um PROG. que já existe, avisa na hora
+  App.on('localPatch', (fwd) => {
+    const sh = App.sheet();
+    if (!sh || !fwd.sheets || !fwd.sheets[sh.id] || !fwd.sheets[sh.id].cells) return;
+    const si = doc.active, d = dupMap(sh, si);
+    if (!(d.col > 0) || !d.map.size) return;
+    const msgs = [];
+    for (const a in fwd.sheets[sh.id].cells) {
+      const p = E.parseAddr(a);
+      if (!p || p.col !== d.col) continue;
+      const rows = App.withReal(() => App.progDuplicates(sh, si, p.row, p.col));
+      if (rows) { const o = rows.filter((x) => x !== p.row); msgs.push(`PROG. ${App.withReal(() => text(si, sh, p.row, p.col))} já existe (${o.length === 1 ? 'linha' : 'linhas'} ${o.join(', ')})`); }
+      if (msgs.length >= 3) break;
+    }
+    if (msgs.length) setTimeout(() => notify('Programação duplicada: ' + msgs.join('; ') + '. Confira e ajuste.'), 80);
+  });
+
   // listas da BASE GERAL para outros painéis (ex.: Incluir processo): 'cliente', 'coleta' ou 'vazio'
   App.baseSuggest = (kind, typed, all) => {
     const look = baseLookups();
@@ -586,7 +636,7 @@
     const cities = look[kind].filter((x) => norm(x.name) === norm(name) && x.city).map((x) => x.city);
     return cities.length ? { cities } : { cities: [], missing: true };
   }
-  function canSeeInfo(sh) { const p = perms(); return !p || p.admin || !!(sh.escala && (sh.escala.infoSectors || []).includes(p.sectorId)); }
+  function canSeeInfo(sh) { const p = perms(); return !p || p.admin || !!(sh.escala && window.Perms.inList(sh.escala.infoSectors || [], p)); }
   // FRETE vazio numa linha com cavalo de terceiro: pisca até preencher (usado pela grade)
   let freteCache = { ver: -1 };
   App.freteAlert = (sh, si, r, c) => {
@@ -675,7 +725,17 @@
     if (!canLock(sh)) return notify('Destravar veículo não está liberado para o seu setor.');
     const rows = rowsWith(sh, (x) => x.lock, true);
     if (!rows.length) return notify('Nenhum veículo bloqueado na seleção.');
-    setFlags('Destravar veículo', rows, (x) => { delete x.lock; delete x.swap; }, `Veículo destravado para troca (${rowTxt(rows)}). Depois da troca, bloqueie de novo.`);
+    const reqs = swapReqs(sh, rows);
+    if (setFlags('Destravar veículo', rows, (x) => { delete x.lock; delete x.swap; }, `Veículo destravado para troca (${rowTxt(rows)}). Depois da troca, bloqueie de novo.`)) closeReqs(reqs);
+  }
+  // pedidos de troca em aberto nessas linhas (o id do pedido fica na marca "swap" do CAVALO)
+  function swapReqs(sh, rows) {
+    return [...new Set(App.withReal(() => rows.map((r) => (cavCell(sh, r) || {}).swap)).filter((x) => typeof x === 'string'))];
+  }
+  // marca as mensagens do pedido como "efetuado" para todos que receberam
+  function closeReqs(reqs) {
+    if (!App.cloudMode || !App.cloud.id) return;
+    for (const req of reqs) App.collab.api('POST', '/api/messages/done', { doc: App.cloud.id, req }).catch(() => {});
   }
   // pede a troca ao setor que destrava: manda mensagem no chat e faz as células piscarem em azul
   function pedirTroca() {
@@ -692,22 +752,23 @@
       buttons: [{ label: 'Cancelar' }, { label: 'Enviar pedido', primary: true, action: (d) => {
         const why = d.querySelector('#pt-why').value.trim();
         if (!why) { notify('Escreva o motivo da troca.'); return false; }
-        if (!setFlags('Pedir troca', rows, (x) => { x.swap = true; })) return false;
-        send(why);
+        const req = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+        if (!setFlags('Pedir troca', rows, (x) => { x.swap = req; })) return false;
+        send(why, req);
       } }],
     });
-    async function send(why) {
+    async function send(why, req) {
       if (!App.cloudMode || !App.cloud.id) return notify('Pedido marcado na planilha.');
       let people = [];
       try { people = await App.collab.api('GET', `/api/docs/${App.cloud.id}/contacts`); } catch (e) { return notify(e.message); }
-      let to = people.filter((p) => p.sectorId && lockSectors.includes(p.sectorId));
+      let to = people.filter((p) => (p.sectorId && lockSectors.includes(p.sectorId)) || (p.keys || []).some((k) => lockSectors.includes(k)));
       if (!to.length) to = people.filter((p) => p.admin);
       if (!to.length) return notify('Pedido marcado na planilha, mas não há ninguém do setor responsável para avisar pelo chat.');
       const addr = E.numToCol(tc.CAVALO) + rows[0];
       const msg = `🔒 Pedido de troca de veículo — ${plates.join(', ')} (${rowTxt(rows)}, página ${sh.name}). Motivo: ${why}`;
       let ok = 0;
       for (const p of to) {
-        try { await App.collab.api('POST', '/api/messages', { to: p.id, text: msg, doc: App.cloud.id, ref: { sheet: sh.id, addr, label: `${sh.name}!${addr}`, act: 'unlock', rows } }); ok++; } catch (e) { /* tenta os outros */ }
+        try { await App.collab.api('POST', '/api/messages', { to: p.id, text: msg, doc: App.cloud.id, ref: { sheet: sh.id, addr, label: `${sh.name}!${addr}`, act: 'unlock', rows, req } }); ok++; } catch (e) { /* tenta os outros */ }
       }
       notify(ok ? `Pedido enviado no chat para ${to.filter((_, i) => i < ok).map((p) => p.name.split(' ')[0]).join(', ')}. As células ficam piscando em azul até destravarem.` : 'Não foi possível enviar a mensagem do pedido.');
     }
@@ -726,9 +787,12 @@
     const st = chatUnlockState(ref);
     if (!st) return notify('Abra a planilha do pedido para destravar.');
     if (!st.can) return notify('Destravar veículo não está liberado para o seu setor.');
-    if (!st.locked.length) return notify('Este veículo já foi destravado.');
+    if (ref.done) return notify('Este pedido de troca já foi atendido.');
+    if (!st.locked.length) { if (ref.req) closeReqs([ref.req]); return notify('Este veículo já foi destravado.'); }
     const plates = App.withReal(() => st.locked.map((r) => text(doc.sheets.indexOf(st.sh), st.sh, r, cols(st.sh).CAVALO) || '—'));
+    const reqs = [...new Set(swapReqs(st.sh, st.locked).concat(ref.req ? [ref.req] : []))];
     if (!setFlags('Destravar veículo', st.locked, (x) => { delete x.lock; delete x.swap; }, null, st.sh)) return false;
+    closeReqs(reqs);
     notify(`Veículo ${[...new Set(plates)].join(', ')} destravado para troca (${rowTxt(st.locked)}). Depois da troca, bloqueie de novo.`);
     if (requesterId && App.cloudMode) {
       const c = cols(st.sh).CAVALO, addr = E.numToCol(c) + st.locked[0];
@@ -742,19 +806,17 @@
     const sh = App.sheet();
     const p = perms();
     if (p && !p.admin) return notify('Somente administradores configuram a escala de veículos.');
-    let sectors = [];
-    if (App.cloudMode && App.cloud && App.cloud.id) {
-      try { const r = await App.collab.api('GET', `/api/docs/${App.cloud.id}/share`); sectors = (r.acl && r.acl.sectors) || []; } catch (e) { return notify(e.message); }
-    }
+    let who = { sectors: [], people: [] };
+    try { if (App.whoOptions) who = await App.whoOptions(); } catch (e) { return notify(e.message); }
     const cur = sh.escala || {};
     const srcNow = srcSheet(sh);
-    const boxes = (key, list) => (sectors.length ? sectors.map((s) => `<label class="inline"><input type="checkbox" data-${key}="${esc(s.id)}"${(list || []).includes(s.id) ? ' checked' : ''}> ${esc(s.name)}</label>`).join('') : '<p class="sp-hint">Nenhum setor criado ainda (Compartilhar › Setores).</p>');
+    const boxes = (key, list) => App.whoBoxes(key, list, who);
     App.ui.modal({
       title: 'Escala de veículos — quem pode usar', width: '500px',
       body: `<p class="sp-hint">Funções do botão direito na coluna <b>CAVALO</b> desta página. Administradores sempre podem usar tudo.</p>
-        <p class="sp-label">Escalar veículo e confirmar escala</p><div class="esc-sectors">${boxes('s', cur.sectors)}</div>
-        <p class="sp-label">Bloquear e destravar veículo para troca</p><div class="esc-sectors">${boxes('l', cur.lockSectors)}</div>
-        <p class="sp-label">Ver os dados do cavalo (BASE GERAL) ao clicar na célula</p><div class="esc-sectors">${boxes('v', cur.infoSectors)}</div>
+        <p class="sp-label">Escalar veículo e confirmar escala</p>${boxes('s', cur.sectors)}
+        <p class="sp-label">Bloquear e destravar veículo para troca</p>${boxes('l', cur.lockSectors)}
+        <p class="sp-label">Ver os dados do cavalo (BASE GERAL) ao clicar na célula</p>${boxes('v', cur.infoSectors)}
         <label class="field"><span>Aba com a escala</span><select class="input" id="esc-src">${doc.sheets.map((s) => `<option value="${esc(s.id)}"${srcNow && srcNow.sh.id === s.id ? ' selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>
         <p class="sp-hint">Os setores da escala precisam ver a aba da escala e editar CAVALO, CARRETA, MOTORISTA, CPF e CONTATO; o setor do bloqueio precisa editar a coluna CAVALO.</p>`,
       buttons: [{ label: 'Cancelar' }, { label: 'Salvar', primary: true, action: (d) => {
@@ -784,8 +846,6 @@
       if (flags.some((x) => x.esc === 'ok' && !x.lock)) extra.push({ label: 'Bloquear veículo para troca', icon: 'lock', cmd: 'bloquearVeiculo' });
     }
     if (flags.some((x) => x.lock) && !canLock(sh)) extra.push({ label: flags.some((x) => x.swap) ? 'Pedir troca (pedido já enviado)' : 'Pedir troca do veículo', icon: 'comment', cmd: 'pedirTroca' });
-    const pp = perms();
-    if (!pp || pp.admin) extra.push({ label: 'Escala de veículos: quem pode usar…', cmd: 'escalaConfig' });
     if (extra.length) items.splice(Math.min(items.length, 4), 0, ...extra, '-');
   });
 

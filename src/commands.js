@@ -56,8 +56,8 @@
   def('textColor', 'Cor do texto', setKey('color', 'Cor do texto'));
   def('fillColor', 'Cor de preenchimento', setKey('bg', 'Cor de preenchimento'));
   for (const [id, label, key, val, sc] of [
-    ['alignLeft', 'Alinhar à esquerda', 'al', 'l', 'Ctrl+Shift+L'], ['alignCenter', 'Centralizar', 'al', 'c', 'Ctrl+Shift+E'], ['alignRight', 'Alinhar à direita', 'al', 'r', 'Ctrl+Shift+R'],
-    ['valignTop', 'Alinhar acima', 'va', 't'], ['valignMiddle', 'Alinhar ao meio', 'va', 'm'], ['valignBottom', 'Alinhar abaixo', 'va', null],
+    ['alignLeft', 'Alinhar à esquerda', 'al', 'l', 'Ctrl+Shift+L'], ['alignCenter', 'Centralizar', 'al', null, 'Ctrl+Shift+E'], ['alignRight', 'Alinhar à direita', 'al', 'r', 'Ctrl+Shift+R'],
+    ['valignTop', 'Alinhar acima', 'va', 't'], ['valignMiddle', 'Alinhar ao meio', 'va', null], ['valignBottom', 'Alinhar abaixo', 'va', 'b'],
     ['wrapOverflow', 'Transbordar', 'wrap', 'overflow'], ['wrapWrap', 'Ajustar texto', 'wrap', 'wrap'], ['wrapClip', 'Cortar texto', 'wrap', 'clip'],
     ['rotNone', 'Sem rotação', 'rot', null], ['rot45', 'Inclinar para cima', 'rot', 45], ['rotUp', 'Girar para cima', 'rot', 90], ['rotDown', 'Girar para baixo', 'rot', -90],
   ]) {
@@ -382,31 +382,29 @@
   App.canMarkCritical = (sh) => {
     const p = App.cloudMode && App.cloud && App.cloud.perms;
     if (!p || p.admin || !Array.isArray(sh.critSectors)) return true;
-    return sh.critSectors.includes(p.sectorId);
+    return window.Perms.inList(sh.critSectors, p);
   };
   def('critSectors', 'Container crítico: quem pode marcar', async () => {
     const sh = App.sheet();
     if (App.adminOnly && App.adminOnly()) return notify('Somente administradores escolhem quem marca container crítico.');
-    let sectors = [];
-    if (App.cloudMode && App.cloud && App.cloud.id) {
-      try { const r = await App.collab.api('GET', `/api/docs/${App.cloud.id}/share`); sectors = (r.acl && r.acl.sectors) || []; } catch (e) { return notify(e.message); }
-    }
+    let who = { sectors: [], people: [] };
+    try { who = await App.whoOptions(); } catch (e) { return notify(e.message); }
     const all = !Array.isArray(sh.critSectors);
     const cur = sh.critSectors || [];
     App.ui.modal({
-      title: 'Container crítico — quem pode marcar', width: '440px',
-      body: `<p class="sp-hint">Administradores sempre podem marcar e desmarcar. Escolha os setores que também podem.</p>
-        <label class="inline cs-all"><input type="checkbox" id="cs-all"${all ? ' checked' : ''}> <b>Todos os setores</b></label>
-        <div class="esc-sectors" id="cs-list">${sectors.length ? sectors.map((s) => `<label class="inline"><input type="checkbox" data-cs="${App.esc(s.id)}"${all || cur.includes(s.id) ? ' checked' : ''}${all ? ' disabled' : ''}> ${App.esc(s.name)}</label>`).join('') : '<p class="sp-hint">Nenhum setor criado ainda (Compartilhar › Setores).</p>'}</div>`,
+      title: 'Container crítico — quem pode marcar', width: '480px',
+      body: `<p class="sp-hint">Administradores sempre podem marcar e desmarcar. Escolha os setores e as pessoas que também podem.</p>
+        <label class="inline cs-all"><input type="checkbox" id="cs-all"${all ? ' checked' : ''}> <b>Todos</b></label>
+        <div id="cs-list">${App.whoBoxes('cs', cur, who, { all })}</div>`,
       onOpen: (d) => {
         const allBox = d.querySelector('#cs-all');
-        allBox.onchange = () => d.querySelectorAll('[data-cs]').forEach((x) => { x.disabled = allBox.checked; if (allBox.checked) x.checked = true; });
+        allBox.onchange = () => d.querySelectorAll('[data-cs]').forEach((x) => { x.disabled = allBox.checked; x.checked = !x.dataset.person; });
       },
       buttons: [{ label: 'Cancelar' }, { label: 'Salvar', primary: true, action: (d) => {
         const everyone = d.querySelector('#cs-all').checked;
         const list = [...d.querySelectorAll('[data-cs]')].filter((x) => x.checked).map((x) => x.dataset.cs);
         App.change('Quem marca container crítico', () => { if (everyone) delete sh.critSectors; else sh.critSectors = list; });
-        notify(everyone ? 'Todos os setores podem marcar container crítico.' : list.length ? 'Setores para marcar container crítico salvos.' : 'Só administradores podem marcar container crítico nesta página.');
+        notify(everyone ? 'Todos podem marcar container crítico.' : list.length ? 'Quem pode marcar container crítico: salvo.' : 'Só administradores podem marcar container crítico nesta página.');
       } }],
     });
   });
@@ -736,8 +734,22 @@
   // ---------- Desfazer, área de transferência e pincel ----------
   def('undo', 'Desfazer', () => { if (App.editing()) App.cancelEdit(); App.undo(); }, 'Ctrl+Z');
   def('redo', 'Refazer', () => { if (App.editing()) App.cancelEdit(); App.redo(); }, 'Ctrl+Y');
-  def('cut', 'Recortar', () => { if (!document.execCommand('cut')) notify('Use Ctrl+X para recortar.'); }, 'Ctrl+X');
-  def('copy', 'Copiar', () => { if (!document.execCommand('copy')) notify('Use Ctrl+C para copiar.'); }, 'Ctrl+C');
+  // pelo menu (o clique tira o foco da grade): copia direto, sem depender do atalho do navegador
+  function menuCopy(cut) {
+    if (App.editing()) App.commitEdit();
+    const R = App.selRect();
+    const block = App.readBlock(si(), R);
+    const text = blockToText(block);
+    clip.block = block; clip.text = text; clip.cut = cut;
+    App.grid.setMarquee({ si: si(), R });
+    App.grid.focus();
+    try {
+      if (navigator.clipboard && window.ClipboardItem) navigator.clipboard.write([new ClipboardItem({ 'text/plain': new Blob([text], { type: 'text/plain' }), 'text/html': new Blob([blockToHtml(block)], { type: 'text/html' }) })]).catch(() => navigator.clipboard.writeText(text).catch(() => {}));
+      else if (navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
+    } catch (e) { /* a cópia interna já vale para colar nesta planilha */ }
+  }
+  def('cut', 'Recortar', () => menuCopy(true), 'Ctrl+X');
+  def('copy', 'Copiar', () => menuCopy(false), 'Ctrl+C');
   def('paste', 'Colar', () => pasteFromMenu('all'), 'Ctrl+V');
   def('pasteValues', 'Colar somente valores', () => pasteFromMenu('values'), 'Ctrl+Shift+V');
   def('pasteFormat', 'Colar somente a formatação', () => pasteFromMenu('format'), 'Ctrl+Alt+V');

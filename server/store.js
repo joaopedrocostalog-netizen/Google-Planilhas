@@ -32,6 +32,7 @@ function memoryStore(file) {
     async conversation(a, b, limit) { return db.messages.filter((m) => (m.from_id === a && m.to_id === b) || (m.from_id === b && m.to_id === a)).slice(-limit).map(clone); },
     async recentMessages(userId, limit) { return db.messages.filter((m) => m.from_id === userId || m.to_id === userId).slice(-limit).reverse().map(clone); },
     async markRead(userId, fromId) { const at = new Date().toISOString(); let n = 0; for (const m of db.messages) if (m.to_id === userId && m.from_id === fromId && !m.read_at) { m.read_at = at; n++; } if (n) persist(); return n; },
+    async markRefDone(docId, req, done) { const out = []; for (const m of db.messages) if (m.doc_id === docId && m.ref && m.ref.req === req && !m.ref.done) { m.ref.done = clone(done); out.push({ id: m.id, from_id: m.from_id, to_id: m.to_id }); } if (out.length) persist(); return out; },
     async hasMessage(fromId, toId) { return db.messages.some((m) => m.from_id === fromId && m.to_id === toId); },
     async allDocAcls() { return Object.values(db.docs).map((d) => ({ owner_id: d.owner_id, acl: clone(d.acl) })); },
     async createSession(hash, userId) { db.sessions[hash] = { user_id: userId, created_at: Date.now() }; persist(); },
@@ -55,6 +56,21 @@ function memoryStore(file) {
       if (list.length > 20000) list.splice(0, list.length - 20000);
       persist();
     },
+    // versões (backups) da planilha inteira
+    async addVersion(docId, v) {
+      db.versions = db.versions || {};
+      const list = db.versions[docId] || (db.versions[docId] = []);
+      const x = { id: ++db.verSeq || (db.verSeq = 1), at: new Date().toISOString(), name: v.name || '', by_name: v.by_name || '', auto: !!v.auto, data: clone(v.data) };
+      db.verSeq = x.id;
+      list.push(x);
+      const autos = list.filter((y) => y.auto && !y.name);
+      if (autos.length > 50) { const drop = new Set(autos.slice(0, autos.length - 50).map((y) => y.id)); db.versions[docId] = list.filter((y) => !drop.has(y.id)); }
+      persist();
+      return { id: x.id, at: x.at };
+    },
+    async listVersions(docId) { return ((db.versions || {})[docId] || []).slice().reverse().map((v) => ({ id: v.id, at: v.at, name: v.name, by_name: v.by_name, auto: v.auto })); },
+    async getVersion(docId, id) { const v = ((db.versions || {})[docId] || []).find((x) => x.id === Number(id)); return v ? clone(v) : null; },
+    async renameVersion(docId, id, name) { const v = ((db.versions || {})[docId] || []).find((x) => x.id === Number(id)); if (v) { v.name = name; persist(); } },
     async getHistory(docId, sheetId, addr, limit) {
       return (db.history[docId] || []).filter((h) => h.sheet_id === sheetId && h.addr === addr).slice(-limit).reverse().map(clone);
     },
@@ -111,6 +127,10 @@ function pgStore(url) {
       await q(`CREATE TABLE IF NOT EXISTS messages (
         id BIGSERIAL PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT NOT NULL, doc_id TEXT,
         text TEXT NOT NULL, ref JSONB, at TIMESTAMPTZ NOT NULL DEFAULT now(), read_at TIMESTAMPTZ)`);
+      await q(`CREATE TABLE IF NOT EXISTS doc_versions (
+        id BIGSERIAL PRIMARY KEY, doc_id TEXT NOT NULL REFERENCES docs(id) ON DELETE CASCADE,
+        at TIMESTAMPTZ NOT NULL DEFAULT now(), name TEXT NOT NULL DEFAULT '', by_name TEXT NOT NULL DEFAULT '', auto BOOLEAN NOT NULL DEFAULT false, data_gz BYTEA NOT NULL)`);
+      await q('CREATE INDEX IF NOT EXISTS doc_versions_doc ON doc_versions(doc_id, id DESC)');
       await q('CREATE INDEX IF NOT EXISTS messages_to ON messages(to_id, id DESC)');
       await q('CREATE INDEX IF NOT EXISTS messages_from ON messages(from_id, id DESC)');
     },
@@ -137,6 +157,10 @@ function pgStore(url) {
       return r.rows.map((m) => Object.assign(m, { id: Number(m.id) }));
     },
     async markRead(userId, fromId) { const r = await q('UPDATE messages SET read_at = now() WHERE to_id = $1 AND from_id = $2 AND read_at IS NULL', [userId, fromId]); return r.rowCount; },
+    async markRefDone(docId, req, done) {
+      const r = await q(`UPDATE messages SET ref = jsonb_set(ref, '{done}', $3::jsonb) WHERE doc_id = $1 AND ref->>'req' = $2 AND NOT (ref ? 'done') RETURNING id, from_id, to_id`, [docId, req, JSON.stringify(done)]);
+      return r.rows.map((m) => ({ id: Number(m.id), from_id: m.from_id, to_id: m.to_id }));
+    },
     async hasMessage(fromId, toId) { const r = await q('SELECT 1 FROM messages WHERE from_id = $1 AND to_id = $2 LIMIT 1', [fromId, toId]); return r.rows.length > 0; },
     async savePrefs(id, prefs) { await q('UPDATE users SET prefs = $2 WHERE id = $1', [id, JSON.stringify(prefs)]); },
     async createSession(hash, userId) { await q('INSERT INTO sessions (token, user_id) VALUES ($1, $2)', [hash, userId]); },
@@ -162,6 +186,24 @@ function pgStore(url) {
         SELECT $1, x.s, x.a, $2, $3, x.b, x.f FROM jsonb_to_recordset($4::jsonb) AS x(s text, a text, b text, f text)`,
       [docId, user.id, user.name, JSON.stringify(entries)]);
     },
+    async addVersion(docId, v) {
+      const r = await q('INSERT INTO doc_versions (doc_id, name, by_name, auto, data_gz) VALUES ($1, $2, $3, $4, $5) RETURNING id, at', [docId, v.name || '', v.by_name || '', !!v.auto, await gzip(JSON.stringify(v.data))]);
+      // guarda todas as versões com nome e as 50 automáticas mais recentes
+      await q(`DELETE FROM doc_versions WHERE doc_id = $1 AND auto AND name = '' AND id NOT IN (SELECT id FROM doc_versions WHERE doc_id = $1 AND auto AND name = '' ORDER BY id DESC LIMIT 50)`, [docId]);
+      return { id: Number(r.rows[0].id), at: r.rows[0].at };
+    },
+    async listVersions(docId) {
+      const r = await q('SELECT id, at, name, by_name, auto FROM doc_versions WHERE doc_id = $1 ORDER BY id DESC LIMIT 200', [docId]);
+      return r.rows.map((v) => Object.assign(v, { id: Number(v.id) }));
+    },
+    async getVersion(docId, id) {
+      const v = await row('SELECT id, at, name, by_name, auto, data_gz FROM doc_versions WHERE doc_id = $1 AND id = $2', [docId, Number(id)]);
+      if (!v) return null;
+      v.data = JSON.parse((await gunzip(v.data_gz)).toString('utf8'));
+      delete v.data_gz; v.id = Number(v.id);
+      return v;
+    },
+    async renameVersion(docId, id, name) { await q('UPDATE doc_versions SET name = $3 WHERE doc_id = $1 AND id = $2', [docId, Number(id), name]); },
     async getHistory(docId, sheetId, addr, limit) {
       const r = await q('SELECT user_id, user_name, at, before, after FROM cell_history WHERE doc_id = $1 AND sheet_id = $2 AND addr = $3 ORDER BY id DESC LIMIT $4', [docId, sheetId, addr, limit]);
       return r.rows;
