@@ -4,6 +4,9 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '04/11/2026', title: 'Enviar status: colunas com complemento no nome', items: [
+      ['Enviar status', 'Colunas como "CHEGADA NO TERMINAL / EADI" e "SAÍDA DO TERMINAL / EADI" passam a entrar na tabela — antes ficavam de fora porque o nome não batia exatamente. No e-mail elas aparecem com o nome curto (CHEGADA NO TERMINAL).'],
+    ] },
     { date: '04/11/2026', title: 'Enviar status agrupado por REFERENCIA', items: [
       ['Enviar status', 'As linhas selecionadas são agrupadas pela coluna REFERENCIA: cada referência vira um bloco, e o valor da referência é o assunto que você procura no e-mail.'],
       ['Enviar status', 'A tabela de cada bloco traz TODAS as linhas daquela referência, mesmo as que você não selecionou — é o status completo do processo. Dá para voltar ao comportamento antigo com "Só as linhas que eu selecionei".'],
