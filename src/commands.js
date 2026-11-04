@@ -410,6 +410,54 @@
       } }],
     });
   });
+  // Inserir › Informar críticos: cola/digita os containers, vê em que linhas e clientes estão e marca todos de uma vez
+  def('informCriticals', 'Informar críticos', () => {
+    const sh = App.sheet();
+    if (!App.canMarkCritical(sh)) return notify('Marcar container como crítico não está liberado para o seu setor. Peça a um administrador.');
+    const col = App.critCol(sh), cliCol = App.colByName ? App.colByName(sh, 'CLIENTE') : null;
+    const nrm = (t) => String(t || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    // índice: container → linhas
+    const index = new Map();
+    App.withReal(() => {
+      const used = App.usedRange(sh);
+      for (let r = 1; r <= used.maxR; r++) {
+        const k = nrm(App.raw(sh, r, col));
+        if (k.length < 4) continue;
+        if (!index.has(k)) index.set(k, []);
+        index.get(k).push(r);
+      }
+    });
+    let found = [];
+    const m = App.ui.modal({
+      title: 'Informar críticos', width: 'min(860px, 96vw)', cls: 'modal-tall ic-modal', enterSubmits: false,
+      body: `<p class="sp-hint">Cole ou digite os containers (um por linha, ou separados por espaço, vírgula ou ponto e vírgula). Ao lado aparecem as linhas e os clientes de cada um. Ao confirmar, todos os encontrados são marcados como críticos (coluna ${E.numToCol(col)}).</p>
+        <div class="ic-wrap"><textarea class="input ic-text" id="ic-text" placeholder="MSCU1234567&#10;TGHU7654321"></textarea><div class="ic-list" id="ic-list"></div></div>`,
+      buttons: [{ label: 'Cancelar' }, { label: 'Marcar como críticos', primary: true, action: () => {
+        const rows = [...new Set(found.flatMap((f) => f.rows))];
+        if (!rows.length) { notify('Nenhum dos containers informados foi encontrado na planilha.'); return false; }
+        const done = App.change('Informar críticos', () => App.withReal(() => {
+          for (const r of rows) { const a = E.addrToStr(r, col); sh.cells[a] = sh.cells[a] || { v: '' }; sh.cells[a].crit = true; }
+        }));
+        if (done === false) return false;
+        const miss = found.filter((f) => !f.rows.length).length;
+        notify(`${rows.length} ${rows.length === 1 ? 'linha marcada' : 'linhas marcadas'} como crítico${miss ? ` (${miss} ${miss === 1 ? 'container não encontrado' : 'containers não encontrados'})` : ''}.`);
+      } }],
+    });
+    const ta = m.el.querySelector('#ic-text'), list = m.el.querySelector('#ic-list');
+    const draw = () => {
+      const codes = [...new Set(ta.value.split(/[\s,;]+/).map(nrm).filter((x) => x.length >= 4))];
+      found = codes.map((k) => ({ k, rows: index.get(k) || [] }));
+      list.innerHTML = found.length ? `<table class="ic-table"><thead><tr><th>Container</th><th>Linhas</th><th>Cliente</th></tr></thead><tbody>${found.map((f) => {
+        const clients = cliCol ? [...new Set(App.withReal(() => f.rows.map((r) => String(App.cellInfo ? App.raw(sh, r, cliCol) : '')).filter(Boolean)))] : [];
+        const already = f.rows.length && f.rows.every((r) => (sh.cells[E.addrToStr(r, col)] || {}).crit);
+        return `<tr class="${f.rows.length ? '' : 'miss'}"><td><b>${App.esc(f.k)}</b>${already ? ' <i class="ic-tag">já crítico</i>' : ''}</td><td>${f.rows.length ? f.rows.join(', ') : 'não encontrado'}</td><td>${App.esc(clients.join(' · '))}</td></tr>`;
+      }).join('')}</tbody></table><p class="ic-sum">${found.filter((f) => f.rows.length).length} de ${found.length} encontrados</p>` : '<p class="sp-hint">Os containers aparecem aqui conforme você digita.</p>';
+    };
+    ta.oninput = draw;
+    ta.onkeydown = (e) => e.stopPropagation();
+    draw();
+    setTimeout(() => ta.focus(), 30);
+  });
   def('markCritical', 'Marcar container como crítico', (on) => {
     const sh = App.sheet(), R = App.selRect(), col = App.critCol(sh);
     if (!App.canMarkCritical(sh)) return notify('Marcar container como crítico não está liberado para o seu setor. Peça a um administrador.');

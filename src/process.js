@@ -7,7 +7,9 @@
   const notify = (m) => App.emit('notify', m);
 
   const PROC_FIELDS = ['DATA', 'ATENDENTE', 'MODALIDADE', 'DI/DTA', 'ARM', 'DEM', 'CLIENTE', 'REFERENCIA', 'BL', 'NAVIO', 'TERMINAL COLETA', 'ENTREGA', 'ENDEREÇO', 'ARMADOR',
-    'TERMINAL DE VAZIO', 'CIDADE DEPOT', 'DATA / HORA - DEPOT'];
+    'TERMINAL DE VAZIO', 'DATA / HORA - DEPOT'];
+  // campos que puxam da BASE GERAL (cliente com cidade e endereço; terminais com a cidade)
+  const BASE_KIND = { CLIENTE: 'cliente', 'TERMINAL COLETA': 'coleta', 'TERMINAL DE VAZIO': 'vazio' };
   const LOAD_FIELDS = ['CONTAINER', 'TIPO', 'VALORES', 'PESO', 'QTD', 'IMO'];
   const WIDE = new Set(['CLIENTE', 'ENDEREÇO', 'ENTREGA']);
   const HINT = { 'DATA': 'dd/mm/aaaa', 'DATA / HORA - DEPOT': 'dd/mm/aaaa hh:mm' };
@@ -96,13 +98,14 @@
       const dis = x.blocked ? ' disabled' : '';
       if (x.checkbox) return `<label class="pf-check"><input type="checkbox" id="${id}" data-f="${esc(f)}"${idx === undefined ? '' : ` data-i="${idx}"`}${dis}> Sim</label>`;
       let list = '';
-      if (x.items && x.items.length) {
+      const fromBase = BASE_KIND[f] && App.baseSuggest && App.baseSuggest(BASE_KIND[f], '', true);
+      if (x.items && x.items.length && !fromBase) {
         const lid = 'pl-' + norm(f);
         if (!lists.includes(lid)) lists.push(lid);
         list = ` list="${lid}"`;
       }
       const val = idx === undefined && defaults[f] && !x.blocked ? defaults[f] : '';
-      const ph = x.blocked ? x.blocked : x.items && x.items.length ? 'Digite para ver as opções' : HINT[f] || '';
+      const ph = x.blocked ? x.blocked : (x.items && x.items.length) || fromBase ? 'Digite para ver as opções' : HINT[f] || '';
       return `<input class="input" id="${id}" data-f="${esc(f)}"${idx === undefined ? '' : ` data-i="${idx}"`} value="${esc(val)}" placeholder="${esc(ph)}" autocomplete="off"${list}${dis}>`;
     };
     const colTag = (f) => (fi[f].c ? `<small class="pf-col">${E.numToCol(fi[f].c)}</small>` : '<small class="pf-col miss">?</small>');
@@ -159,6 +162,48 @@
     };
     el.querySelector('#pf-qtd').oninput = drawLoads;
     drawLoads();
+    // lista da BASE GERAL nos campos de cliente e terminais (igual ao menu suspenso da planilha)
+    const picked = {};
+    let pop = null, popOwner = null;
+    const closePop = (owner) => { if (pop && (!owner || owner === popOwner)) { pop.remove(); pop = null; popOwner = null; } };
+    const setField = (f, v) => { const i = el.querySelector(`.pf-grid [data-f="${CSS.escape(f)}"]`); if (i && !i.disabled && v) i.value = v; };
+    for (const f of Object.keys(BASE_KIND)) {
+      const inp = el.querySelector(`.pf-grid [data-f="${CSS.escape(f)}"]`);
+      if (!inp || inp.disabled || !App.baseSuggest || !App.baseSuggest(BASE_KIND[f], '', true)) continue;
+      let idx = 0, items = [];
+      const draw = (all) => {
+        items = App.baseSuggest(BASE_KIND[f], inp.value, all) || [];
+        closePop();
+        if (!items.length) return;
+        pop = document.createElement('div');
+        pop.className = 'pf-sug';
+        popOwner = inp;
+        pop.innerHTML = items.map((x, i) => `<div class="pf-sug-i${i === idx ? ' on' : ''}" data-i="${i}"><b>${esc(x.name)}</b><small>${esc(BASE_KIND[f] === 'cliente' ? [x.kind, x.city, x.addr].filter(Boolean).join(' · ') : (x.city ? 'Cidade: ' + x.city : ''))}</small></div>`).join('');
+        const r = inp.getBoundingClientRect();
+        pop.style.left = r.left + 'px'; pop.style.top = r.bottom + 2 + 'px'; pop.style.minWidth = Math.max(260, r.width) + 'px';
+        el.appendChild(pop);
+        pop.querySelectorAll('.pf-sug-i').forEach((it) => (it.onmousedown = (e) => { e.preventDefault(); choose(items[+it.dataset.i]); }));
+        const on = pop.querySelector('.on'); if (on) on.scrollIntoView({ block: 'nearest' });
+      };
+      const choose = (x) => {
+        if (!x) return;
+        inp.value = x.name;
+        picked[f] = x;
+        if (BASE_KIND[f] === 'cliente') { setField('ENTREGA', x.city); setField('ENDEREÇO', x.addr); }
+        closePop();
+      };
+      inp.addEventListener('focus', () => { idx = 0; draw(!inp.value); });
+      inp.addEventListener('input', () => { idx = 0; delete picked[f]; draw(false); });
+      inp.addEventListener('blur', () => setTimeout(() => closePop(inp), 120));
+      inp.addEventListener('keydown', (e) => {
+        if (!pop) return;
+        if (e.key === 'ArrowDown') { e.preventDefault(); idx = Math.min(items.length - 1, idx + 1); draw(!inp.value); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); idx = Math.max(0, idx - 1); draw(!inp.value); }
+        else if (e.key === 'Enter' || e.key === 'Tab') { if (items[idx]) { e.preventDefault(); choose(items[idx]); } }
+        else if (e.key === 'Escape') { e.stopPropagation(); closePop(); }
+      });
+    }
+    el.querySelector('.modal-body').addEventListener('scroll', closePop);
     const first = el.querySelector('.pf-grid input:not([disabled])');
     if (first) setTimeout(() => first.focus(), 30);
 
@@ -204,6 +249,10 @@
             }
           }
           for (const f of PROC_FIELDS) write(r, info.cols[f], proc[f], f);
+          for (const f of ['TERMINAL COLETA', 'TERMINAL DE VAZIO']) {
+            const pk = picked[f], c = info.cols[f];
+            if (pk && pk.city && c && !(fi[f] && fi[f].blocked) && proc[f] === pk.name) { const a = E.addrToStr(r, c); if (sh.cells[a]) sh.cells[a].city = pk.city; }
+          }
           for (const f of LOAD_FIELDS) write(r, info.cols[f], loads[i][f], f);
           if (info.st && !info.stBlocked) App.setRaw(sh, r, info.st, STATUS_VALUE);
         }

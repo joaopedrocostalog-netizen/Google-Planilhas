@@ -1098,7 +1098,7 @@
   // Os setores são executores: digitam as informações nas colunas liberadas. Todo o resto
   // (formatação, regras, estrutura, filtros, congelar, tamanho de linhas e colunas) é dos administradores,
   // e essas opções nem aparecem para eles.
-  const EXEC_OK = new Set(['insertProcess', 'escalarVeiculo', 'confirmarEscala', 'bloquearVeiculo', 'destravarVeiculo', 'pedirTroca', 'messages', 'undo', 'redo', 'cut', 'copy', 'paste', 'pasteValues', 'find', 'findReplace', 'clearValues',
+  const EXEC_OK = new Set(['insertProcess', 'informCriticals', 'sendStatus', 'escalarVeiculo', 'confirmarEscala', 'bloquearVeiculo', 'destravarVeiculo', 'pedirTroca', 'messages', 'undo', 'redo', 'cut', 'copy', 'paste', 'pasteValues', 'find', 'findReplace', 'clearValues',
     'zoom', 'toggleFormulaBar', 'toggleMenus', 'fullscreen', 'toggleGridlines', 'toggleFormulas', 'switchSheet', 'nextSheet', 'prevSheet',
     'selectAll', 'selectColumn', 'selectRow', 'insertDate', 'insertTime', 'insertDateTime', 'fillDown', 'fillRight',
     'print', 'download', 'openCloud', 'share', 'login', 'cellHistory', 'shortcuts', 'about', 'functionList', 'columnStats',

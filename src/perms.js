@@ -65,7 +65,8 @@
     if (p.c === cols.CAVALO) {
       if (truthy(b.lock) !== truthy(f.lock) && !inLock) return 'Somente o setor responsável pode bloquear ou destravar o veículo.';
       if (truthy(b.swap) && !truthy(f.swap) && !inLock) return 'Somente o setor responsável pode encerrar o pedido de troca (destravando o veículo).';
-      if ((b.esc || '') !== (f.esc || '') && !inEsc) return 'Somente o setor responsável pela escala pode escalar ou confirmar a escala.';
+      // qualquer um pode deixar "aguardando confirmação" (ao mexer no veículo fora do Escalar); confirmar é do setor da escala
+      if ((b.esc || '') !== (f.esc || '') && !inEsc && f.esc !== 'p') return 'Somente o setor responsável pela escala pode escalar ou confirmar a escala.';
     }
     if (lockedCol(cols, p.c)) {
       const cav = beforeOf(colName(cols.CAVALO) + p.r);

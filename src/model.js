@@ -212,6 +212,10 @@
         if (!fwd) { App.emit('change', {}); App.emit('notify', window.Perms.FORMAT_MSG); return false; }
       }
     }
+    // veículo preenchido fora do Escalar veículo (colar, digitar…): fica aguardando confirmação da escala
+    if (fwd && App.autoPendingEscala && !App._escalando && App.autoPendingEscala(fwd, inv)) {
+      [fwd, inv] = window.Patch.diffPair(before, JSON.parse(JSON.stringify(docView(), replacer)));
+    }
     // veículo bloqueado (escala): nem administradores trocam sem destravar antes
     if (fwd && App.lockViolation) {
       const lv = App.lockViolation(fwd, inv);

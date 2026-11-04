@@ -216,7 +216,9 @@
         });
       });
       const go = () => {
-        const done = App.change(ok ? 'Escalar veículo' : 'Escalar veículo (não confirmada)', () => App.withReal(() => {
+        App._escalando = true;
+        let done;
+        try { done = App.change(ok ? 'Escalar veículo' : 'Escalar veículo (não confirmada)', () => App.withReal(() => {
           rows.forEach((r, i) => {
             for (const f of FIELDS) {
               const c = tc[f];
@@ -229,7 +231,7 @@
             sh.cells[a].esc = ok ? 'ok' : 'p';
             delete sh.cells[a].swap;
           });
-        }));
+        })); } finally { App._escalando = false; }
         if (done === false) return;
         jornada(sh, rows, v, valueFor);
         notify(`Veículo ${v.CAVALO || ''} escalado ${rows.length === 2 ? `nas linhas ${rows[0]} e ${rows[1]}` : `na linha ${rows[0]}`}${ok ? '' : ' — escala NÃO confirmada (em vermelho até confirmar)'}.` +
@@ -307,7 +309,9 @@
     });
     const add = [firstTrip, thisTrip].filter((o) => !have.has(tripKey(o)));
     if (!add.length) return;
-    const done = App.change('2ª viagem (JORNADA)', () => App.withReal(() => {
+    App._escalando = true;
+    let done;
+    try { done = App.change('2ª viagem (JORNADA)', () => App.withReal(() => {
       let r = Math.max(1, App.usedRange(js).maxR) + 1;
       for (const values of add) {
         if (r > js.rows) js.rows = r + 50;
@@ -317,7 +321,7 @@
         }
         r++;
       }
-    }));
+    })); } finally { App._escalando = false; }
     if (done !== false) setTimeout(() => notify(`2ª viagem de ${v.MOTORISTA || 'motorista'} no dia ${keyLabel(day)} (a 1ª está na linha ${first}): as viagens foram registradas na aba JORNADA.`), 60);
   }
 
@@ -334,6 +338,37 @@
     if (!p || !lockedAt(sh, p.r, p.c)) return false;
     App.emit('lockedAttempt', { sheetId: sh.id, r: p.r, c: p.c });
     return true;
+  };
+  // usado por App.change: CAVALO, CARRETA, MOTORISTA, CPF ou CONTATO mudados fora do Escalar → aguardando confirmação
+  App.autoPendingEscala = (fwd, inv) => {
+    let changed = false;
+    for (const id in fwd.sheets || {}) {
+      const e = fwd.sheets[id];
+      if (!e.cells) continue;
+      const sh = doc.sheets.find((x) => x.id === id);
+      // abas de apoio (escala, jornada, base) não usam confirmação
+      if (!sh || ['ESCALAFROTA', 'JORNADA', 'BASEGERAL'].includes(norm(sh.name))) continue;
+      const tc = cols(sh);
+      if (!tc.CAVALO) continue;
+      const ic = (inv.sheets[id] && inv.sheets[id].cells) || {};
+      const rows = new Set();
+      for (const a in e.cells) {
+        const p = E.parseAddr(a);
+        if (!p || !window.Perms.lockedCol(tc, p.col) || p.row < firstRow(sh, tc.CAVALO)) continue;
+        const bv = ic[a] && ic[a].v !== undefined && ic[a].v !== null ? String(ic[a].v) : '';
+        const fv = e.cells[a] && e.cells[a].v !== undefined && e.cells[a].v !== null ? String(e.cells[a].v) : '';
+        if (bv !== fv && fv.trim()) rows.add(p.row);
+      }
+      for (const r of rows) {
+        const a = E.addrToStr(r, tc.CAVALO);
+        const cav = sh.cells[a];
+        if (cav && cav.esc === 'p') continue;
+        sh.cells[a] = cav || { v: '' };
+        sh.cells[a].esc = 'p';
+        changed = true;
+      }
+    }
+    return changed;
   };
   // usado por App.change: desfaz qualquer troca de valor nas células bloqueadas
   App.lockViolation = (fwd, inv) => {
@@ -487,6 +522,58 @@
     if (!list.length) return null;
     return list.filter((x) => match(x.name) || match(x.city)).sort((a, b) => (starts(b.name) - starts(a.name)) || a.name.localeCompare(b.name, 'pt-BR') || a.city.localeCompare(b.city, 'pt-BR'))
       .slice(0, all ? 300 : 30).map((x) => ({ show: x.name, desc: x.city ? 'Cidade: ' + x.city : '', props: x.city ? { city: x.city } : null }));
+  };
+  // ---------- Alertas por linha ----------
+  let colCache = { ver: -1 };
+  const colsOf = (sh) => {
+    if (colCache.ver !== baseVer || colCache.sh !== sh) {
+      const L = App.withReal(() => labels(sh));
+      colCache = { ver: baseVer, sh, chegada: L.indexOf('CHEGADANOCLIENTE'), arm: L.indexOf('ARM'), dem: L.indexOf('DEM') };
+    }
+    return colCache;
+  };
+  // container crítico e IMO só piscam até preencherem CHEGADA NO CLIENTE
+  App.rowArrived = (sh, si, r) => {
+    const c = colsOf(sh).chegada;
+    if (!(c > 0)) return false;
+    const v = App.value(si, r, c);
+    return v !== null && v !== undefined && String(v).trim() !== '';
+  };
+  // ARM e DEM (datas dd/mm): piscam em vermelho quando a data é hoje ou amanhã (vence hoje ou falta 1 dia)
+  const dayKeyOf = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  function ddmmKey(v) {
+    if (typeof v === 'number') return dateKey(v);
+    const m = /^\s*(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?\s*$/.exec(String(v === null || v === undefined ? '' : v));
+    if (!m) return '';
+    const now = new Date();
+    let y = m[3] ? (m[3].length === 2 ? 2000 + +m[3] : +m[3]) : now.getFullYear();
+    if (!m[3]) {
+      // sem ano: o ano que deixa a data mais perto de hoje (virada do ano)
+      const best = [y - 1, y, y + 1].map((yy) => [yy, Math.abs(new Date(yy, +m[2] - 1, +m[1]) - now)]).sort((a, b) => a[1] - b[1])[0];
+      y = best[0];
+    }
+    return `${y}-${pad(m[2])}-${pad(m[1])}`;
+  }
+  App.deadlineAlert = (sh, si, r, c) => {
+    const cc = colsOf(sh);
+    if (!(c > 0) || (c !== cc.arm && c !== cc.dem)) return false;
+    const k = ddmmKey(App.value(si, r, c));
+    if (!k) return false;
+    const now = new Date(), tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    return k === dayKeyOf(now) || k === dayKeyOf(tomorrow);
+  };
+
+  // listas da BASE GERAL para outros painéis (ex.: Incluir processo): 'cliente', 'coleta' ou 'vazio'
+  App.baseSuggest = (kind, typed, all) => {
+    const look = baseLookups();
+    if (!look.ok) return null;
+    const list = kind === 'cliente' ? look.clients : look[kind];
+    if (!list || !list.length) return null;
+    const q = all ? '' : fold(typed);
+    const starts = (t) => !q || fold(t).startsWith(q);
+    return list.filter((x) => !q || fold(x.name).includes(q) || (kind !== 'cliente' && fold(x.city).includes(q)))
+      .sort((a, b) => (starts(b.name) - starts(a.name)) || a.name.localeCompare(b.name, 'pt-BR') || String(a.city).localeCompare(String(b.city), 'pt-BR'))
+      .slice(0, 60);
   };
   // cidade do terminal: a escolhida na lista (guardada na célula) ou a(s) da BASE GERAL
   function terminalInfo(sh, kind, r, c) {
