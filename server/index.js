@@ -856,9 +856,16 @@ route('POST', '/api/docs/:id/mail/send', async (req, p) => {
 // Diagnóstico: descobre em qual host/porta o IMAP e o SMTP respondem (só administradores do sistema)
 route('GET', '/api/mail/diag', async (req) => {
   const user = await requireUser(req);
-  if (!(await isGlobalAdmin(user))) throw httpError(403, 'Somente administradores.');
   const q = new URL(req.url, 'http://x').searchParams;
   const hosts = String(q.get('hosts') || '').split(',').map((h) => h.trim()).filter(Boolean);
+  // testar hosts livremente é só do administrador do sistema; sem ?hosts qualquer administrador
+  // de alguma planilha pode conferir o que já está configurado aqui
+  if (hosts.length) { if (!(await isGlobalAdmin(user))) throw httpError(403, 'Somente administradores do sistema podem testar outros endereços.'); }
+  else if (!(await isGlobalAdmin(user))) {
+    const acls = await store.allDocAcls();
+    const ok = acls.some((d) => d.owner_id === user.id || (d.acl && (d.acl.members || []).some((m) => m.email === user.email && m.role === 'admin')));
+    if (!ok) throw httpError(403, 'Somente administradores.');
+  }
   const cfg = mail.config();
   const base = hosts.length ? hosts : [cfg.imapHost, cfg.smtpHost].filter(Boolean);
   const alvos = [];
