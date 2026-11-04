@@ -10,7 +10,8 @@
     'TERMINAL COLETA', 'DATA / HORA - COLETA', 'ENTREGA - 1', 'ENTREGA - 2', 'CHEGADA NO TERMINAL', 'SAÍDA DO TERMINAL', 'CHEGADA NO CLIENTE',
     'SAÍDA DO CLIENTE', 'STATUS', 'TERMINAL VAZIO', 'DATA / HORA - DEPOT'];
   const OPTIONAL = new Set(['ENTREGA - 2']); // só entra quando alguma linha tiver
-  const ALT = { 'ENTREGA - 1': ['ENTREGA'], 'DI / DTA': ['DI', 'DTA'], 'TERMINAL VAZIO': ['TERMINAL DE VAZIO'] };
+  const ALT = { 'ENTREGA - 1': ['ENTREGA'], 'DI / DTA': ['DI', 'DTA'], 'TERMINAL VAZIO': ['TERMINAL DE VAZIO'],
+    'CHEGADA NO TERMINAL': ['CHEGADA NO TERMINAL / EADI'], 'SAÍDA DO TERMINAL': ['SAÍDA DO TERMINAL / EADI'] };
   const norm = (s) => (window.Perms && window.Perms.normName ? window.Perms.normName(s) : String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''));
 
   function labelMap(sh) {
@@ -77,6 +78,8 @@
       for (const name of COLS) {
         let c = map.get(norm(name));
         if (!c) for (const alt of ALT[name] || []) { c = map.get(norm(alt)); if (c) break; }
+        // a coluna pode ter um complemento no nome ("CHEGADA NO TERMINAL / EADI"): aceita quem começa igual
+        if (!c) { const k = norm(name); if (k.length >= 12) for (const [nk, nc] of map) if (nk.startsWith(k)) { c = nc; break; } }
         if (!c || cols.some((x) => x.c === c) || (App.colBlocked && App.colBlocked(sh, c))) continue;
         if (OPTIONAL.has(name) && !allRows.some((r) => cellText(si, sh, r, c))) continue;
         cols.push({ name, c });
