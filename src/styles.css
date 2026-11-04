@@ -922,3 +922,27 @@ body.executor .doc-title { pointer-events: none; }
 .dtr-times .field { flex: 1; }
 .dtr-prev { font-size: 13px; font-weight: 600; color: var(--ink, #111); background: #f6f6f6; border-radius: 6px; padding: 6px 8px; text-align: center; }
 .dtr-btns { display: flex; justify-content: space-between; }
+.pf-sug { position: fixed; z-index: 2100; max-height: 280px; overflow-y: auto; background: #fff; border-radius: 8px; box-shadow: var(--shadow, 0 4px 16px rgba(0,0,0,.2)); padding: 4px 0; }
+.pf-sug-i { padding: 6px 12px; cursor: pointer; display: flex; flex-direction: column; }
+.pf-sug-i b { font-size: 13.5px; font-weight: 600; }
+.pf-sug-i small { font-size: 12px; color: #5f6368; }
+.pf-sug-i.on, .pf-sug-i:hover { background: var(--red-soft, #fde8ea); }
+/* informar críticos */
+.ic-modal .modal-body { display: flex; flex-direction: column; gap: 8px; }
+.ic-wrap { flex: 1; display: grid; grid-template-columns: 240px 1fr; gap: 12px; min-height: 0; }
+.ic-text { resize: none; height: 100%; min-height: 260px; font-family: ui-monospace, Menlo, monospace; font-size: 13px; text-transform: uppercase; }
+.ic-list { overflow: auto; border: 1px solid var(--line, #e3e3e3); border-radius: 8px; }
+.ic-list .sp-hint { padding: 10px; }
+.ic-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ic-table th { position: sticky; top: 0; background: #f6f6f6; text-align: left; padding: 6px 10px; font-size: 12px; }
+.ic-table td { padding: 6px 10px; border-top: 1px solid #f0f0f0; }
+.ic-table tr.miss td { color: #b06000; background: #fff8ec; }
+.ic-tag { font-style: normal; font-size: 10.5px; background: #fce8e6; color: #b3261e; border-radius: 8px; padding: 0 6px; }
+.ic-sum { margin: 6px 10px; font-size: 12px; color: #5f6368; }
+@media (max-width: 700px) { .ic-wrap { grid-template-columns: 1fr; } }
+/* enviar status */
+.st-modal .modal-body { display: flex; flex-direction: column; gap: 10px; }
+.st-msg { margin: 0; padding: 8px 12px; border-radius: 8px; font-size: 13.5px; background: #f6f6f6; }
+.st-msg.ok { background: #e6f4ea; color: #137333; font-weight: 600; }
+.st-msg.err { background: #fff4e5; color: #8a5300; }
+.st-box { overflow: auto; max-height: 60vh; background: #fff; padding: 6px; border: 1px dashed #dadce0; border-radius: 6px; }

@@ -209,10 +209,13 @@
     // container crítico: numa caixa de seleção só a caixa pisca (verde); nas demais células, a célula pisca em vermelho
     let crit = false;
     const isCb = !!(dv && dv.type === 'checkbox');
+    const isCbIm = (d, sht, col) => !!(d && d.type === 'checkbox' && App.isImoCol && App.isImoCol(sht, col));
+    // depois de preencher CHEGADA NO CLIENTE, crítico e IMO param de piscar
+    const arrived = (isCbIm(dv, sh, c) && App.cbIsOn(dv, raw, v)) || (cell && cell.crit) ? (App.rowArrived && App.rowArrived(sh, si, r)) : false;
     if (isCb) {
       // coluna IMO: a caixa marcada pisca em verde (marcação própria de cada linha)
-      if (App.isImoCol && App.isImoCol(sh, c) && App.cbIsOn(dv, raw, v)) { st.hasCrit = true; crit = Math.floor(Date.now() / 550) % 2 === 1; }
-    } else if (cell && cell.crit) {
+      if (!arrived && App.isImoCol && App.isImoCol(sh, c) && App.cbIsOn(dv, raw, v)) { st.hasCrit = true; crit = Math.floor(Date.now() / 550) % 2 === 1; }
+    } else if (cell && cell.crit && !arrived) {
       // container crítico: a célula pisca em vermelho
       st.hasCrit = true;
       crit = Math.floor(Date.now() / 550) % 2 === 1;
@@ -234,6 +237,11 @@
           } else if (cav.esc === 'p') s = Object.assign({}, s, { bg: '#d93025', color: '#ffffff' });
           if (cav.lock && vehicle) { locked = true; swap = !!cav.swap; }
         }
+      }
+      // ARM / DEM vencendo (hoje ou amanhã): pisca em vermelho
+      if (App.deadlineAlert && App.deadlineAlert(sh, si, r, c)) {
+        st.hasCrit = true;
+        s = Object.assign({}, s, Math.floor(Date.now() / 550) % 2 ? { bg: '#d93025', color: '#ffffff', b: true } : { bg: '#fce8e6', color: '#b3261e', b: true });
       }
       // FRETE obrigatório para cavalo de terceiro (fora da BASE GERAL): pisca até preencher
       if (App.freteAlert && App.freteAlert(sh, si, r, c)) {
@@ -1131,8 +1139,8 @@
         const grp = GROUP(h.r);
         if (grp) { App.toggleViewGroup(grp.key); return; }
         const info = App.cellInfo(h.r, h.c);
-        // clique na caixa de seleção
-        if (info.dv && info.dv.type === 'checkbox' && !e.shiftKey) {
+        // clique exatamente na caixa de seleção (clicar no resto da célula só seleciona)
+        if (info.dv && info.dv.type === 'checkbox' && !e.shiftKey && dvControlHit(info, cellRect(h.r, h.c), p.x, p.y)) {
           select(h.r, h.c, false, true);
           App.toggleCheckboxes([[h.r, h.c]]);
           return;
@@ -1145,8 +1153,9 @@
         }
         select(h.r, h.c, e.shiftKey, true);
         // lista suspensa
-        if (info.dv && info.dv.type === 'dtrange' && !e.shiftKey && !(e.ctrlKey || e.metaKey)) { App.emit('dtpicker', { r: h.r, c: h.c }); return; }
-        if (info.dv && (info.dv.type === 'list' || info.dv.type === 'range') && !e.shiftKey) {
+        // menus suspensos e calendário abrem só ao clicar na seta/ícone
+        if (info.dv && info.dv.type === 'dtrange' && !e.shiftKey && !(e.ctrlKey || e.metaKey) && dvControlHit(info, cellRect(h.r, h.c), p.x, p.y)) { App.emit('dtpicker', { r: h.r, c: h.c }); return; }
+        if (info.dv && (info.dv.type === 'list' || info.dv.type === 'range') && !e.shiftKey && !(e.ctrlKey || e.metaKey) && dvControlHit(info, cellRect(h.r, h.c), p.x, p.y)) {
           const rc = cellRect(h.r, h.c);
           App.emit('dropdown', { r: h.r, c: h.c, x: rc.x, y: rc.y + rc.h, w: rc.w });
           return;
@@ -1156,6 +1165,25 @@
         bindDrag();
       }
     }
+  }
+  // a seta do menu suspenso, a caixa de seleção ou o ícone do calendário estão sob o ponteiro?
+  function dvControlHit(info, rc, px, py) {
+    const z = st.z, pad = 3 * z, s = info.s || {}, d = info.dv;
+    if (!d) return false;
+    if (d.type === 'checkbox') {
+      const size = Math.round(12 * z);
+      const cx = s.al === 'l' ? rc.x + pad + size / 2 : s.al === 'r' ? rc.x + rc.w - pad - size / 2 : rc.x + rc.w / 2;
+      const cy = rc.y + rc.h / 2;
+      return Math.abs(px - cx) <= size / 2 + 3 * z && Math.abs(py - cy) <= size / 2 + 3 * z;
+    }
+    if (d.type === 'dtrange') return px >= rc.x + rc.w - 18 * z;
+    const arrow = 9 * z;
+    if (d.style === 'arrow' || info.text === '') return px >= rc.x + rc.w - pad - arrow - 6 * z;
+    ctx.save(); ctx.font = fontFor(s); const tw = ctx.measureText(info.text).width; ctx.restore();
+    const chipW = Math.min(rc.w - 2 * pad, tw + 26 * z);
+    const al = s.al === 'c' || s.al === 'r' ? s.al : 'l';
+    const cx = al === 'c' ? rc.x + (rc.w - chipW) / 2 : al === 'r' ? rc.x + rc.w - pad - chipW : rc.x + pad;
+    return px >= cx + chipW - 18 * z && px <= cx + chipW + 4 * z;
   }
   function selectCols(c1, c2) {
     const sh = App.sheet();
@@ -1361,7 +1389,8 @@
     if (st.drag) return;
     const p = pos(e);
     const h = hit(p.x, p.y);
-    scroller.style.cursor = h.area === 'cell' && GROUP(h.r) ? 'pointer' : h.area === 'colEdge' ? 'col-resize' : h.area === 'rowEdge' ? 'row-resize' : h.area === 'fill' ? 'crosshair'
+    const dvInfo = h.area === 'cell' && !GROUP(h.r) ? App.cellInfo(h.r, h.c) : null;
+    scroller.style.cursor = h.area === 'cell' && (GROUP(h.r) || (dvInfo && dvInfo.dv && dvControlHit(dvInfo, cellRect(h.r, h.c), p.x, p.y))) ? 'pointer' : h.area === 'colEdge' ? 'col-resize' : h.area === 'rowEdge' ? 'row-resize' : h.area === 'fill' ? 'crosshair'
       : h.area === 'colHdr' && App.views.has(App.sheet().id) ? 'grab'
       : h.area === 'colHdr' && App.canMoveRealCols && App.canMoveRealCols() && (() => { const R = App.selRect(); return R.r1 === 1 && R.r2 >= st.nR && h.c >= R.c1 && h.c <= R.c2; })() ? 'grab'
       : h.area === 'colHdr' || h.area === 'filterHdr' || h.area === 'colGroup' || h.area === 'rowHdr' || h.area === 'unhideCols' || h.area === 'unhideRows' || h.area === 'corner' ? 'pointer'

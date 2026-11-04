@@ -280,8 +280,8 @@
       { label: 'Ocultar menus', cmd: 'toggleMenus' },
       { label: 'Tela cheia', cmd: 'fullscreen' },
     ] },
-    { label: 'Inserir', items: () => (App.adminOnly && App.adminOnly() ? [{ label: 'Incluir processo', icon: 'plus', cmd: 'insertProcess' }] : [
-      { label: 'Incluir processo', icon: 'plus', cmd: 'insertProcess' }, '-',
+    { label: 'Inserir', items: () => (App.adminOnly && App.adminOnly() ? [{ label: 'Incluir processo', icon: 'plus', cmd: 'insertProcess' }, ...(App.canMarkCritical && App.canMarkCritical(App.sheet()) ? [{ label: 'Informar críticos', icon: 'star', cmd: 'informCriticals' }] : [])] : [
+      { label: 'Incluir processo', icon: 'plus', cmd: 'insertProcess' }, { label: 'Informar críticos', icon: 'star', cmd: 'informCriticals' }, '-',
       { label: 'Linhas', sub: () => [{ label: `Inserir ${plural(nRows(), 'linha', 'linhas')} acima`, cmd: 'insertRowsAbove' }, { label: `Inserir ${plural(nRows(), 'linha', 'linhas')} abaixo`, cmd: 'insertRowsBelow' }] },
       { label: 'Colunas', sub: () => [{ label: `Inserir ${plural(nCols(), 'coluna', 'colunas')} à esquerda`, cmd: 'insertColsLeft' }, { label: `Inserir ${plural(nCols(), 'coluna', 'colunas')} à direita`, cmd: 'insertColsRight' }] },
       { label: 'Página', cmd: 'newSheet' }, '-',
