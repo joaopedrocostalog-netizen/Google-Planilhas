@@ -1072,13 +1072,16 @@
         const what = h.before === null && h.after !== null ? `Adicionou ${val(h.after)}`
           : h.after === null ? `Excluiu ${val(h.before, 'old')}`
             : `Substituiu ${val(h.before, 'old')} por ${val(h.after)}`;
-        body = `<div class="hist-who">${App.avatarHtml({ id: h.uid, name: h.name, color: h.color, avatar: h.avatar })}<div><b>${esc(h.name)}</b><small>${esc(fmt(h.at))}</small></div></div><p class="hist-what">${what}</p>`;
+        body = `<div class="hist-who">${App.avatarHtml({ id: h.uid, name: h.name, color: h.color, avatar: h.avatar })}<div><b>${esc(h.name)}</b><small>${esc(fmt(h.at))}${h.ip ? ' · IP ' + esc(h.ip) : ''}</small></div></div><p class="hist-what">${what}</p>`;
       }
       card.innerHTML = `<div class="hist-head"><b>Histórico de edições · ${esc(a)}</b>
           <button class="icon-btn" data-n="1" title="Edição anterior"${i >= list.length - 1 ? ' disabled' : ''}>‹</button>
           <button class="icon-btn" data-n="-1" title="Próxima edição"${i <= 0 ? ' disabled' : ''}>›</button>
           <button class="icon-btn" data-x title="Fechar">${icon('close', 16)}</button></div>
-        ${body}${list.length > 1 ? `<p class="hist-count">Edição ${list.length - i} de ${list.length}</p>` : ''}`;
+        ${body}${list.length > 1 ? `<p class="hist-count">Edição ${list.length - i} de ${list.length}</p>` : ''}
+        ${list.length ? '<button class="btn btn-sm hist-all" data-all>Ver todas as edições</button>' : ''}`;
+      const all = card.querySelector('[data-all]');
+      if (all) all.onclick = () => { closeHistory(); allEdits(sh, a); };
       card.querySelectorAll('[data-n]').forEach((b) => (b.onclick = () => { i = Math.max(0, Math.min(list.length - 1, i + +b.dataset.n)); draw(); }));
       card.querySelector('[data-x]').onclick = closeHistory;
     };
@@ -1091,6 +1094,35 @@
     card.style.left = x + 'px'; card.style.top = y + 'px';
     setTimeout(() => document.addEventListener('mousedown', histOutside, true), 0);
   }
+  // todas as edições da célula numa tela só (com IP para administradores)
+  async function allEdits(sh, a) {
+    let list;
+    try { list = await api('GET', `/api/docs/${cloud.id}/history?sheet=${encodeURIComponent(sh.id)}&addr=${a}&all=1`); } catch (e) { return notify(e.message); }
+    const showIp = list.some((h) => h.ip !== undefined);
+    const fmt = (t) => new Date(t).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'medium' });
+    const cell = (v, cls) => (v === null || v === undefined ? '<i class="hist-none">(vazia)</i>' : `<span class="hist-val${cls ? ' ' + cls : ''}">${esc(String(v).slice(0, 500))}</span>`);
+    const m = App.ui.modal({
+      title: `Todas as edições · ${sh.name}!${a}`, width: 'min(1000px, 96vw)', cls: 'hist-all-modal', enterSubmits: false,
+      body: `<p class="sp-hint">${list.length} ${list.length === 1 ? 'edição' : 'edições'}, da mais recente para a mais antiga.${showIp ? ' O IP é o endereço da internet de onde a pessoa editou (o navegador não informa o endereço MAC do computador).' : ''}</p>
+        <input class="input" id="ha-q" placeholder="Filtrar por pessoa, valor ou IP" autocomplete="off">
+        <div class="ha-wrap"><table class="ha-table"><thead><tr><th>#</th><th>Quando</th><th>Quem</th>${showIp ? '<th>IP</th>' : ''}<th>Antes</th><th>Depois</th></tr></thead><tbody id="ha-body"></tbody></table></div>`,
+      buttons: [{ label: 'Fechar', primary: true }],
+    });
+    const q = m.el.querySelector('#ha-q'), tb = m.el.querySelector('#ha-body');
+    const draw = () => {
+      const k = q.value.trim().toLowerCase();
+      tb.innerHTML = list.map((h, i) => ({ h, n: list.length - i })).filter(({ h }) => !k || [h.name, h.before, h.after, h.ip].some((x) => String(x || '').toLowerCase().includes(k)))
+        .map(({ h, n }) => `<tr><td>${n}</td><td>${esc(fmt(h.at))}</td><td><span class="ha-who"><i style="background:${esc(h.color || '#5f6368')}"></i>${esc(h.name)}</span></td>${showIp ? `<td>${esc(h.ip || '—')}</td>` : ''}<td>${cell(h.before, 'old')}</td><td>${cell(h.after)}</td></tr>`).join('') || '<tr><td colspan="6" class="sp-hint">Nada encontrado.</td></tr>';
+    };
+    q.addEventListener('input', draw);
+    q.addEventListener('keydown', (e) => e.stopPropagation());
+    draw();
+  }
+  def('cellHistoryAll', 'Ver todas as edições da célula', () => {
+    if (!App.cloudMode) return cellHistory();
+    const sh = App.sheet(), rp = App.realCell ? App.realCell(App.sel.ar, App.sel.ac) : { r: App.sel.ar, c: App.sel.ac };
+    if (rp) allEdits(sh, App.E.addrToStr(rp.r, rp.c));
+  });
   App.on('selection', () => { if (histCard && !histCard.matches(':hover')) closeHistory(); });
   App.on('sheet', closeHistory);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeHistory(); });
@@ -1102,12 +1134,12 @@
   const EXEC_OK = new Set(['insertProcess', 'informCriticals', 'sendStatus', 'escalarVeiculo', 'confirmarEscala', 'bloquearVeiculo', 'destravarVeiculo', 'pedirTroca', 'messages', 'undo', 'redo', 'cut', 'copy', 'paste', 'pasteValues', 'find', 'findReplace', 'clearValues',
     'zoom', 'toggleFormulaBar', 'toggleMenus', 'fullscreen', 'toggleGridlines', 'toggleFormulas', 'switchSheet', 'nextSheet', 'prevSheet',
     'selectAll', 'selectColumn', 'selectRow', 'insertDate', 'insertTime', 'insertDateTime', 'fillDown', 'fillRight',
-    'print', 'download', 'openCloud', 'share', 'login', 'cellHistory', 'shortcuts', 'about', 'updates', 'functionList', 'columnStats',
+    'print', 'download', 'openCloud', 'share', 'login', 'cellHistory', 'cellHistoryAll', 'shortcuts', 'about', 'updates', 'functionList', 'columnStats',
     // barra de ferramentas liberada para os setores
     'menuSearch', 'paintFormat', 'format', 'customFormat', 'fmt_number', 'fmt_time', 'fmt_date', 'fmt_currency', 'fmt_percent', 'fmt_scientific',
     'decDec', 'decInc', 'fontFamily', 'fontSize', 'fontSizeInc', 'fontSizeDec', 'bold', 'italic', 'strike', 'textColor', 'fillColor',
     // visualizações de filtro (pessoais, não mudam a planilha dos outros)
-    'createFilterView', 'createGroupedView', 'closeFilterView', 'clearViewFilters', 'toggleOldRows', 'myView', 'markCritical']);
+    'createFilterView', 'createGroupedView', 'closeFilterView', 'clearViewFilters', 'toggleOldRows', 'myView', 'markCritical', 'saveFilterView', 'manageSavedViews', 'openSavedViews', 'alerts']);
   const COL_CMDS = new Set(['renameCol', 'insertColsLeft', 'insertColsRight', 'deleteCols', 'hideCols', 'unhideCols', 'resizeCols', 'autofitCols', 'addCols']);
   const EXEC_HIDDEN_MENUS = new Set(['Inserir', 'Formatar', 'Dados', 'Extensões', 'Administrador']);
   App.adminOnly = () => !!(App.cloudMode && cloud.perms && !cloud.perms.admin);
@@ -1164,7 +1196,7 @@
   App.on('contextItems', ({ hit, items }) => {
     if (hit.area === 'cell' || hit.area === 'fill') {
       const at = items.findIndex((x) => x && x.label === 'Ver mais ações da célula');
-      items.splice(at >= 0 ? at : items.length, 0, { label: 'Mostrar histórico de edições', icon: 'history', cmd: 'cellHistory' });
+      items.splice(at >= 0 ? at : items.length, 0, { label: 'Mostrar histórico de edições', icon: 'history', cmd: 'cellHistory' }, { label: 'Ver todas as edições da célula', cmd: 'cellHistoryAll' });
     }
   });
 
@@ -1264,6 +1296,7 @@
       { cmd: 'critSectors', t: 'Container crítico: quem pode marcar', d: 'Setores e pessoas que podem marcar e desmarcar container crítico (e usar Informar críticos).', s: Array.isArray(sh.critSectors) ? `${n(sh.critSectors)} escolhido(s)` : 'Todos podem marcar' },
       { cmd: 'escalaConfig', t: 'Escala de veículos: quem pode usar', d: 'Quem escala e confirma, quem bloqueia e destrava para troca, e quem vê os dados do cavalo.', s: `Escala: ${n(esc2.sectors)} · Bloqueio: ${n(esc2.lockSectors)} · Dados do cavalo: ${n(esc2.infoSectors)}` },
       { cmd: 'critColumn', arg: App.selRect().c1, t: 'Coluna do alerta de crítico', d: 'Coluna onde o alerta de container crítico pisca. Selecione a coluna antes de usar.', s: `Agora: coluna ${E.numToCol(App.critCol(sh))} · usar a coluna ${E.numToCol(App.selRect().c1)}` },
+      { cmd: 'alertRules', t: 'Regras de alerta (ALERTA)', d: 'O que aparece no botão ALERTA do cabeçalho: regras prontas (crítico, ARM/DEM, escala…) ou condições nas colunas, por setor ou pessoa.', s: `${doc.sheets.reduce((n, x) => n + (x.alertRules || []).length, 0)} regra(s)` },
       { cmd: 'dssLookup', t: 'Motoristas do DSS', d: 'Coluna do motorista e do CPF/CNPJ preenchidos com a lista do DSS.', s: sh.lookup ? `Motorista na coluna ${E.numToCol(sh.lookup.col)} · CPF na ${E.numToCol(sh.lookup.cpfCol)}` : 'Desativado nesta página' },
     ];
     const m = App.ui.modal({

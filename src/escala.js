@@ -351,6 +351,22 @@
       const tc = cols(sh);
       if (!tc.CAVALO) continue;
       const ic = (inv.sheets[id] && inv.sheets[id].cells) || {};
+      const valOf = (cells, a) => (cells[a] && cells[a].v !== undefined && cells[a].v !== null ? String(cells[a].v).trim() : '');
+      // placa (CAVALO) ou MOTORISTA apagados: apaga também CARRETA, MOTORISTA/CAVALO, CPF e CONTATO da linha
+      for (const a in e.cells) {
+        const p = E.parseAddr(a);
+        if (!p || (p.col !== tc.CAVALO && p.col !== tc.MOTORISTA) || p.row < firstRow(sh, tc.CAVALO)) continue;
+        if (!(a in ic) || !valOf(ic, a) || valOf(e.cells, a)) continue;
+        for (const c of [tc.CAVALO, tc.CARRETA, tc.MOTORISTA, tc.CPF, tc.CONTATO]) {
+          if (!c || (App.colReadonly && App.colReadonly(sh, c)) || (App.colBlocked && App.colBlocked(sh, c))) continue;
+          const b = E.addrToStr(p.row, c);
+          const x = sh.cells[b];
+          if (!x || x.v === undefined || x.v === null || x.v === '') continue;
+          x.v = '';
+          App.cleanup(sh, b);
+          changed = true;
+        }
+      }
       const rows = new Set(), cleared = new Set();
       for (const a in e.cells) {
         const p = E.parseAddr(a);
@@ -360,6 +376,8 @@
         if (bv !== fv && fv.trim()) rows.add(p.row);
         else if (bv !== fv) cleared.add(p.row);
       }
+      // linhas apagadas pelo cascade também contam
+      for (const a in e.cells) { const p = E.parseAddr(a); if (p && (p.col === tc.CAVALO || p.col === tc.MOTORISTA) && valOf(ic, a) && !valOf(e.cells, a)) cleared.add(p.row); }
       // veículo todo apagado (CAVALO, CARRETA e MOTORISTA vazios): a linha deixa de ter escala
       const has = (r, c) => c && String((sh.cells[E.addrToStr(r, c)] || {}).v || '').trim() !== '';
       for (const r of (canEscalar(sh) ? cleared : [])) {
@@ -377,6 +395,18 @@
       }
     }
     return changed;
+  };
+  // Com CAVALO preenchido, CARRETA, MOTORISTA, CPF e CONTATO são obrigatórios: os que faltam ficam destacados
+  App.vehicleMissing = (sh, si, r, c) => {
+    if (['ESCALAFROTA', 'JORNADA', 'BASEGERAL'].includes(norm(sh.name))) return false;
+    const tc = cols(sh);
+    if (!tc.CAVALO || ![tc.CARRETA, tc.MOTORISTA, tc.CPF, tc.CONTATO].includes(c) || r < firstRow(sh, tc.CAVALO)) return false;
+    const has = (col) => { const v = App.value(si, r, col); return v !== null && v !== undefined && String(v).trim() !== ''; };
+    return has(tc.CAVALO) && !has(c);
+  };
+  App.vehicleMissingFields = (sh, si, r) => {
+    const tc = cols(sh);
+    return ['CARRETA', 'MOTORISTA', 'CPF', 'CONTATO'].filter((f) => tc[f] && App.vehicleMissing(sh, si, r, tc[f]));
   };
   // usado por App.change: desfaz qualquer troca de valor nas células bloqueadas
   App.lockViolation = (fwd, inv) => {
@@ -710,6 +740,8 @@
     if (!canEscalar(sh)) return notify('Confirmar escala não está liberado para o seu setor.');
     const rows = rowsWith(sh, (x) => x.esc === 'p');
     if (!rows.length) return notify('Não há escala esperando confirmação na seleção.');
+    const falta = App.withReal(() => rows.map((r) => [r, App.vehicleMissingFields(sh, doc.active, r)]).filter((x) => x[1].length));
+    if (falta.length) return notify(`Preencha antes de confirmar: ${falta.map(([r, f]) => `linha ${r} (${f.join(', ')})`).join('; ')}.`);
     setFlags('Confirmar escala', rows, (x) => { x.esc = 'ok'; }, `Escala confirmada (${rowTxt(rows)}).`);
   }
   function bloquear() {

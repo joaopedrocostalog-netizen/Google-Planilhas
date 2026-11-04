@@ -499,7 +499,7 @@
         : dff.count || dff.added.length || dff.removed.length ? `Mudanças desde ${fmtWhen(v.prevAt)}: <b>${dff.count}</b> ${dff.count === 1 ? 'célula' : 'células'}${dff.added.length ? ` · ${dff.added.length} página(s) nova(s)` : ''}${dff.removed.length ? ` · página(s) excluída(s): ${dff.removed.map((x) => esc(x.name)).join(', ')}` : ''}`
           : `Sem mudanças nos valores desde ${fmtWhen(v.prevAt)}.`;
       $q('#vh-top').innerHTML = `<div class="vh-title"><b>${esc(meta.name || fmtWhen(meta.at))}</b><button class="icon-btn" id="vh-ren" title="Dar nome a esta versão">✎</button><small>${summary}</small></div>
-        <label class="inline vh-only"><input type="checkbox" id="vh-only"${onlyChanged ? ' checked' : ''}> Só linhas alteradas</label>
+        <label class="inline vh-only"${v.diff ? '' : ' title="Primeira versão: não há o que comparar"'}><input type="checkbox" id="vh-only"${onlyChanged && v.diff ? ' checked' : ''}${v.diff ? '' : ' disabled'}> Só linhas alteradas</label>
         ${pv.copy ? '<button class="btn btn-sm" id="vh-copy">Criar uma cópia</button>' : '<button class="btn btn-sm" id="vh-copy">Abrir como cópia</button>'}
         <button class="btn btn-primary btn-sm" id="vh-restore">Restaurar esta versão</button>`;
       $q('#vh-only').onchange = (e) => { onlyChanged = e.target.checked; drawSheet(); };
@@ -525,9 +525,10 @@
       const chRows = [...new Set(Object.keys(ch).map((a) => (E.parseAddr(a) || {}).row).filter(Boolean))].sort((a, b) => a - b);
       let rows;
       const LIMIT = 600;
-      if (onlyChanged && Object.keys(ch).length) rows = chRows.slice(0, LIMIT);
+      const filtering = onlyChanged && !!cur.diff;
+      if (filtering) rows = chRows.slice(0, LIMIT);
       else { rows = []; for (let r = 1; r <= Math.min(maxR, LIMIT); r++) rows.push(r); }
-      if (!hasNames && rows[0] !== 1) rows.unshift(1);
+      if (!hasNames && rows.length && rows[0] !== 1) rows.unshift(1);
       const colW = (c) => Math.max(50, Math.min(320, ((sh.colW || {})[c] || App.DEF_W || 100)));
       const txt = (x) => (x && x.v !== undefined && x.v !== null ? String(x.v) : '');
       let html = `<table class="vh-grid"><thead><tr><th class="vh-rh"></th>`;
@@ -548,9 +549,10 @@
         html += '</tr>';
       }
       html += '</tbody></table>';
-      const more = onlyChanged && Object.keys(ch).length ? (chRows.length > LIMIT ? `<p class="sp-hint">Mostrando ${LIMIT} de ${chRows.length} linhas alteradas.</p>` : '') : maxR > LIMIT ? `<p class="sp-hint">Mostrando as primeiras ${LIMIT} de ${maxR} linhas.</p>` : '';
-      const empty = onlyChanged && !Object.keys(ch).length && cur.diff ? '<p class="sp-hint">Nenhuma célula desta página mudou nesta versão. Desmarque "Só linhas alteradas" para ver a página inteira.</p>' : '';
-      box.innerHTML = `<div class="vh-legend"><span class="vh-ch">Alterado / preenchido</span><span class="vh-del"><s>Apagado</s></span><span class="sp-hint">Passe o mouse para ver o valor anterior.</span></div>${empty}${html}${more}`;
+      const more = filtering ? (chRows.length > LIMIT ? `<p class="sp-hint">Mostrando ${LIMIT} de ${chRows.length} linhas alteradas.</p>` : '') : maxR > LIMIT ? `<p class="sp-hint">Mostrando as primeiras ${LIMIT} de ${maxR} linhas.</p>` : '';
+      const empty = filtering && !chRows.length ? '<p class="sp-hint">Nenhuma célula desta página mudou nesta versão. Desmarque "Só linhas alteradas" para ver a página inteira.</p>' : '';
+      const first = !cur.diff ? '<p class="sp-hint">Esta é a primeira versão guardada: não há uma anterior para comparar, então a página aparece inteira.</p>' : '';
+      box.innerHTML = `<div class="vh-legend"><span class="vh-ch">Alterado / preenchido</span><span class="vh-del"><s>Apagado</s></span><span class="sp-hint">Passe o mouse para ver o valor anterior.</span></div>${first}${empty}${filtering && !chRows.length ? '' : html}${more}`;
     }
     function restore() {
       const meta = cur.meta;
