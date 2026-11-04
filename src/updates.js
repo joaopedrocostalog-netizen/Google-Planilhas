@@ -4,6 +4,11 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '04/11/2026', title: 'Enviar status agrupado por REFERENCIA', items: [
+      ['Enviar status', 'As linhas selecionadas são agrupadas pela coluna REFERENCIA: cada referência vira um bloco, e o valor da referência é o assunto que você procura no e-mail.'],
+      ['Enviar status', 'A tabela de cada bloco traz TODAS as linhas daquela referência, mesmo as que você não selecionou — é o status completo do processo. Dá para voltar ao comportamento antigo com "Só as linhas que eu selecionei".'],
+      ['Enviar status', 'Botão "Copiar assunto" (a referência) e "Copiar tabela" em cada bloco. Com uma referência só, a tabela continua sendo copiada sozinha ao abrir.'],
+    ] },
     { date: '04/11/2026', title: 'ALERTA, visualizações salvas, emojis no chat e IP no histórico', items: [
       ['ALERTA', 'Botão ALERTA no centro do cabeçalho: mostra tudo o que precisa de atenção, de acordo com as regras do administrador (Administrador › Regras de alerta). Cada regra pode valer para todos ou só para alguns setores/pessoas.'],
       ['Regras de alerta', 'Regras prontas (container crítico, ARM/DEM vencendo, escala aguardando confirmação, pedido de troca, PROG. duplicado, FRETE de terceiro, veículo incompleto) ou condições nas colunas (vazia, igual, contém, data de hoje, vence em N dias, repetida…).'],

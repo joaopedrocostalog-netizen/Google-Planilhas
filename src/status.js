@@ -1,4 +1,5 @@
-// Enviar status: com as linhas selecionadas, monta uma tabela pronta para colar no e-mail do cliente
+// Enviar status: agrupa as linhas selecionadas pela coluna REFERENCIA (cada referência = o assunto do e-mail)
+// e monta a tabela pronta para colar no corpo
 // (cabeçalho vermelho com letras pretas, maiúsculas e em negrito; tudo centralizado) e já copia.
 (function (App) {
   'use strict';
@@ -39,31 +40,71 @@
   const TH = 'background:#FF0000;color:#000000;font-weight:bold;text-align:center;vertical-align:middle;border:1px solid #000000;padding:3px 8px;white-space:nowrap;font-family:Calibri,Arial,sans-serif;font-size:11pt;';
   const TD = 'background:#FFFFFF;color:#000000;text-align:center;vertical-align:middle;border:1px solid #000000;padding:3px 8px;white-space:nowrap;font-family:Calibri,Arial,sans-serif;font-size:11pt;';
 
-  function build() {
+  // Monta um bloco por REFERENCIA: o valor da coluna REFERENCIA é o assunto do e-mail
+  // e a tabela leva todas as linhas daquela mesma referência (não só as selecionadas).
+  function build(opts) {
+    opts = opts || {};
     const sh = App.sheet(), si = doc.active;
-    const rows = selRows().filter((r) => r > 0);
-    if (!rows.length) return null;
+    const sel = selRows().filter((r) => r > 0);
+    if (!sel.length) return null;
     return App.withReal(() => {
       const map = labelMap(sh);
+      const named = !!Object.keys(sh.colNames || {}).length;
+      // sem nome nas colunas, a linha 1 é o cabeçalho e não entra na tabela
+      const picked = sel.filter((r) => !(r === 1 && !named));
+      if (!picked.length) return null;
+      const refC = map.get(norm('REFERENCIA')) || map.get(norm('REF'));
+      const refOf = (r) => cellText(si, sh, r, refC).trim();
+
+      const groups = [];
+      if (refC && !opts.selOnly) {
+        const used = App.usedRange(sh), first = named ? 1 : 2;
+        const byRef = new Map(), order = [];
+        for (const r of picked) {
+          const k = refOf(r);
+          if (!byRef.has(k)) { byRef.set(k, { ref: k, rows: [], sel: new Set() }); order.push(k); }
+          byRef.get(k).sel.add(r);
+        }
+        // junta todas as linhas da página que tenham a mesma referência
+        for (let r = first; r <= used.maxR; r++) { const k = refOf(r); if (k && byRef.has(k)) byRef.get(k).rows.push(r); }
+        for (const k of order) { const g = byRef.get(k); if (!g.rows.length) g.rows = [...g.sel].sort((x, y) => x - y); groups.push(g); }
+      } else {
+        groups.push({ ref: refC ? refOf(picked[0]) : '', rows: picked, sel: new Set(picked) });
+      }
+
+      const allRows = [...new Set(groups.reduce((a2, g) => a2.concat(g.rows), []))];
       const cols = [];
       for (const name of COLS) {
         let c = map.get(norm(name));
         if (!c) for (const alt of ALT[name] || []) { c = map.get(norm(alt)); if (c) break; }
         if (!c || cols.some((x) => x.c === c) || (App.colBlocked && App.colBlocked(sh, c))) continue;
-        if (OPTIONAL.has(name) && !rows.some((r) => cellText(si, sh, r, c))) continue;
+        if (OPTIONAL.has(name) && !allRows.some((r) => cellText(si, sh, r, c))) continue;
         cols.push({ name, c });
       }
-      // linhas de cabeçalho (sem nome de coluna, a linha 1 é cabeçalho) não entram
-      const data = rows.filter((r) => !(r === 1 && !Object.keys(sh.colNames || {}).length)).map((r) => cols.map((x) => cellText(si, sh, r, x.c)));
-      const html = `<table cellspacing="0" cellpadding="0" border="1" style="border-collapse:collapse;border:1px solid #000000;">`
-        + `<tr>${cols.map((x) => `<th bgcolor="#FF0000" style="${TH}">${esc(x.name.toUpperCase())}</th>`).join('')}</tr>`
-        + data.map((row) => `<tr>${row.map((v) => `<td align="center" valign="middle" style="${TD}">${esc(v)}</td>`).join('')}</tr>`).join('')
-        + '</table>';
-      const tsv = [cols.map((x) => x.name.toUpperCase()).join('\t')].concat(data.map((row) => row.join('\t'))).join('\n');
-      return { html, tsv, n: data.length, cols };
+      const tableOf = (rows) => {
+        const data = rows.map((r) => cols.map((x) => cellText(si, sh, r, x.c)));
+        const html = '<table cellspacing="0" cellpadding="0" border="1" style="border-collapse:collapse;border:1px solid #000000;">'
+          + `<tr>${cols.map((x) => `<th bgcolor="#FF0000" style="${TH}">${esc(x.name.toUpperCase())}</th>`).join('')}</tr>`
+          + data.map((row) => `<tr>${row.map((v) => `<td align="center" valign="middle" style="${TD}">${esc(v)}</td>`).join('')}</tr>`).join('')
+          + '</table>';
+        const tsv = [cols.map((x) => x.name.toUpperCase()).join('\t')].concat(data.map((row) => row.join('\t'))).join('\n');
+        return { html, tsv, n: data.length };
+      };
+      return { groups: groups.map((g) => Object.assign({ ref: g.ref, selN: g.sel.size }, tableOf(g.rows))), cols, hasRef: !!refC };
     });
   }
 
+  async function copyText(text) {
+    try { if (navigator.clipboard) { await navigator.clipboard.writeText(text); return true; } } catch (e) { /* tenta o jeito antigo */ }
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return ok;
+    } catch (e) { return false; }
+  }
   async function copy(t, box) {
     try {
       if (navigator.clipboard && window.ClipboardItem) {
@@ -83,17 +124,37 @@
   }
 
   function sendStatus() {
-    const t = build();
+    let selOnly = false;
+    let t = build({ selOnly });
     if (!t) return notify('Selecione as linhas para enviar o status.');
     if (!t.cols.length) return notify('Esta página não tem as colunas do status (DATA, CLIENTE, CONTAINER…).');
     const m = App.ui.modal({
-      title: `Enviar status — ${t.n} ${t.n === 1 ? 'linha' : 'linhas'}`, width: 'min(1300px, 97vw)', cls: 'st-modal', enterSubmits: false,
-      body: `<p class="st-msg" id="st-msg">Copiando…</p><div class="st-box" id="st-box">${t.html}</div>`,
-      buttons: [{ label: 'Fechar' }, { label: 'Copiar de novo', primary: true, action: (d) => { copy(t, d.querySelector('#st-box')).then((ok) => say(ok)); return false; } }],
+      title: 'Enviar status', width: 'min(1300px, 97vw)', cls: 'st-modal', enterSubmits: false,
+      body: '<p class="st-msg" id="st-msg">Copiando…</p><div id="st-wrap"></div>',
+      buttons: [{ label: 'Fechar' }],
     });
-    const msg = m.el.querySelector('#st-msg');
-    const say = (ok) => { msg.className = 'st-msg ' + (ok ? 'ok' : 'err'); msg.textContent = ok ? '✓ Copiado! É só colar no e-mail (Ctrl+V): a tabela vai com o mesmo layout.' : 'Não foi possível copiar sozinho. Clique em "Copiar de novo" ou selecione a tabela e use Ctrl+C.'; };
-    copy(t, m.el.querySelector('#st-box')).then(say);
+    const msg = m.el.querySelector('#st-msg'), wrap = m.el.querySelector('#st-wrap');
+    const say = (ok, what) => { msg.className = 'st-msg ' + (ok ? 'ok' : 'err'); msg.textContent = ok ? `✓ ${what} copiado! É só colar no e-mail (Ctrl+V): a tabela vai com o mesmo layout.` : 'Não foi possível copiar sozinho. Use o botão "Copiar tabela" ou selecione a tabela e tecle Ctrl+C.'; };
+    const draw = () => {
+      m.el.querySelector('.modal-head h2').textContent = t.hasRef && !selOnly
+        ? `Enviar status — ${t.groups.length} ${t.groups.length === 1 ? 'referência' : 'referências'}`
+        : `Enviar status — ${t.groups[0].n} ${t.groups[0].n === 1 ? 'linha' : 'linhas'}`;
+      wrap.innerHTML = `${t.hasRef ? `<label class="inline st-only"><input type="checkbox" id="st-sel"${selOnly ? ' checked' : ''}> Só as linhas que eu selecionei (sem juntar as outras da mesma referência)</label>` : ''}
+        ${t.groups.map((g, i) => `<section class="st-grp" data-i="${i}">
+          ${t.hasRef ? `<div class="st-gh"><span class="st-sub">Assunto a procurar no e-mail: <b>${esc(g.ref || '(sem referência)')}</b></span>
+            <small>${g.n} ${g.n === 1 ? 'linha' : 'linhas'}${!selOnly && g.n !== g.selN ? ` desta referência (${g.selN} ${g.selN === 1 ? 'selecionada' : 'selecionadas'})` : ''}</small>
+            ${g.ref ? `<button class="btn btn-sm" data-cs="${i}">Copiar assunto</button>` : ''}
+            <button class="btn btn-primary btn-sm" data-ct="${i}">Copiar tabela</button></div>` : ''}
+          <div class="st-box">${g.html}</div></section>`).join('')}`;
+      const sel = wrap.querySelector('#st-sel');
+      if (sel) sel.onchange = () => { selOnly = sel.checked; t = build({ selOnly }) || t; draw(); };
+      wrap.querySelectorAll('[data-ct]').forEach((b) => (b.onclick = () => { const i = +b.dataset.ct; copy(t.groups[i], wrap.querySelectorAll('.st-box')[i]).then((ok) => say(ok, 'Status')); }));
+      wrap.querySelectorAll('[data-cs]').forEach((b) => (b.onclick = () => copyText(t.groups[+b.dataset.cs].ref).then((ok) => say(ok, 'Assunto'))));
+    };
+    draw();
+    // uma referência só: já copia a tabela, como antes
+    if (t.groups.length === 1) copy(t.groups[0], wrap.querySelector('.st-box')).then((ok) => say(ok, 'Status'));
+    else msg.className = 'st-msg', msg.textContent = `${t.groups.length} referências selecionadas — cada uma vira um e-mail. Use "Copiar tabela" na que você for enviar.`;
   }
 
   App.on('contextItems', ({ hit, items }) => {
