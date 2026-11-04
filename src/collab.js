@@ -1297,6 +1297,7 @@
       { cmd: 'escalaConfig', t: 'Escala de veículos: quem pode usar', d: 'Quem escala e confirma, quem bloqueia e destrava para troca, e quem vê os dados do cavalo.', s: `Escala: ${n(esc2.sectors)} · Bloqueio: ${n(esc2.lockSectors)} · Dados do cavalo: ${n(esc2.infoSectors)}` },
       { cmd: 'critColumn', arg: App.selRect().c1, t: 'Coluna do alerta de crítico', d: 'Coluna onde o alerta de container crítico pisca. Selecione a coluna antes de usar.', s: `Agora: coluna ${E.numToCol(App.critCol(sh))} · usar a coluna ${E.numToCol(App.selRect().c1)}` },
       { cmd: 'alertRules', t: 'Regras de alerta (ALERTA)', d: 'O que aparece no botão ALERTA do cabeçalho: regras prontas (crítico, ARM/DEM, escala…) ou condições nas colunas, por setor ou pessoa.', s: `${doc.sheets.reduce((n, x) => n + (x.alertRules || []).length, 0)} regra(s)` },
+      { cmd: 'mailWho', t: 'Enviar status por e-mail: quem pode', d: 'Quem pode usar o botão "Enviar por e-mail" do Enviar status. O e-mail sai da conta configurada no servidor.', s: Array.isArray(sh.mailSectors) && sh.mailSectors.length ? `${sh.mailSectors.length} escolhido(s)` : 'Só administradores' },
       { cmd: 'dssLookup', t: 'Motoristas do DSS', d: 'Coluna do motorista e do CPF/CNPJ preenchidos com a lista do DSS.', s: sh.lookup ? `Motorista na coluna ${E.numToCol(sh.lookup.col)} · CPF na ${E.numToCol(sh.lookup.cpfCol)}` : 'Desativado nesta página' },
     ];
     const m = App.ui.modal({

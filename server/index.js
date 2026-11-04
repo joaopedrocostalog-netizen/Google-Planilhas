@@ -8,6 +8,7 @@ const { accept } = require('./ws');
 const createStore = require('./store');
 const Patch = require('../src/patch.js');
 const Perms = require('../src/perms.js');
+const mail = require('./mail.js');
 
 const ROOT = path.join(__dirname, '..');
 const PORT = Number(process.env.PORT) || 3000;
@@ -763,6 +764,112 @@ route('GET', '/api/docs/:id/history', async (req, p) => {
   const rows = await store.getHistory(room.id, sheet, addr, all ? 5000 : 100);
   // o IP só aparece para administradores
   return rows.map((h) => ({ at: h.at, uid: h.user_id || null, name: h.user_name || 'Alguém', color: colorFor(h.user_id || ''), avatar: avatarOf(h.user_id || ''), before: h.before, after: h.after, ip: perms.admin ? h.ip || null : undefined }));
+});
+
+// ---------- Enviar status por e-mail (IMAP para achar a conversa, SMTP para responder) ----------
+// Quem pode enviar: administradores e os setores/pessoas escolhidos pelo administrador (sheet.mailSectors).
+function canSendMail(perms, sheet) {
+  if (!perms) return false;
+  if (perms.admin) return true;
+  return Array.isArray(sheet && sheet.mailSectors) && Perms.inList(sheet.mailSectors, perms);
+}
+async function mailRoom(req, id, sheetId) {
+  const user = await requireUser(req);
+  const room = await getRoom(id);
+  if (!room) throw httpError(404, 'Planilha não encontrada.');
+  const perms = Perms.compute(permDoc(room), user);
+  if (!perms) throw httpError(403, 'Você não tem acesso a esta planilha.');
+  const sheet = (room.data.sheets || []).find((x) => x.id === sheetId) || null;
+  return { user, room, perms, sheet };
+}
+// endereços da resposta a todos: quem escreveu vai no Para; o resto vai em Cópia (menos a nossa própria conta)
+function replyAllOf(th, myAddr) {
+  const me = String(myAddr || '').toLowerCase();
+  const seen = new Set([me]);
+  const pick = (list) => String(list || '').split(',').map((a) => a.trim()).filter(Boolean).filter((a) => {
+    const m = /<([^>]+)>/.exec(a);
+    const addr = (m ? m[1] : a).trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+$/.test(addr) || seen.has(addr)) return false;
+    seen.add(addr);
+    return true;
+  });
+  const to = pick(th.from);
+  const cc = pick(th.to).concat(pick(th.cc));
+  return { to: to.join(', '), cc: cc.join(', ') };
+}
+route('GET', '/api/docs/:id/mail', async (req, p) => {
+  const q = new URL(req.url, 'http://x').searchParams;
+  const { perms, sheet } = await mailRoom(req, p.id, String(q.get('sheet') || ''));
+  const cfg = mail.config();
+  return {
+    configurado: mail.configured(),
+    podeEnviar: canSendMail(perms, sheet),
+    remetente: mail.configured() ? cfg.from : null,
+    quem: (sheet && sheet.mailSectors) || null,
+  };
+});
+// procura a conversa pelo assunto (a REFERENCIA) e devolve a mensagem mais recente
+route('POST', '/api/docs/:id/mail/find', async (req, p) => {
+  const b = await readBody(req, 4000);
+  const { perms, sheet } = await mailRoom(req, p.id, String(b.sheet || ''));
+  if (!canSendMail(perms, sheet)) throw httpError(403, 'Enviar status por e-mail não está liberado para você.');
+  if (!mail.configured()) throw httpError(503, 'O e-mail ainda não está configurado no servidor.');
+  const ref = String(b.ref || '').trim();
+  if (ref.length < 3) throw httpError(400, 'Referência muito curta para procurar no e-mail.');
+  const cfg = mail.config();
+  let th;
+  try { th = await mail.findThread(cfg, ref, b.mailbox ? String(b.mailbox) : 'INBOX'); }
+  catch (e) { throw httpError(502, 'Não foi possível falar com o servidor de e-mail: ' + e.message); }
+  if (!th) return { achou: false, ref };
+  return { achou: true, ref, thread: th, destinatarios: replyAllOf(th, cfg.from) };
+});
+const MAX_ANEXOS = Number(process.env.MAIL_MAX_ANEXOS || 20 * 1024 * 1024);
+route('POST', '/api/docs/:id/mail/send', async (req, p) => {
+  const b = await readBody(req, MAX_ANEXOS + 2 * 1024 * 1024);
+  const { user, perms, sheet, room } = await mailRoom(req, p.id, String(b.sheet || ''));
+  if (!canSendMail(perms, sheet)) throw httpError(403, 'Enviar status por e-mail não está liberado para você.');
+  if (!mail.configured()) throw httpError(503, 'O e-mail ainda não está configurado no servidor.');
+  if (rateLimited('mail:' + user.id)) throw httpError(429, 'Muitos e-mails em pouco tempo. Aguarde um minuto.');
+  const subject = String(b.subject || '').trim().slice(0, 300);
+  const to = String(b.to || '').trim(), cc = String(b.cc || '').trim();
+  if (!subject) throw httpError(400, 'O e-mail precisa de um assunto.');
+  if (!mail.addressesOf(to).length) throw httpError(400, 'O e-mail precisa de ao menos um destinatário.');
+  const anexos = (Array.isArray(b.attachments) ? b.attachments : []).slice(0, 20).map((a) => ({
+    name: String(a.name || 'anexo').slice(0, 150), type: String(a.type || 'application/octet-stream').slice(0, 100),
+    data: String(a.data || '').replace(/\s+/g, ''),
+  }));
+  const total = anexos.reduce((n, a) => n + a.data.length, 0);
+  if (total > MAX_ANEXOS) throw httpError(413, 'Os anexos somam mais do que o limite permitido.');
+  let r;
+  try {
+    r = await mail.send(mail.config(), {
+      to, cc, subject,
+      html: String(b.html || ''), text: String(b.text || ''),
+      inReplyTo: String(b.inReplyTo || '').trim() || null,
+      references: String(b.references || '').trim() || null,
+      attachments: anexos,
+    });
+  } catch (e) { throw httpError(502, 'O servidor de e-mail recusou o envio: ' + e.message); }
+  console.log(`[e-mail] ${user.email} enviou "${subject}" para ${r.rcpt.length} destinatário(s) na planilha ${room.id}`);
+  return { ok: true, messageId: r.messageId, destinatarios: r.rcpt, por: user.name };
+});
+// Diagnóstico: descobre em qual host/porta o IMAP e o SMTP respondem (só administradores do sistema)
+route('GET', '/api/mail/diag', async (req) => {
+  const user = await requireUser(req);
+  if (!(await isGlobalAdmin(user))) throw httpError(403, 'Somente administradores.');
+  const q = new URL(req.url, 'http://x').searchParams;
+  const hosts = String(q.get('hosts') || '').split(',').map((h) => h.trim()).filter(Boolean);
+  const cfg = mail.config();
+  const base = hosts.length ? hosts : [cfg.imapHost, cfg.smtpHost].filter(Boolean);
+  const alvos = [];
+  for (const h of [...new Set(base)]) {
+    alvos.push({ nome: 'IMAP TLS', host: h, port: 993, secure: true });
+    alvos.push({ nome: 'IMAP STARTTLS', host: h, port: 143, secure: false });
+    alvos.push({ nome: 'SMTP TLS', host: h, port: 465, secure: true });
+    alvos.push({ nome: 'SMTP STARTTLS', host: h, port: 587, secure: false });
+  }
+  if (!alvos.length) return { erro: 'Nenhum host para testar. Passe ?hosts=a.com,b.com' };
+  return { configurado: mail.configured(), testes: await mail.diag(cfg, alvos) };
 });
 
 // ---------- DSS: catálogo de motoristas (GET {DSS_BASE_URL}/listarMotoristas, Basic) ----------

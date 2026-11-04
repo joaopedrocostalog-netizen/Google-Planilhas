@@ -6,7 +6,7 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "test": "node tests/engine.test.js && node tests/server.test.js"
+    "test": "node tests/engine.test.js && node tests/server.test.js && node tests/mail.test.js"
   },
   "dependencies": {
     "pg": "^8.11.3"
