@@ -945,7 +945,16 @@ body.executor .doc-title { pointer-events: none; }
 .st-msg { margin: 0; padding: 8px 12px; border-radius: 8px; font-size: 13.5px; background: #f6f6f6; }
 .st-msg.ok { background: #e6f4ea; color: #137333; font-weight: 600; }
 .st-msg.err { background: #fff4e5; color: #8a5300; }
-.st-box { overflow: auto; max-height: 60vh; background: #fff; padding: 6px; border: 1px dashed #dadce0; border-radius: 6px; }
+.st-box { overflow: auto; max-height: 52vh; background: #fff; padding: 6px; border: 1px dashed #dadce0; border-radius: 6px; }
+#st-wrap { display: flex; flex-direction: column; gap: 10px; overflow: auto; }
+.st-only { font-size: 13px; color: #3c4043; }
+.st-grp { border: 1px solid #e3e3e3; border-radius: 10px; padding: 8px 10px; }
+.st-gh { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.st-sub { font-size: 13.5px; }
+.st-sub b { background: #fff0f0; border: 1px solid #f3b9b9; border-radius: 6px; padding: 1px 8px; font-size: 14px; letter-spacing: .3px; }
+.st-gh small { color: #5f6368; }
+.st-gh .btn { margin-left: auto; }
+.st-gh .btn + .btn { margin-left: 0; }
 .chat-unlock.wait { display: inline-block; background: #fef7e0; color: #b06000; cursor: default; font-weight: 500; }
 .ac-chip { display: inline-block; padding: 1px 10px; border-radius: 10px; font-weight: 600; }
 .who-group { margin: 4px 0 8px; }
