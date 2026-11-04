@@ -1068,3 +1068,15 @@ body.executor .doc-title { pointer-events: none; }
 .re-colors .sw { width: 22px; height: 22px; border-radius: 50%; border: 2px solid transparent; }
 .re-colors .sw.on { border-color: #1a1a1a; }
 .vb-save { font-weight: 600; }
+/* enviar status por e-mail */
+.ms-modal .modal-body { display: flex; flex-direction: column; gap: 8px; }
+.ms-step { margin: 0; padding: 8px 12px; border-radius: 8px; background: #f6f6f6; font-size: 13.5px; }
+.ms-step small { display: block; color: #5f6368; font-size: 12.5px; margin-top: 2px; }
+.ms-step.ok { background: #e6f4ea; color: #137333; }
+.ms-step.warn { background: #fff4e5; color: #8a5300; }
+.ms-step.err { background: #fce8e6; color: #b3261e; }
+.ms-anexos { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ms-anexo { display: inline-flex; align-items: center; gap: 5px; background: #f1f3f4; border-radius: 12px; padding: 2px 6px 2px 10px; font-size: 12.5px; }
+.ms-anexo i { color: #5f6368; font-style: normal; }
+.ms-anexo button { border: 0; background: transparent; font-size: 15px; line-height: 1; color: #5f6368; padding: 0 4px; }
+.ms-prev { max-height: 30vh; }

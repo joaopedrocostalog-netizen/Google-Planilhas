@@ -341,6 +341,7 @@
       { label: `Coluna do alerta de crítico (usar a coluna ${E.numToCol(sel.ac)})`, cmd: 'critColumn', arg: sel.ac },
       { label: 'Motoristas do DSS', cmd: 'dssLookup' }, '-',
       { label: 'Regras de alerta (ALERTA)', icon: 'bell', cmd: 'alertRules' },
+      { label: 'Enviar status por e-mail: quem pode', cmd: 'mailWho' },
     ] },
     { label: 'Extensões', items: () => [{ label: 'Nenhuma extensão instalada', disabled: true, need: 'extensions' }] },
     { label: 'Ajuda', items: () => [

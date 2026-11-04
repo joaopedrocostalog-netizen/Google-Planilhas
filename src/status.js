@@ -127,7 +127,7 @@
   }
 
   function sendStatus() {
-    let selOnly = false;
+    let selOnly = false, podeMail = false;
     let t = build({ selOnly });
     if (!t) return notify('Selecione as linhas para enviar o status.');
     if (!t.cols.length) return notify('Esta página não tem as colunas do status (DATA, CLIENTE, CONTAINER…).');
@@ -147,14 +147,18 @@
           ${t.hasRef ? `<div class="st-gh"><span class="st-sub">Assunto a procurar no e-mail: <b>${esc(g.ref || '(sem referência)')}</b></span>
             <small>${g.n} ${g.n === 1 ? 'linha' : 'linhas'}${!selOnly && g.n !== g.selN ? ` desta referência (${g.selN} ${g.selN === 1 ? 'selecionada' : 'selecionadas'})` : ''}</small>
             ${g.ref ? `<button class="btn btn-sm" data-cs="${i}">Copiar assunto</button>` : ''}
-            <button class="btn btn-primary btn-sm" data-ct="${i}">Copiar tabela</button></div>` : ''}
+            <button class="btn btn-sm" data-ct="${i}">Copiar tabela</button>
+            ${podeMail && g.ref ? `<button class="btn btn-primary btn-sm" data-cm="${i}">✉ Enviar por e-mail</button>` : ''}</div>` : ''}
           <div class="st-box">${g.html}</div></section>`).join('')}`;
       const sel = wrap.querySelector('#st-sel');
       if (sel) sel.onchange = () => { selOnly = sel.checked; t = build({ selOnly }) || t; draw(); };
       wrap.querySelectorAll('[data-ct]').forEach((b) => (b.onclick = () => { const i = +b.dataset.ct; copy(t.groups[i], wrap.querySelectorAll('.st-box')[i]).then((ok) => say(ok, 'Status')); }));
       wrap.querySelectorAll('[data-cs]').forEach((b) => (b.onclick = () => copyText(t.groups[+b.dataset.cs].ref).then((ok) => say(ok, 'Assunto'))));
+      wrap.querySelectorAll('[data-cm]').forEach((b) => (b.onclick = () => App.mailSend(t.groups[+b.dataset.cm])));
     };
     draw();
+    // o envio por e-mail depende do servidor: aparece assim que a resposta chega
+    if (App.mailInfo) App.mailInfo(App.sheet()).then((x) => { if (x && x.configurado && x.podeEnviar && m.el.isConnected) { podeMail = true; draw(); } }).catch(() => {});
     // uma referência só: já copia a tabela, como antes
     if (t.groups.length === 1) copy(t.groups[0], wrap.querySelector('.st-box')).then((ok) => say(ok, 'Status'));
     else msg.className = 'st-msg', msg.textContent = `${t.groups.length} referências selecionadas — cada uma vira um e-mail. Use "Copiar tabela" na que você for enviar.`;

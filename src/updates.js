@@ -4,6 +4,13 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '04/11/2026', title: 'Enviar status por e-mail, direto da planilha', items: [
+      ['Enviar status', 'Botão "✉ Enviar por e-mail" em cada referência. A planilha procura no e-mail a conversa com aquela REFERENCIA no assunto, monta o responder a todos com a tabela no corpo e envia.'],
+      ['Enviar status', 'Antes de enviar aparece uma tela com a conversa encontrada, o assunto, o Para e a Cópia (todos editáveis), a mensagem de abertura e a prévia da tabela. Nada sai sem você confirmar.'],
+      ['Anexos', 'Dá para anexar arquivos do seu computador na mesma tela, até 18 MB por arquivo.'],
+      ['Sem conversa', 'Se nenhuma mensagem tiver aquela referência no assunto, dá para enviar como e-mail novo, com o assunto STATUS - REFERENCIA: ...'],
+      ['Administrador', 'Administrador › "Enviar status por e-mail: quem pode" escolhe os setores e pessoas liberados.'],
+    ] },
     { date: '04/11/2026', title: 'Enviar status: colunas com complemento no nome', items: [
       ['Enviar status', 'Colunas como "CHEGADA NO TERMINAL / EADI" e "SAÍDA DO TERMINAL / EADI" passam a entrar na tabela — antes ficavam de fora porque o nome não batia exatamente. No e-mail elas aparecem com o nome curto (CHEGADA NO TERMINAL).'],
     ] },
