@@ -125,7 +125,7 @@
     }
     const manage = admin; // a estrutura da planilha é só dos administradores
     return {
-      admin, owner, manage, viaLink,
+      admin, owner, manage, viaLink, userId: user.id || null,
       role: admin ? 'admin' : cap === 'view' ? 'viewer' : 'editor',
       sectorId: sector ? sector.id : null,
       sectorName: sector ? sector.name : null,
@@ -259,7 +259,13 @@
       if (e.removed) return 'Somente administradores podem excluir páginas.';
       if (!sheetVisible(perms, id)) return 'Você não tem acesso a esta página.';
       if (e.props) {
-        const keys = Object.keys(e.props);
+        let keys = Object.keys(e.props);
+        // visualizações de filtro compartilhadas: qualquer pessoa salva ou apaga as suas; as dos outros não mudam
+        if (keys.includes('sharedViews')) {
+          const err = sharedViewsCheck(perms, sheet, e.props.sharedViews);
+          if (err) return err;
+          keys = keys.filter((k) => k !== 'sharedViews');
+        }
         if (keys.length) {
           if ('cols' in e.props || 'colW' in e.props || 'hiddenCols' in e.props) return COLS_MSG;
           const k = keys.find((x) => PROP_MSG[x]);
@@ -292,6 +298,16 @@
     return null;
   }
 
+  function sharedViewsCheck(perms, sheet, list) {
+    if (list !== null && list !== undefined && !Array.isArray(list)) return 'Visualizações inválidas.';
+    if (JSON.stringify(list || []).length > 200000) return 'Visualizações salvas demais nesta página.';
+    const mine = (x) => x && x.by && x.by === perms.userId;
+    const before = ((sheet && sheet.sharedViews) || []).filter((x) => !mine(x));
+    const after = (list || []).filter((x) => !mine(x));
+    if (stable(before) !== stable(after)) return 'Você só pode salvar ou apagar as suas próprias visualizações compartilhadas.';
+    if ((list || []).some((x) => !x || typeof x.name !== 'string' || !x.v || typeof x.v !== 'object')) return 'Visualizações inválidas.';
+    return null;
+  }
   // Esconde o conteúdo das células de colunas ocultas (a célula vira um marcador vazio)
   const MASK = { _h: 1 };
   function maskCells(cells, perms, sheetId) {

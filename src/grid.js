@@ -243,6 +243,8 @@
         st.hasCrit = true;
         s = Object.assign({}, s, Math.floor(Date.now() / 550) % 2 ? { bg: '#d93025', color: '#ffffff', b: true } : { bg: '#fce8e6', color: '#b3261e', b: true });
       }
+      // veículo preenchido sem CARRETA, MOTORISTA, CPF ou CONTATO: campo obrigatório em laranja
+      if (App.vehicleMissing && App.vehicleMissing(sh, si, r, c)) s = Object.assign({}, s, { bg: '#ffd8a8', color: '#8a3c00', b: true });
       // PROG. repetido em outra linha: fica roxo com o texto em destaque até corrigir
       if (App.progDuplicates && App.progDuplicates(sh, si, r, c)) s = Object.assign({}, s, { bg: '#e9d5ff', color: '#6b21a8', b: true });
       // FRETE obrigatório para cavalo de terceiro (fora da BASE GERAL): pisca até preencher
@@ -1430,7 +1432,7 @@
     scroller.addEventListener('mousedown', onDown);
     scroller.addEventListener('dblclick', onDblClick);
     scroller.addEventListener('mousemove', onHover);
-    scroller.addEventListener('mouseleave', () => { clearTimeout(hoverTimer); hoverKey = null; });
+    scroller.addEventListener('mouseleave', () => { clearTimeout(hoverTimer); hoverKey = null; App.emit('hover', null); });
     scroller.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       const p = pos(e);

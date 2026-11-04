@@ -52,6 +52,7 @@
     note: P('M5 4h14v11l-5 5H5zM14 20v-5h5'),
     lock: P('M7 11V8a5 5 0 0 1 10 0v3M5.5 11h13v9.5h-13z'),
     history: P('M4 12a8 8 0 1 0 2.3-5.6M4 4v4h4M12 7.5V12l3 2'),
+    bell: P('M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15zM10 20a2 2 0 0 0 4 0'),
     star: P('m12 4 2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16.4l-4.8 2.5.9-5.4-3.9-3.8 5.4-.8z'),
     cloud: P('M7 18h10a4 4 0 0 0 .5-8 6 6 0 0 0-11.5 1.5A3.3 3.3 0 0 0 7 18z'),
     checkbox: P('M5 5h14v14H5zM8.5 12l2.5 2.5 4.5-5'),
@@ -338,7 +339,8 @@
       { label: 'Container crítico: quem pode marcar', cmd: 'critSectors' },
       { label: 'Escala de veículos: quem pode usar', cmd: 'escalaConfig' },
       { label: `Coluna do alerta de crítico (usar a coluna ${E.numToCol(sel.ac)})`, cmd: 'critColumn', arg: sel.ac },
-      { label: 'Motoristas do DSS', cmd: 'dssLookup' },
+      { label: 'Motoristas do DSS', cmd: 'dssLookup' }, '-',
+      { label: 'Regras de alerta (ALERTA)', icon: 'bell', cmd: 'alertRules' },
     ] },
     { label: 'Extensões', items: () => [{ label: 'Nenhuma extensão instalada', disabled: true, need: 'extensions' }] },
     { label: 'Ajuda', items: () => [

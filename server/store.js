@@ -52,7 +52,7 @@ function memoryStore(file) {
     async addHistory(docId, user, entries) {
       const list = db.history[docId] || (db.history[docId] = []);
       const at = new Date().toISOString();
-      for (const e of entries) list.push({ sheet_id: e.s, addr: e.a, user_id: user.id, user_name: user.name, at, before: e.b, after: e.f });
+      for (const e of entries) list.push({ sheet_id: e.s, addr: e.a, user_id: user.id, user_name: user.name, ip: user.ip || null, at, before: e.b, after: e.f });
       if (list.length > 20000) list.splice(0, list.length - 20000);
       persist();
     },
@@ -124,6 +124,7 @@ function pgStore(url) {
         sheet_id TEXT NOT NULL, addr TEXT NOT NULL, user_id TEXT, user_name TEXT,
         at TIMESTAMPTZ NOT NULL DEFAULT now(), before TEXT, after TEXT)`);
       await q('CREATE INDEX IF NOT EXISTS cell_history_cell ON cell_history(doc_id, sheet_id, addr, id DESC)');
+      await q('ALTER TABLE cell_history ADD COLUMN IF NOT EXISTS ip TEXT');
       await q(`CREATE TABLE IF NOT EXISTS messages (
         id BIGSERIAL PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT NOT NULL, doc_id TEXT,
         text TEXT NOT NULL, ref JSONB, at TIMESTAMPTZ NOT NULL DEFAULT now(), read_at TIMESTAMPTZ)`);
@@ -182,9 +183,9 @@ function pgStore(url) {
     async saveAcl(id, acl) { await q('UPDATE docs SET acl = $2, updated_at = now() WHERE id = $1', [id, JSON.stringify(acl)]); },
     async deleteDoc(id) { await q('DELETE FROM docs WHERE id = $1', [id]); },
     async addHistory(docId, user, entries) {
-      await q(`INSERT INTO cell_history (doc_id, sheet_id, addr, user_id, user_name, before, after)
-        SELECT $1, x.s, x.a, $2, $3, x.b, x.f FROM jsonb_to_recordset($4::jsonb) AS x(s text, a text, b text, f text)`,
-      [docId, user.id, user.name, JSON.stringify(entries)]);
+      await q(`INSERT INTO cell_history (doc_id, sheet_id, addr, user_id, user_name, ip, before, after)
+        SELECT $1, x.s, x.a, $2, $3, $5, x.b, x.f FROM jsonb_to_recordset($4::jsonb) AS x(s text, a text, b text, f text)`,
+      [docId, user.id, user.name, JSON.stringify(entries), user.ip || null]);
     },
     async addVersion(docId, v) {
       const r = await q('INSERT INTO doc_versions (doc_id, name, by_name, auto, data_gz) VALUES ($1, $2, $3, $4, $5) RETURNING id, at', [docId, v.name || '', v.by_name || '', !!v.auto, await gzip(JSON.stringify(v.data))]);
@@ -205,7 +206,7 @@ function pgStore(url) {
     },
     async renameVersion(docId, id, name) { await q('UPDATE doc_versions SET name = $3 WHERE doc_id = $1 AND id = $2', [docId, Number(id), name]); },
     async getHistory(docId, sheetId, addr, limit) {
-      const r = await q('SELECT user_id, user_name, at, before, after FROM cell_history WHERE doc_id = $1 AND sheet_id = $2 AND addr = $3 ORDER BY id DESC LIMIT $4', [docId, sheetId, addr, limit]);
+      const r = await q('SELECT user_id, user_name, ip, at, before, after FROM cell_history WHERE doc_id = $1 AND sheet_id = $2 AND addr = $3 ORDER BY id DESC LIMIT $4', [docId, sheetId, addr, limit]);
       return r.rows;
     },
   };

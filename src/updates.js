@@ -4,6 +4,16 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '04/11/2026', title: 'ALERTA, visualizações salvas, emojis no chat e IP no histórico', items: [
+      ['ALERTA', 'Botão ALERTA no centro do cabeçalho: mostra tudo o que precisa de atenção, de acordo com as regras do administrador (Administrador › Regras de alerta). Cada regra pode valer para todos ou só para alguns setores/pessoas.'],
+      ['Regras de alerta', 'Regras prontas (container crítico, ARM/DEM vencendo, escala aguardando confirmação, pedido de troca, PROG. duplicado, FRETE de terceiro, veículo incompleto) ou condições nas colunas (vazia, igual, contém, data de hoje, vence em N dias, repetida…).'],
+      ['Visualizações', 'Salvar a visualização com filtro com um nome, só para você ou para todos da planilha; qualquer pessoa abre as compartilhadas em Visualizações salvas.'],
+      ['Chat', 'Emojis e figurinhas (Ok!, A caminho, Urgente, Feito…) no botão 😊 da conversa.'],
+      ['Histórico da célula', 'Mostra o IP de onde a pessoa editou (para administradores) e tem "Ver todas as edições" numa tela só, com busca.'],
+      ['Veículo', 'Apagar a placa (CAVALO) ou o MOTORISTA apaga junto CARRETA, CPF e CONTATO. Com CAVALO preenchido, os outros campos ficam em laranja até serem preenchidos, e a escala só é confirmada com tudo preenchido.'],
+      ['Avisos', 'A dica de PROG. duplicado (e as demais dicas) fica na tela enquanto o mouse estiver sobre a célula.'],
+      ['Histórico de versões', '"Só linhas alteradas" mostra apenas o que mudou.'],
+    ] },
     { date: '04/11/2026', title: 'Permissões num lugar só, histórico de versões com prévia e correções', items: [
       ['Menus', 'Os itens dentro dos submenus (ex.: Formatar › Alinhamento › Centro) voltaram a funcionar ao clicar; Recortar e Copiar pelo menu Editar também.'],
       ['Administrador', 'Novo menu Administrador e o painel "Controle do administrador": todas as opções de quem pode ver, editar ou usar cada função ficam ali, e não mais no botão direito.'],

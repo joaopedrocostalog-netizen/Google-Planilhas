@@ -193,6 +193,8 @@
       <button class="vb-btn" id="vb-colorder" title="Segure o cabeçalho de uma coluna e arraste, ou escolha a ordem numa lista">${icon('columns', 16)} Ordem das colunas</button>
       ${v.order && v.order.length ? '<button class="vb-btn" id="vb-cols">Restaurar ordem</button>' : '<span class="vb-note">ou segure o cabeçalho da coluna e arraste. Só você vê.</span>'}
       ${nFilters ? `<button class="vb-btn" id="vb-clear">Limpar filtros (${nFilters})</button>` : ''}
+      <button class="vb-btn vb-save" id="vb-save" title="Guardar esta visualização com um nome (só para você ou para todos)">💾 Salvar visualização</button>
+      <button class="vb-btn" id="vb-saved" title="Abrir uma visualização salva">📂 Salvas${savedCount(sh) ? ` (${savedCount(sh)})` : ''}</button>
       <button class="vb-x" id="vb-close" title="Fechar visualização" aria-label="Fechar visualização">${icon('close', 18)}</button>`;
     bar.hidden = false;
     bar.querySelector('#vb-close').onclick = () => App.run('closeFilterView');
@@ -200,6 +202,8 @@
     if (q('#vb-clear')) q('#vb-clear').onclick = () => App.run('clearViewFilters');
     if (q('#vb-cols')) q('#vb-cols').onclick = () => { v.order = []; App.setView(sh, v); };
     q('#vb-colorder').onclick = colOrderDialog;
+    q('#vb-save').onclick = () => App.run('saveFilterView');
+    q('#vb-saved').onclick = (e) => App.ui.menuPopup(e.currentTarget, savedItems(sh));
     q('#vb-group').onchange = (e) => { const c = +e.target.value; if (c) create('group', c); };
     bar.querySelectorAll('[data-ungroup]').forEach((b) => (b.onclick = () => { v.groups = groups.filter((c) => c !== +b.dataset.ungroup); v.collapsed = []; App.setView(sh, v); }));
     q('#vb-sort').onchange = (e) => { const c = +e.target.value; v.sort = c ? { col: c, order: (v.sort && v.sort.col === c && v.sort.order) || [] } : null; App.setView(sh, v); };
@@ -285,7 +289,7 @@
     'fmt_number', 'fmt_time', 'fmt_date', 'fmt_currency', 'fmt_percent', 'fmt_scientific', 'paintFormat', 'alignLeft', 'alignCenter', 'alignRight', 'valignTop', 'valignMiddle', 'valignBottom',
     'wrapOverflow', 'wrapWrap', 'wrapClip', 'insertDate', 'insertTime', 'insertDateTime', 'markCritical', 'cellHistory', 'zoom', 'toggleGridlines', 'toggleFormulas', 'toggleFormulaBar',
     'toggleMenus', 'fullscreen', 'selectAll', 'selectColumn', 'selectRow', 'switchSheet', 'nextSheet', 'prevSheet', 'openCloud', 'share', 'login', 'shortcuts', 'about',
-    'functionList', 'menuSearch', 'createFilterView', 'createGroupedView', 'closeFilterView', 'clearViewFilters', 'toggleOldRows', 'myView', 'viewAs', 'dssLookup', 'messages', 'insertProcess', 'informCriticals', 'sendStatus', 'sheetColor', 'escalarVeiculo', 'confirmarEscala', 'bloquearVeiculo', 'destravarVeiculo', 'pedirTroca']);
+    'functionList', 'menuSearch', 'createFilterView', 'createGroupedView', 'closeFilterView', 'clearViewFilters', 'toggleOldRows', 'myView', 'viewAs', 'saveFilterView', 'manageSavedViews', 'openSavedViews', 'cellHistoryAll', 'alerts', 'alertRules', 'updates', 'versionHistory', 'dssLookup', 'messages', 'insertProcess', 'informCriticals', 'sendStatus', 'sheetColor', 'escalarVeiculo', 'confirmarEscala', 'bloquearVeiculo', 'destravarVeiculo', 'pedirTroca']);
   function lockInView() {
     for (const id in App.cmds) {
       const c = App.cmds[id];
@@ -330,6 +334,91 @@
   App.on('change', () => { clearTimeout(ot); ot = setTimeout(renderOld, 120); });
   App.on('sheet', () => setTimeout(renderOld, 0));
 
+  // ---------- Visualizações salvas: pessoais (na conta) ou compartilhadas (na página, para todos) ----------
+  const SV_KEY = 'planilhas:savedViews';
+  const myId = () => (App.cloud && App.cloud.user && App.cloud.user.id) || 'local';
+  const myName = () => (App.cloud && App.cloud.user && App.cloud.user.name) || 'Você';
+  const readMine = () => {
+    let local = {};
+    try { local = JSON.parse(localStorage.getItem(SV_KEY) || '{}'); } catch (e) { /* vazio */ }
+    return Object.assign(local, (App.userPrefs && App.userPrefs().savedViews) || {});
+  };
+  const mineFor = (sh) => readMine()[saveKey(sh)] || [];
+  function writeMine(sh, list) {
+    const all = readMine();
+    if (list.length) all[saveKey(sh)] = list; else delete all[saveKey(sh)];
+    try { localStorage.setItem(SV_KEY, JSON.stringify(all)); } catch (e) { /* ignora */ }
+    if (App.savePrefs) App.savePrefs({ savedViews: all });
+  }
+  const cleanView = (v) => { const c = JSON.parse(JSON.stringify(v)); delete c._statusOrder; c.collapsed = []; return c; };
+  const savedCount = (sh) => mineFor(sh).length + (sh.sharedViews || []).length;
+  App.savedViews = (sh) => ({ mine: mineFor(sh), shared: sh.sharedViews || [] });
+  function applySaved(sh, x) {
+    App.setView(sh, cleanView(x.v));
+    notify(`Visualização "${x.name}" aberta. Mudanças nela ficam só para você até salvar de novo.`);
+  }
+  function savedItems(sh) {
+    const mine = mineFor(sh), shared = sh.sharedViews || [];
+    const items = [];
+    if (shared.length) items.push({ header: 'Compartilhadas (todos)' }, ...shared.map((x) => ({ label: `${x.name}${x.byName ? ' · ' + x.byName.split(' ')[0] : ''}`, icon: 'filterViews', action: () => applySaved(sh, x) })));
+    if (mine.length) items.push({ header: 'Só minhas' }, ...mine.map((x) => ({ label: x.name, icon: 'filterViews', action: () => applySaved(sh, x) })));
+    if (!items.length) items.push({ label: 'Nenhuma visualização salva nesta página', disabled: true });
+    items.push('-', { label: 'Salvar a visualização atual…', cmd: 'saveFilterView', disabled: !App.views.get(sh.id) }, { label: 'Gerenciar visualizações salvas…', cmd: 'manageSavedViews' });
+    return items;
+  }
+  function saveDialog() {
+    const sh = App.sheet(), v = App.views.get(sh.id);
+    if (!v) return notify('Abra uma visualização com filtro (Dados › Visualizações de filtro) e depois salve.');
+    const canShare = !!App.cloudMode;
+    App.ui.modal({
+      title: 'Salvar visualização de filtro', width: '460px',
+      body: `<label class="field"><span>Nome</span><input class="input" id="sv-name" placeholder="Ex.: Críticos em rota" autocomplete="off"></label>
+        <label class="inline"><input type="radio" name="sv-who" value="me" checked> Só para mim</label>
+        <label class="inline"${canShare ? '' : ' title="Disponível nas planilhas na nuvem"'}><input type="radio" name="sv-who" value="all"${canShare ? '' : ' disabled'}> Para todos desta planilha (cada um abre quando quiser)</label>
+        <p class="sp-hint">Guarda os filtros, os agrupamentos, a classificação por status e a ordem das colunas. Abrir uma visualização não muda o que os outros estão vendo.</p>`,
+      onOpen: (d) => setTimeout(() => d.querySelector('#sv-name').focus(), 30),
+      buttons: [{ label: 'Cancelar' }, { label: 'Salvar', primary: true, action: (d) => {
+        const name = d.querySelector('#sv-name').value.trim();
+        if (!name) { notify('Dê um nome para a visualização.'); return false; }
+        const who = d.querySelector('input[name=sv-who]:checked').value;
+        const item = { id: App.uid ? App.uid() : String(Date.now()), name: name.slice(0, 60), v: cleanView(v), at: Date.now() };
+        if (who === 'all') {
+          const list = (sh.sharedViews || []).filter((x) => !(x.by === myId() && x.name === item.name));
+          list.push(Object.assign(item, { by: myId(), byName: myName() }));
+          if (App.change('Salvar visualização para todos', () => { sh.sharedViews = list; }) === false) return false;
+          notify(`Visualização "${name}" salva para todos desta planilha.`);
+        } else {
+          writeMine(sh, mineFor(sh).filter((x) => x.name !== item.name).concat([item]));
+          notify(`Visualização "${name}" salva só para você.`);
+        }
+        render();
+      } }],
+    });
+  }
+  function manageDialog() {
+    const sh = App.sheet();
+    const m = App.ui.modal({ title: 'Visualizações salvas', width: '520px', body: '<div id="sv-list"></div>', buttons: [{ label: 'Fechar', primary: true }] });
+    const box = m.el.querySelector('#sv-list');
+    const isAdmin = !(App.adminOnly && App.adminOnly());
+    const draw = () => {
+      const mine = mineFor(sh), shared = sh.sharedViews || [];
+      const row = (x, kind, i) => `<div class="cf-item"><span class="cf-chip">${kind === 'all' ? '👥' : '👤'}</span><div><b>${esc(x.name)}</b><small>${kind === 'all' ? 'Para todos' + (x.byName ? ' · salva por ' + esc(x.byName) : '') : 'Só para você'}</small></div>
+        <button class="btn btn-sm" data-open="${kind}:${i}">Abrir</button>${kind === 'me' || x.by === myId() || isAdmin ? `<button class="icon-btn" data-del="${kind}:${i}" title="Apagar">${icon('close', 16)}</button>` : ''}</div>`;
+      box.innerHTML = (shared.length ? '<p class="sp-label">Para todos</p>' + shared.map((x, i) => row(x, 'all', i)).join('') : '') + (mine.length ? '<p class="sp-label">Só minhas</p>' + mine.map((x, i) => row(x, 'me', i)).join('') : '') || '<p class="sp-hint">Nenhuma visualização salva nesta página. Abra uma visualização com filtro e use "Salvar visualização".</p>';
+      box.querySelectorAll('[data-open]').forEach((b) => (b.onclick = () => { const [k, i] = b.dataset.open.split(':'); const x = (k === 'all' ? shared : mine)[+i]; m.close(); applySaved(sh, x); }));
+      box.querySelectorAll('[data-del]').forEach((b) => (b.onclick = () => {
+        const [k, i] = b.dataset.del.split(':');
+        if (k === 'me') writeMine(sh, mine.filter((_, j) => j !== +i));
+        else App.change('Apagar visualização compartilhada', () => { sh.sharedViews = shared.filter((_, j) => j !== +i); if (!sh.sharedViews.length) delete sh.sharedViews; });
+        draw(); render();
+      }));
+    };
+    draw();
+  }
+  def('saveFilterView', 'Salvar visualização de filtro', saveDialog);
+  def('manageSavedViews', 'Visualizações salvas', manageDialog);
+  def('openSavedViews', 'Abrir visualização salva', () => { const sh = App.sheet(); App.ui.menuPopup(document.querySelector('[data-dd="filterViews"]') || { x: 200, y: 120 }, savedItems(sh)); });
+
   // ---------- Itens do menu (barra de ferramentas e Dados) ----------
   App.viewMenuItems = () => {
     const sh = App.sheet(), used = App.usedRange(sh);
@@ -343,7 +432,9 @@
       { label: v && v.groups && v.groups.length ? 'Agrupar dentro do agrupamento' : 'Criar visualização agrupada', icon: 'plus', sub: cols.length ? cols : [{ label: 'Nenhuma coluna com dados', disabled: true }] },
       { label: v ? 'Visualização com filtro (aberta)' : 'Criar visualização com filtro', icon: 'plus', cmd: 'createFilterView' },
     ];
-    if (v) items.push('-', { label: 'Limpar filtros da visualização', cmd: 'clearViewFilters' }, { label: 'Fechar visualização', icon: 'close', cmd: 'closeFilterView' });
+    if (v) items.push('-', { label: 'Salvar visualização…', icon: 'plus', cmd: 'saveFilterView' }, { label: 'Limpar filtros da visualização', cmd: 'clearViewFilters' }, { label: 'Fechar visualização', icon: 'close', cmd: 'closeFilterView' });
+    const sv = savedItems(sh).filter((x) => x && x !== '-' && !x.header && x.action);
+    items.push('-', { label: `Visualizações salvas${sv.length ? ` (${sv.length})` : ''}`, icon: 'filterViews', sub: () => savedItems(sh) });
     return items;
   };
 

@@ -300,7 +300,7 @@ function onPatch(c, msg) {
   const clears = lookupClears(room, p);
   Patch.apply(room.data, p);
   room.version++;
-  if (hist.length) store.addHistory(room.id, c.user, hist).catch((e) => console.error('Falha ao gravar histórico', e.message));
+  if (hist.length) store.addHistory(room.id, Object.assign({}, c.user, { ip: c.ip }), hist).catch((e) => console.error('Falha ao gravar histórico', e.message));
   const structural = !!(p.order || Object.values(p.sheets || {}).some((e) => e.created || e.removed));
   const accessChanged = Object.values(p.sheets || {}).some((e) => (e.props && 'access' in e.props) || (e.created && e.created.access));
   // quem teve as permissões por coluna alteradas recebe a planilha de novo (com as colunas certas)
@@ -347,8 +347,15 @@ function onLeave(c) {
     saveRoom(room).then(() => { if (!room.clients.size && !room.dirty) { clearTimeout(room.timer); rooms.delete(room.id); } });
   }
 }
-function onConnection(ws) {
-  const c = { ws, cid: uid(6), user: null, room: null, perms: null, presence: null };
+// IP de quem está conectado (atrás do proxy do Render vem em X-Forwarded-For)
+function clientIp(req) {
+  const xf = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  let ip = xf || req.socket.remoteAddress || '';
+  if (ip.startsWith('::ffff:')) ip = ip.slice(7);
+  return ip.slice(0, 64);
+}
+function onConnection(ws, ip) {
+  const c = { ws, cid: uid(6), user: null, room: null, perms: null, presence: null, ip: ip || '' };
   const authTimer = setTimeout(() => { if (!c.user) ws.close(4001, 'sem login'); }, 20000);
   ws.on('message', async (raw) => {
     let msg;
@@ -462,6 +469,7 @@ route('PUT', '/api/me/prefs', async (req) => {
   if (Array.isArray(b.colors)) prefs.colors = b.colors.filter((c) => /^#[0-9a-f]{6}$/i.test(c)).slice(-30);
   if (b.views && typeof b.views === 'object' && JSON.stringify(b.views).length < 200000) prefs.views = b.views;
   if (b.fviews && typeof b.fviews === 'object' && JSON.stringify(b.fviews).length < 300000) prefs.fviews = b.fviews;
+  if (b.savedViews && typeof b.savedViews === 'object' && JSON.stringify(b.savedViews).length < 300000) prefs.savedViews = b.savedViews;
   await store.savePrefs(user.id, prefs);
   user.prefs = prefs;
   return prefs;
@@ -751,8 +759,10 @@ route('GET', '/api/docs/:id/history', async (req, p) => {
   const sheet = String(q.get('sheet') || ''), addr = String(q.get('addr') || '').toUpperCase();
   if (!/^[A-Z]{1,3}\d{1,7}$/.test(addr)) throw httpError(400, 'Célula inválida.');
   if (!Perms.canSee(perms, sheet, addr)) throw httpError(403, 'Você não tem permissão para ver esta célula.');
-  const rows = await store.getHistory(room.id, sheet, addr, 100);
-  return rows.map((h) => ({ at: h.at, uid: h.user_id || null, name: h.user_name || 'Alguém', color: colorFor(h.user_id || ''), avatar: avatarOf(h.user_id || ''), before: h.before, after: h.after }));
+  const all = q.get('all') === '1';
+  const rows = await store.getHistory(room.id, sheet, addr, all ? 5000 : 100);
+  // o IP só aparece para administradores
+  return rows.map((h) => ({ at: h.at, uid: h.user_id || null, name: h.user_name || 'Alguém', color: colorFor(h.user_id || ''), avatar: avatarOf(h.user_id || ''), before: h.before, after: h.after, ip: perms.admin ? h.ip || null : undefined }));
 });
 
 // ---------- DSS: catálogo de motoristas (GET {DSS_BASE_URL}/listarMotoristas, Basic) ----------
@@ -898,7 +908,7 @@ server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url, 'http://x');
   if (url.pathname !== '/ws') { socket.destroy(); return; }
   const ws = accept(req, socket, head);
-  if (ws) onConnection(ws);
+  if (ws) onConnection(ws, clientIp(req));
 });
 // mantém as conexões vivas (proxies costumam encerrar conexões ociosas)
 setInterval(() => {
