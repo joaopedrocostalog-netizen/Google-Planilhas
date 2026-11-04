@@ -234,7 +234,7 @@
           if (cav.swap && vehicle) {
             st.hasCrit = true;
             s = Object.assign({}, s, Math.floor(Date.now() / 550) % 2 ? { bg: '#1a73e8', color: '#ffffff', b: true } : { bg: '#d2e3fc', color: '#0b3d91', b: true });
-          } else if (cav.esc === 'p') s = Object.assign({}, s, { bg: '#d93025', color: '#ffffff' });
+          } else if (cav.esc === 'p' && String(raw).trim() !== '') s = Object.assign({}, s, { bg: '#d93025', color: '#ffffff' }); // célula vazia não fica vermelha
           if (cav.lock && vehicle) { locked = true; swap = !!cav.swap; }
         }
       }
@@ -243,6 +243,8 @@
         st.hasCrit = true;
         s = Object.assign({}, s, Math.floor(Date.now() / 550) % 2 ? { bg: '#d93025', color: '#ffffff', b: true } : { bg: '#fce8e6', color: '#b3261e', b: true });
       }
+      // PROG. repetido em outra linha: fica roxo com o texto em destaque até corrigir
+      if (App.progDuplicates && App.progDuplicates(sh, si, r, c)) s = Object.assign({}, s, { bg: '#e9d5ff', color: '#6b21a8', b: true });
       // FRETE obrigatório para cavalo de terceiro (fora da BASE GERAL): pisca até preencher
       if (App.freteAlert && App.freteAlert(sh, si, r, c)) {
         st.hasCrit = true;
@@ -256,7 +258,8 @@
     if (doc.showFormulas && isFormula) text = raw;
     else text = App.fmtValue(v, nf);
     let align = s.al;
-    if (!align) align = doc.showFormulas && isFormula ? 'l' : typeof v === 'number' ? 'r' : typeof v === 'boolean' || E.isErr(v) ? 'c' : 'l';
+    // padrão: centralizado (horizontal) — o vertical padrão é no meio
+    if (!align) align = doc.showFormulas && isFormula ? 'l' : 'c';
     let link = (cell && cell.link) || null;
     if (!link && isFormula && /^=\s*(HYPERLINK|HIPERLINK)\s*\(/i.test(raw)) { const m = /\(\s*"([^"]+)"/.exec(raw); if (m) link = m[1]; }
     if (!link && typeof v === 'string' && /^(https?:\/\/|www\.)\S+$/i.test(v)) link = v.startsWith('www.') ? 'https://' + v : v;
@@ -640,7 +643,7 @@
     if (inf.dv && (inf.dv.type === 'list' || inf.dv.type === 'range')) {
       const arrow = 9 * z;
       // respeita o alinhamento da célula/coluna (esquerda, centro ou direita)
-      const al = s.al === 'c' || s.al === 'r' ? s.al : 'l';
+      const al = s.al === 'l' || s.al === 'r' ? s.al : 'c';
       if (inf.dv.style === 'arrow' || inf.text === '') {
         ctx.fillStyle = '#5f5f5f';
         const ax = it.x + it.w - pad - arrow, ay = it.y + it.h / 2 - 2 * z;
@@ -656,9 +659,11 @@
         const tw = ctx.measureText(inf.text).width;
         const chipH = Math.min(it.h - 4 * z, 18 * z), chipW = Math.min(it.w - 2 * pad, tw + 26 * z);
         const cx = al === 'c' ? it.x + (it.w - chipW) / 2 : al === 'r' ? it.x + it.w - pad - chipW : it.x + pad, cy = it.y + (it.h - chipH) / 2;
-        ctx.fillStyle = colorMap[inf.text] || C.chipBg;
+        const chipBg = colorMap[inf.text] || C.chipBg;
+        ctx.fillStyle = chipBg;
         roundRect(cx, cy, chipW, chipH, chipH / 2); ctx.fill();
-        ctx.fillStyle = s.color || '#1a1a1a';
+        // texto sempre legível sobre o chip (a cor do texto da linha pode ser branca pela formatação condicional)
+        ctx.fillStyle = App.textOn ? App.textOn(chipBg) : '#1a1a1a';
         ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
         ctx.fillText(inf.text, cx + 8 * z, cy + chipH / 2 + 0.5);
         ctx.fillStyle = '#5f5f5f';
@@ -678,12 +683,14 @@
         lines = ['#'.repeat(hashes)];
       }
       const totalH = lines.length * lineH;
-      const va = s.va || 'b';
+      const va = s.va || 'm';
       let y0 = va === 't' ? it.y + pad : va === 'm' ? it.y + (it.h - totalH) / 2 : it.y + it.h - pad - totalH;
-      if (lines.length > 1 && va === 'b' && totalH > it.h) y0 = it.y + pad;
+      if (lines.length > 1 && va !== 't' && totalH > it.h) y0 = it.y + pad;
       ctx.textBaseline = 'middle';
       const xs = { l: it.tx + pad, c: it.tx + it.tw / 2, r: it.tx + it.tw - pad };
-      const align = inf.align;
+      let align = inf.align;
+      // centralizado por padrão, mas texto que não cabe mostra o começo (em vez de cortar dos dois lados)
+      if (align === 'c' && !s.al && !s.rot && lines.length === 1 && ctx.measureText(lines[0]).width > it.tw - 2 * pad) align = 'l';
       ctx.textAlign = align === 'l' ? 'left' : align === 'c' ? 'center' : 'right';
       const tx = align === 'l' ? (s.indent ? xs.l + s.indent * 10 * z : xs.l) : xs[align];
       lines.forEach((ln, i) => {
@@ -1073,9 +1080,11 @@
     if (e.button === 2) {
       // botão direito: seleciona a célula se estiver fora da seleção
       const R = App.selRect();
-      if (h.area === 'cell' && !App.inRect(R, h.r, h.c)) { if (App.editing && App.editing()) App.commitEdit(); select(h.r, h.c, false, true); }
+      // dentro de qualquer parte da seleção (inclusive as feitas com Ctrl): mantém tudo selecionado
+      const inAny = App.selRects().some((x) => App.inRect(x, h.r, h.c));
+      if (h.area === 'cell' && !inAny) { if (App.editing && App.editing()) App.commitEdit(); sel.extra = []; select(h.r, h.c, false, true); }
       if (h.area === 'colHdr' && !(h.c >= R.c1 && h.c <= R.c2 && R.r1 === 1 && R.r2 >= st.nR)) selectCols(h.c, h.c);
-      if (h.area === 'rowHdr' && !(h.r >= R.r1 && h.r <= R.r2 && R.c1 === 1 && R.c2 >= st.nC)) selectRows(h.r, h.r);
+      if (h.area === 'rowHdr' && !App.selRects().some((x) => h.r >= x.r1 && h.r <= x.r2 && x.c1 === 1 && x.c2 >= st.nC)) { sel.extra = []; selectRows(h.r, h.r); }
       return;
     }
     e.preventDefault();
@@ -1181,7 +1190,7 @@
     if (d.style === 'arrow' || info.text === '') return px >= rc.x + rc.w - pad - arrow - 6 * z;
     ctx.save(); ctx.font = fontFor(s); const tw = ctx.measureText(info.text).width; ctx.restore();
     const chipW = Math.min(rc.w - 2 * pad, tw + 26 * z);
-    const al = s.al === 'c' || s.al === 'r' ? s.al : 'l';
+    const al = s.al === 'l' || s.al === 'r' ? s.al : 'c';
     const cx = al === 'c' ? rc.x + (rc.w - chipW) / 2 : al === 'r' ? rc.x + rc.w - pad - chipW : rc.x + pad;
     return px >= cx + chipW - 18 * z && px <= cx + chipW + 4 * z;
   }

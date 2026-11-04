@@ -89,7 +89,7 @@
     return el;
   }
   document.addEventListener('mousedown', (e) => {
-    if (openPop && !openPop.el.contains(e.target) && !(openPop.anchor && openPop.anchor.contains(e.target))) closePopup();
+    if (openPop && !openPop.el.contains(e.target) && !(openPop.anchor && openPop.anchor.contains(e.target)) && !(e.target.closest && e.target.closest('.submenu'))) closePopup();
   }, true);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && openPop) { closePopup(); App.grid.focus(); } });
 
@@ -280,8 +280,8 @@
       { label: 'Ocultar menus', cmd: 'toggleMenus' },
       { label: 'Tela cheia', cmd: 'fullscreen' },
     ] },
-    { label: 'Inserir', items: () => (App.adminOnly && App.adminOnly() ? [{ label: 'Incluir processo', icon: 'plus', cmd: 'insertProcess' }, ...(App.canMarkCritical && App.canMarkCritical(App.sheet()) ? [{ label: 'Informar críticos', icon: 'star', cmd: 'informCriticals' }] : [])] : [
-      { label: 'Incluir processo', icon: 'plus', cmd: 'insertProcess' }, { label: 'Informar críticos', icon: 'star', cmd: 'informCriticals' }, '-',
+    { label: 'Inserir', items: () => (App.adminOnly && App.adminOnly() ? [{ label: 'Incluir processo', icon: 'plus', cmd: 'insertProcess' }, ...(App.canMarkCritical && App.canMarkCritical(App.sheet()) ? [{ label: 'Informar críticos', icon: 'star', cmd: 'informCriticals' }] : []), { label: 'Enviar status (linhas selecionadas)', icon: 'comment', cmd: 'sendStatus' }] : [
+      { label: 'Incluir processo', icon: 'plus', cmd: 'insertProcess' }, { label: 'Informar críticos', icon: 'star', cmd: 'informCriticals' }, { label: 'Enviar status (linhas selecionadas)', icon: 'comment', cmd: 'sendStatus' }, '-',
       { label: 'Linhas', sub: () => [{ label: `Inserir ${plural(nRows(), 'linha', 'linhas')} acima`, cmd: 'insertRowsAbove' }, { label: `Inserir ${plural(nRows(), 'linha', 'linhas')} abaixo`, cmd: 'insertRowsBelow' }] },
       { label: 'Colunas', sub: () => [{ label: `Inserir ${plural(nCols(), 'coluna', 'colunas')} à esquerda`, cmd: 'insertColsLeft' }, { label: `Inserir ${plural(nCols(), 'coluna', 'colunas')} à direita`, cmd: 'insertColsRight' }] },
       { label: 'Página', cmd: 'newSheet' }, '-',
@@ -329,11 +329,23 @@
       { label: 'Intervalos nomeados', cmd: 'namedRanges' },
       { label: 'Histórico de versões', icon: 'history', cmd: 'versionHistory' },
     ] },
+    // tudo o que define quem pode ver, editar ou usar cada função fica aqui (e não no botão direito)
+    { label: 'Administrador', items: () => [
+      { label: 'Controle do administrador', icon: 'lock', cmd: 'adminPanel' }, '-',
+      { label: 'Pessoas, setores e páginas (compartilhar)', cmd: 'share' },
+      { label: 'Permissões por coluna (ver / editar)', cmd: 'columnAccess' },
+      { label: 'Proteger páginas e intervalos', cmd: 'protectRanges' }, '-',
+      { label: 'Container crítico: quem pode marcar', cmd: 'critSectors' },
+      { label: 'Escala de veículos: quem pode usar', cmd: 'escalaConfig' },
+      { label: `Coluna do alerta de crítico (usar a coluna ${E.numToCol(sel.ac)})`, cmd: 'critColumn', arg: sel.ac },
+      { label: 'Motoristas do DSS', cmd: 'dssLookup' },
+    ] },
     { label: 'Extensões', items: () => [{ label: 'Nenhuma extensão instalada', disabled: true, need: 'extensions' }] },
     { label: 'Ajuda', items: () => [
       { label: 'Pesquisar nos menus', icon: 'search', cmd: 'menuSearch', sc: 'Alt+/' },
       { label: 'Lista de funções', icon: 'function', cmd: 'functionList' },
       { label: 'Atalhos do teclado', cmd: 'shortcuts', sc: 'Ctrl+/' }, '-',
+      { label: 'Últimas atualizações', icon: 'history', cmd: 'updates' },
       { label: 'Sobre o Planilhas', cmd: 'about' },
     ] },
   ];
@@ -498,8 +510,8 @@
     if (document.activeElement !== size) size.value = String(st.fs || 10);
     $('tb-text-bar').style.background = st.color || '#000000';
     $('tb-fill-bar').style.background = st.bg || 'transparent';
-    $('tb-align').innerHTML = icon(st.al === 'c' ? 'alignCenter' : st.al === 'r' ? 'alignRight' : 'alignLeft');
-    $('tb-valign').innerHTML = icon(st.va === 't' ? 'valignTop' : st.va === 'm' ? 'valignMiddle' : 'valignBottom');
+    $('tb-align').innerHTML = icon(st.al === 'l' ? 'alignLeft' : st.al === 'r' ? 'alignRight' : 'alignCenter');
+    $('tb-valign').innerHTML = icon(st.va === 't' ? 'valignTop' : st.va === 'b' ? 'valignBottom' : 'valignMiddle');
     $('tb-wrap').innerHTML = icon(st.wrap === 'wrap' ? 'wrap' : st.wrap === 'overflow' ? 'overflow' : 'clip');
     $('tb-zoom').textContent = doc.zoom + '%';
     document.querySelector('.tb[data-cmd="undo"]').classList.toggle('disabled', !App.canUndo());
@@ -637,7 +649,12 @@
   // ---------- Título e status de salvamento ----------
   function initTitle() {
     const t = $('doc-title');
-    const sync = () => { t.value = doc.title; document.title = doc.title + ' - Planilhas'; t.style.width = Math.min(480, Math.max(120, t.value.length * 9 + 24)) + 'px'; };
+    // largura medida pelo texto de verdade (nomes em maiúsculas são bem mais largos)
+    const mctx = document.createElement('canvas').getContext('2d');
+    const fit = () => { mctx.font = getComputedStyle(t).font || '18px sans-serif'; t.style.width = Math.min(Math.max(320, window.innerWidth * 0.55), Math.max(120, Math.ceil(mctx.measureText(t.value || ' ').width) + 22)) + 'px'; };
+    const sync = () => { t.value = doc.title; document.title = doc.title + ' - Planilhas'; fit(); };
+    window.addEventListener('resize', fit);
+    if (document.fonts) document.fonts.addEventListener('loadingdone', fit);
     sync();
     App.on('title', sync);
     // nome da planilha (aba) aberta, ao lado do título: muda ao trocar de aba
@@ -656,7 +673,7 @@
     }
     t.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'Escape') { if (e.key === 'Escape') t.value = doc.title; t.blur(); App.grid.focus(); } });
     t.addEventListener('blur', () => { if (t.value.trim() !== doc.title) App.setTitle(t.value.trim()); sync(); });
-    t.addEventListener('input', () => { t.style.width = Math.min(480, Math.max(120, t.value.length * 9 + 24)) + 'px'; });
+    t.addEventListener('input', fit);
     const status = $('save-status');
     App.on('saving', () => { if (App.cloudMode) return; status.innerHTML = `${icon('cloud', 16)} Salvando…`; });
     App.on('saved', () => { if (App.cloudMode) return; status.innerHTML = `${icon('cloud', 16)} Salvo no navegador`; status.title = 'Todas as alterações foram salvas neste navegador.'; });

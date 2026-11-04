@@ -673,6 +673,13 @@
   const hex = (h) => { const x = h.replace('#', ''); return [0, 2, 4].map((i) => parseInt(x.substr(i, 2), 16)); };
   const mix = (a, b, t) => { const A = hex(a), B = hex(b); return '#' + A.map((v, i) => Math.round(v + (B[i] - v) * t).toString(16).padStart(2, '0')).join(''); };
   App.mixColor = mix;
+  // cor de texto legível sobre um fundo (preto em fundos claros, branco em escuros)
+  App.textOn = (bg) => {
+    const m = /^#?([0-9a-f]{6})$/i.exec(String(bg || '').trim());
+    if (!m) return '#1a1a1a';
+    const n = parseInt(m[1], 16), r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+    return 0.299 * r + 0.587 * g + 0.114 * b > 150 ? '#1a1a1a' : '#ffffff';
+  };
   // Estilo efetivo: estilo da célula + cores alternadas + regras condicionais
   App.effectiveStyle = (sh, si, r, c, base) => {
     [r, c] = mapRC(sh, r, c);
@@ -719,6 +726,39 @@
     }
     return st;
   };
+
+  // Cor que a formatação condicional daria se a célula (r,c) tivesse o valor "value" (para pintar as opções do menu suspenso).
+  // Regras de fórmula que olham a própria célula (ex.: =$X2="EM ROTA", pintando a linha toda) também valem.
+  App.cfPreview = (sh, si, r, c, value) => App.withReal(() => {
+    if (!sh.cf || !sh.cf.length) return null;
+    const lit = '"' + String(value).replace(/"/g, '""') + '"';
+    const covers = (rule) => (rule.toEnd ? r >= rule.range.r1 : r >= rule.range.r1 && r <= rule.range.r2);
+    const pick = (onlyCell) => {
+      for (const rule of sh.cf) {
+        if (rule.kind === 'scale' || !rule.cond || !rule.style || !covers(rule)) continue;
+        const inCol = c >= rule.range.c1 && c <= rule.range.c2;
+        if (rule.cond.type === 'formula') {
+          let f = String(rule.cond.a || '');
+          if (f[0] !== '=') f = '=' + f;
+          // mesma posição que a regra usaria nesta linha (coluna da célula, ou a primeira coluna da regra)
+          const cc = inCol ? c : rule.range.c1;
+          f = E.shiftFormula(f, r - rule.range.r1, cc - rule.range.c1);
+          let uses = false;
+          const g = f.replace(/(^|[^A-Za-z0-9_!.$"])(\$?)([A-Z]{1,3})(\$?)(\d+)(?![\d(:A-Za-z_])/g, (m, pre, d1, col, d2, row) => {
+            if (E.colToNum(col) === c && Number(row) === r) { uses = true; return pre + lit; }
+            return m;
+          });
+          if (!uses || (onlyCell && !inCol)) continue;
+          let res;
+          try { res = E.toBool(App.evalAt(si, r, cc, g)); } catch (e) { res = false; }
+          if (res) return rule.style;
+        } else if (inCol && App.testCondition(rule.cond, value, si, r, c, { r: rule.range.r1, c: rule.range.c1 })) return rule.style;
+      }
+      return null;
+    };
+    const st = pick(true) || pick(false);
+    return st && (st.bg || st.color) ? { bg: st.bg || null, color: st.color || null } : null;
+  });
 
   // Coluna do alerta de container crítico: a escolhida pelo administrador, senão a coluna chamada IMO, senão T
   // Coluna do alerta de container crítico: a escolhida pelo administrador, senão a coluna CONTAINER, senão T.

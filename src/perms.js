@@ -47,6 +47,12 @@
     if (escCache) escCache.set(sheet, { key, cols });
     return cols;
   }
+  // Lista de "quem pode" (setores e/ou pessoas): vale para o setor da pessoa e para a própria pessoa (member.rid)
+  function inList(list, perms) {
+    if (!Array.isArray(list) || !perms) return false;
+    if (perms.sectorId && list.includes(perms.sectorId)) return true;
+    return (perms.ruleKeys || []).some((k) => k !== 'link' && list.includes(k));
+  }
   const CRIT_MSG = 'Marcar container como crítico não está liberado para o seu setor. Peça a um administrador.';
   const LOCK_MSG = 'Veículo bloqueado para troca. Peça ao setor responsável para destravar (use "Pedir troca" no botão direito ou o chat).';
   // colunas que travam junto com o veículo
@@ -60,7 +66,7 @@
     const p = parseAddr(a);
     if (!p) return null;
     const cfg = sheet.escala || {};
-    const inEsc = (cfg.sectors || []).includes(perms.sectorId), inLock = (cfg.lockSectors || []).includes(perms.sectorId);
+    const inEsc = inList(cfg.sectors || [], perms), inLock = inList(cfg.lockSectors || [], perms);
     const b = before || {}, f = after || {};
     if (p.c === cols.CAVALO) {
       if (truthy(b.lock) !== truthy(f.lock) && !inLock) return 'Somente o setor responsável pode bloquear ou destravar o veículo.';
@@ -172,7 +178,7 @@
     for (const pr of sheet.protected) {
       const R = pr.range;
       if (p.r >= R.r1 && p.r <= R.r2 && p.c >= R.c1 && p.c <= R.c2) {
-        if (!(pr.sectors || []).includes(perms.sectorId)) return pr;
+        if (!inList(pr.sectors || [], perms)) return pr;
       }
     }
     return null;
@@ -276,7 +282,7 @@
           const beforeOf = (x) => (invCells && x in invCells ? invCells[x] : sheet ? (sheet.cells || {})[x] || null : null);
           const before = invCells ? (a in invCells ? invCells[a] : null) : sheet ? (sheet.cells || {})[a] || null : null;
           // container crítico: se o administrador escolheu os setores, só eles marcam ou desmarcam
-          if (sheet && Array.isArray(sheet.critSectors) && truthy((before || {}).crit) !== truthy((e.cells[a] || {}).crit) && !sheet.critSectors.includes(perms.sectorId)) return CRIT_MSG;
+          if (sheet && Array.isArray(sheet.critSectors) && truthy((before || {}).crit) !== truthy((e.cells[a] || {}).crit) && !inList(sheet.critSectors, perms)) return CRIT_MSG;
           if (sheet) { const ee = escalaCheck(perms, sheet, a, before, e.cells[a], beforeOf); if (ee) return ee; }
           if (!execAllowed(before, e.cells[a])) return FORMAT_MSG;
         }
@@ -380,7 +386,7 @@
   // Pode ver a célula?
   const canSee = (perms, sheetId, addr) => sheetVisible(perms, sheetId) && colLevel(perms, sheetId, colOf(addr)) !== 'none';
 
-  const api = { LOCK_MSG, lockedCol, escalaCols, escalaCheck, ESC_FIELDS, normName: nrm, COLS_MSG, FORMAT_MSG, nonValue, execMerge, execAllowed, stable, normCell, EXEC_STYLE, compute, validate, filterDoc, filterPatch, levelOf, colLevel, sheetVisible, bestLevel, hasHiddenCols, hasColRules, blockingProtection, defaultAcl, canSee, colOf, colName, RANK, LEVELS };
+  const api = { inList, LOCK_MSG, lockedCol, escalaCols, escalaCheck, ESC_FIELDS, normName: nrm, COLS_MSG, FORMAT_MSG, nonValue, execMerge, execAllowed, stable, normCell, EXEC_STYLE, compute, validate, filterDoc, filterPatch, levelOf, colLevel, sheetVisible, bestLevel, hasHiddenCols, hasColRules, blockingProtection, defaultAcl, canSee, colOf, colName, RANK, LEVELS };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Perms = api;
 })(typeof window !== 'undefined' ? window : globalThis);

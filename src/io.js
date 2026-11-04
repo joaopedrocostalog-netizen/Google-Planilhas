@@ -352,7 +352,7 @@
         const css = [`width:${sh.colW[c] || App.DEF_W}px`, s.bg ? 'background:' + s.bg : '', s.color ? 'color:' + s.color : '', s.b ? 'font-weight:bold' : '', s.i ? 'font-style:italic' : '',
           s.u || s.st ? 'text-decoration:' + [s.u ? 'underline' : '', s.st ? 'line-through' : ''].join(' ') : '', `text-align:${{ l: 'left', c: 'center', r: 'right' }[info.align]}`,
           s.fs ? `font-size:${s.fs}pt` : '', s.ff ? `font-family:${s.ff}` : '', s.wrap === 'wrap' ? 'white-space:pre-wrap' : 'white-space:nowrap',
-          s.va === 't' ? 'vertical-align:top' : s.va === 'm' ? 'vertical-align:middle' : 'vertical-align:bottom',
+          s.va === 't' ? 'vertical-align:top' : s.va === 'b' ? 'vertical-align:bottom' : 'vertical-align:middle',
           s.bd && s.bd.t ? 'border-top:' + bd(s.bd.t) : '', s.bd && s.bd.b ? 'border-bottom:' + bd(s.bd.b) : '', s.bd && s.bd.l ? 'border-left:' + bd(s.bd.l) : '', s.bd && s.bd.r ? 'border-right:' + bd(s.bd.r) : ''].filter(Boolean).join(';');
         html += `<td${span} style="${css}">${info.link ? `<a href="${esc(info.link)}">${esc(info.text)}</a>` : esc(info.text)}</td>`;
       }
