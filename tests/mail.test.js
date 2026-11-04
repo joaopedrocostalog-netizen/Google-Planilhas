@@ -4,8 +4,19 @@ const tls = require('tls');
 const fs = require('fs');
 const path = require('path');
 
-const CERT = process.env.TEST_CERT_DIR || '/tmp/claude-0/-home-claude/6bde701b-fb90-5469-937c-0728d847bd73/scratchpad';
-const opts = { key: fs.readFileSync(path.join(CERT, 'k.pem')), cert: fs.readFileSync(path.join(CERT, 'c.pem')) };
+// certificado só para os servidores falsos destes testes: gerado na hora numa pasta temporária
+const os = require('os');
+const { execFileSync } = require('child_process');
+const CERT = fs.mkdtempSync(path.join(os.tmpdir(), 'planilhas-mail-'));
+const KEY = path.join(CERT, 'k.pem'), CRT = path.join(CERT, 'c.pem');
+try {
+  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-keyout', KEY, '-out', CRT, '-days', '1', '-nodes', '-subj', '/CN=localhost'], { stdio: 'ignore' });
+} catch (e) {
+  console.log('Testes de e-mail pulados: o openssl não está disponível para gerar o certificado de teste.');
+  process.exit(0);
+}
+process.on('exit', () => { try { fs.rmSync(CERT, { recursive: true, force: true }); } catch (e) { /* já foi */ } });
+const opts = { key: fs.readFileSync(KEY), cert: fs.readFileSync(CRT) };
 
 let pass = 0, fail = 0;
 function check(name, got, want) {
