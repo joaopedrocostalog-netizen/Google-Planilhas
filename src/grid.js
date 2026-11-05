@@ -266,7 +266,7 @@
     if (!link && isFormula && /^=\s*(HYPERLINK|HIPERLINK)\s*\(/i.test(raw)) { const m = /\(\s*"([^"]+)"/.exec(raw); if (m) link = m[1]; }
     if (!link && typeof v === 'string' && /^(https?:\/\/|www\.)\S+$/i.test(v)) link = v.startsWith('www.') ? 'https://' + v : v;
     // marcas da operação (coluna MODALIDADE): SC = sem custos, SPOT = frete spot
-    const tags = cell && (cell.sc || cell.spot) ? [cell.sc ? 'SC' : '', cell.spot ? 'SPOT' : ''].filter(Boolean).join(' · ') : '';
+    const tags = cell && (cell.sc || cell.spot) ? [cell.sc ? 'SC' : '', cell.spot ? 'SPOT' : ''].filter(Boolean) : null;
     return { cell, raw, v, s, text, align, dv, link, crit, locked, swap, tags, isErr: E.isErr(v), note: cell && cell.note, comment: cell && cell.comments && cell.comments.length };
   }
   App.cellInfo = (r, c) => cellInfo(App.sheet(), doc.active, r, c);
@@ -646,6 +646,7 @@
     // lista suspensa em formato de chip
     if (inf.dv && (inf.dv.type === 'list' || inf.dv.type === 'range')) {
       const arrow = 9 * z;
+      it.arrowX = it.x + it.w - pad - arrow; // onde a seta começa (as marcas SC/SPOT ficam logo antes)
       // respeita o alinhamento da célula/coluna (esquerda, centro ou direita)
       const al = s.al === 'l' || s.al === 'r' ? s.al : 'c';
       if (inf.dv.style === 'arrow' || inf.text === '') {
@@ -672,6 +673,7 @@
         ctx.fillText(inf.text, cx + 8 * z, cy + chipH / 2 + 0.5);
         ctx.fillStyle = '#5f5f5f';
         const ax = cx + chipW - 14 * z, ay = cy + chipH / 2 - 2 * z;
+        it.arrowX = ax;
         ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(ax + 7 * z, ay); ctx.lineTo(ax + 3.5 * z, ay + 4 * z); ctx.closePath(); ctx.fill();
       }
     } else if (inf.text !== '') {
@@ -717,17 +719,20 @@
     if (inf.isErr || invalid) tri(C.err);
     else if (inf.comment) tri(C.comment);
     else if (inf.note) tri(C.note);
-    if (inf.tags) {
-      // SC / SPOT pequeno, em vermelho, no canto esquerdo
-      const z = st.z, fz = Math.max(6.5, 7.5 * z);
+    if (inf.tags && inf.tags.length) {
+      // SC / SPOT pequenos, em vermelho, no canto superior direito, antes da seta; um embaixo do outro
+      const z = st.z, fz = Math.max(6, 7 * z), h = fz + 1.5 * z, gap = 1 * z;
+      const right = Math.min(it.arrowX != null ? it.arrowX - 2 * z : it.x + it.w - 3 * z, it.x + it.w - 3 * z);
       ctx.save();
       ctx.font = `bold ${fz}px Arial`;
-      ctx.textBaseline = 'top'; ctx.textAlign = 'left';
-      const w = ctx.measureText(inf.tags).width, h = fz + 2 * z;
-      ctx.fillStyle = 'rgba(255,255,255,0.92)';
-      roundRect(it.x + 1.5 * z, it.y + 1.5 * z, w + 4 * z, h, 2 * z); ctx.fill();
-      ctx.fillStyle = '#d93025';
-      ctx.fillText(inf.tags, it.x + 3.5 * z, it.y + 2.5 * z);
+      ctx.textBaseline = 'top'; ctx.textAlign = 'right';
+      inf.tags.forEach((t, i) => {
+        const w = ctx.measureText(t).width, y = it.y + 1.5 * z + i * (h + gap);
+        ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        roundRect(right - w - 4 * z, y, w + 4 * z, h, 2 * z); ctx.fill();
+        ctx.fillStyle = '#d93025';
+        ctx.fillText(t, right - 2 * z, y + 0.9 * z);
+      });
       ctx.restore();
     }
     if (inf.dv && inf.dv.type === 'dtrange') {
