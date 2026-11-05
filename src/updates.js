@@ -4,7 +4,7 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
-    { date: '06/11/2026', title: 'MAPA ↔ PRÉ STACKING com confirmação, DATA BAIXA em todas as linhas, linhas de grade e crítico', items: [
+    { date: '05/11/2026', title: 'MAPA ↔ PRÉ STACKING com confirmação, DATA BAIXA em todas as linhas, linhas de grade e crítico', items: [
       ['MAPA ↔ PRÉ STACKING', 'Com a unidade já no PRÉ STACKING, mudar um campo no MAPA (ex.: TERMINAL VAZIO / depot) ou no PRÉ STACKING pergunta "Unidade em Pré-Stacking deseja atualizar informação?"; com Sim, o outro lado é atualizado.'],
       ['DATA BAIXA', 'Sempre que um container entra no PRÉ STACKING VAZIO (pelo P.S. VZ, digitado ou colado), todas as DATA BAIXA vazias da aba são buscadas na API de uma vez. Trocar o container busca a data de novo.'],
       ['Motoristas do DSS', 'A lista de motoristas é buscada no DSS uma vez por dia e guardada no banco; o servidor usa a do banco ao reiniciar.'],
