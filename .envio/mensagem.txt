@@ -1,0 +1,1 @@
+Métricas: gráficos interativos, sessões, linhas com informação e teste de pico de usuários; banco: 12 tentativas na subida
