@@ -413,6 +413,8 @@ function sanitizeAcl(input, room) {
 const routes = [];
 const route = (method, pattern, fn) => routes.push({ method, re: new RegExp('^' + pattern.replace(/:(\w+)/g, '(?<$1>[^/]+)') + '$'), fn });
 
+// ao subir, testa a API carga_of_container uma vez e deixa o resultado no log (ajuda a achar URL ou login errados)
+setTimeout(() => { if (!process.env.CARGA_DIAG_OFF) cargaDiag().then((d) => console.log('[carga] diagnóstico:', JSON.stringify(Object.assign({}, d, { inicio: undefined })))).catch(() => {}); }, 4000);
 route('GET', '/api/health', async () => ({ ok: true, store: store.kind, rooms: rooms.size, dss: !!(process.env.DSS_TOKEN || ((process.env.DSS_USUARIO || process.env.DSS_USERNAME) && (process.env.DSS_SENHA || process.env.DSS_PASSWORD))), dssMotoristas: drivers.items.length, dssErro: drivers.error || null }));
 route('POST', '/api/register', async (req) => {
   const b = await readBody(req, 100000);
@@ -1040,80 +1042,269 @@ route('GET', '/api/dss/motoristas', async (req) => {
   if (!d.items.length && d.error) throw httpError(d.status || 502, d.error);
   return { motoristas: d.items, atualizado: d.at || null, aviso: d.error || null };
 });
-// ---------- carga_of_container: DATA BAIXA do PRÉ STACKING VAZIO ----------
+// ---------- carga_of_container (Carga OF Container): DATA BAIXA e consulta de containers ----------
 // A API devolve registros com "nro_container" ("TRHU 861.819-1") e "data_hora_entrada" ("2026-11-05 01:11:17").
-// URL: CARGA_OF_CONTAINER_URL (ou a variável carga_of_container); sem ela, {DSS_BASE_URL}/carga_of_container.
-// Login: o mesmo do DSS (DSS_TOKEN ou DSS_USUARIO/DSS_SENHA), ou CARGA_OF_CONTAINER_TOKEN.
+// URL: variável carga_of_container / CARGA_OF_CONTAINER_URL (o nome pode vir em qualquer caixa: Carga_OF_Container…);
+// sem ela, {DSS_BASE_URL}/carga_of_container. Login: CARGA_OF_CONTAINER_TOKEN / _USUARIO / _SENHA, ou o mesmo do DSS.
 const nroContainer = (x) => String(x || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const fmtNroContainer = (n) => (/^[A-Z]{4}\d{7}$/.test(n) ? `${n.slice(0, 4)} ${n.slice(4, 7)}.${n.slice(7, 10)}-${n.slice(10)}` : n);
-function cargaUrl() {
-  const v = String(process.env.CARGA_OF_CONTAINER_URL || process.env.carga_of_container || process.env.CARGA_OF_CONTAINER || '').trim();
-  if (/^https?:\/\//i.test(v)) return v;
-  return DSS_BASE + '/' + (v ? v.replace(/^\/+/, '') : 'carga_of_container');
+// variável de ambiente sem diferenciar maiúsculas, "_" ou "-" (Carga_OF_Container = carga_of_container = CARGA-OF-CONTAINER)
+const envKey = (k) => String(k).toUpperCase().replace(/[^A-Z0-9]/g, '');
+function envAny(...names) {
+  const want = names.map(envKey);
+  for (const w of want) for (const k of Object.keys(process.env)) if (envKey(k) === w && String(process.env[k]).trim()) return { name: k, value: String(process.env[k]).trim() };
+  return null;
 }
-function cargaHeaders() {
-  const tk = process.env.CARGA_OF_CONTAINER_TOKEN || DSS_TOKEN;
+function cargaConf() {
+  const v = envAny('CARGA_OF_CONTAINER_URL', 'carga_of_container', 'CARGA_OF_CONTAINER_API', 'CARGAOFCONTAINER');
+  let url = v ? v.value : '';
+  if (url && !/^https?:\/\//i.test(url)) url = DSS_BASE + '/' + url.replace(/^\/+/, '');
+  if (!url) url = DSS_BASE + '/carga_of_container';
+  const tk = envAny('CARGA_OF_CONTAINER_TOKEN');
+  const us = envAny('CARGA_OF_CONTAINER_USUARIO', 'CARGA_OF_CONTAINER_USER'), ps = envAny('CARGA_OF_CONTAINER_SENHA', 'CARGA_OF_CONTAINER_PASSWORD');
+  const metodo = (envAny('CARGA_OF_CONTAINER_METODO', 'CARGA_OF_CONTAINER_METHOD') || { value: 'GET' }).value.toUpperCase() === 'POST' ? 'POST' : 'GET';
   const h = { Accept: 'application/json' };
-  if (tk) h.Authorization = 'Bearer ' + tk;
+  if (tk) h.Authorization = /^(bearer|basic|token)\s/i.test(tk.value) ? tk.value : 'Bearer ' + tk.value;
+  else if (us && ps) h.Authorization = 'Basic ' + Buffer.from(us.value + ':' + ps.value).toString('base64');
+  else if (DSS_TOKEN) h.Authorization = 'Bearer ' + DSS_TOKEN;
   else if (DSS_USER && DSS_PASS) h.Authorization = 'Basic ' + Buffer.from(DSS_USER + ':' + DSS_PASS).toString('base64');
-  return h;
+  return { url, headers: h, metodo, origem: v ? v.name : `(padrão: DSS_BASE_URL + /carga_of_container)`, login: tk ? 'token' : us && ps ? 'usuário próprio' : DSS_TOKEN || (DSS_USER && DSS_PASS) ? 'login do DSS' : 'sem login' };
 }
-// todos os objetos da resposta que têm nro_container (a lista pode vir solta ou dentro de registros/data/...)
-function cargaRegistros(j, out) {
+// URL para mostrar em log/diagnóstico, sem senha nem parâmetros
+const urlSegura = (u) => { try { const x = new URL(u); return x.origin + x.pathname + (x.search ? ' (com parâmetros)' : ''); } catch (e) { return '(URL inválida)'; } };
+
+// os campos podem vir com outros nomes ou em outra caixa (NRO_CONTAINER, nroContainer, container, numero_container…)
+const normKey = (k) => String(k).toLowerCase().replace(/[^a-z0-9]/g, '');
+const CAMPO_CONT = ['nrocontainer', 'numerocontainer', 'nrcontainer', 'numcontainer', 'container', 'conteiner', 'nrocntr', 'cntr', 'containernumero'];
+const CAMPO_DATA = ['datahoraentrada', 'dthoraentrada', 'dataentrada', 'dtentrada', 'entrada', 'datahorabaixa', 'databaixa', 'dtbaixa', 'datahora', 'data'];
+function campo(obj, lista) {
+  const ks = Object.keys(obj), nk = ks.map(normKey);
+  for (const want of lista) { const i = nk.indexOf(want); if (i >= 0) return ks[i]; }
+  return null;
+}
+// todos os objetos da resposta que têm um campo de container (a lista pode vir solta ou dentro de registros/data/...)
+function cargaRegistros(j, out, depth) {
   out = out || [];
-  if (Array.isArray(j)) { for (const x of j) cargaRegistros(x, out); return out; }
+  if ((depth || 0) > 6) return out;
+  if (Array.isArray(j)) { for (const x of j) cargaRegistros(x, out, (depth || 0) + 1); return out; }
   if (j && typeof j === 'object') {
-    if ('nro_container' in j) out.push(j);
-    else for (const k in j) if (j[k] && typeof j[k] === 'object') cargaRegistros(j[k], out);
+    const kc = campo(j, CAMPO_CONT);
+    if (kc && typeof j[kc] !== 'object') out.push(j);
+    else for (const k in j) if (j[k] && typeof j[k] === 'object') cargaRegistros(j[k], out, (depth || 0) + 1);
   }
   return out;
 }
-// "2026-11-05 01:11:17" (ou 05/11/2026 01:11) → { data: '05/11/2026', ts }
+const regContainer = (it) => { const k = campo(it, CAMPO_CONT); return k ? it[k] : ''; };
+const regDataHora = (it) => { const k = campo(it, CAMPO_DATA); return k ? it[k] : ''; };
+// "2026-11-05 01:11:17" (ou 05/11/2026 01:11, ou /Date(…)/, ou ISO) → { data: '05/11/2026', ts }
 function cargaData(v) {
   const t = String(v || '').trim();
   let m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/.exec(t);
   if (m) return { data: `${m[3]}/${m[2]}/${m[1]}`, ts: `${m[1]}${m[2]}${m[3]}${m[4] || '00'}${m[5] || '00'}${m[6] || '00'}` };
   m = /^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?/.exec(t);
   if (m) return { data: `${m[1]}/${m[2]}/${m[3]}`, ts: `${m[3]}${m[2]}${m[1]}${m[4] || '00'}${m[5] || '00'}${m[6] || '00'}` };
+  m = /\/Date\((\d+)/.exec(t);
+  if (m) { const d = new Date(+m[1]); const p = (n) => String(n).padStart(2, '0'); return { data: `${p(d.getUTCDate())}/${p(d.getUTCMonth() + 1)}/${d.getUTCFullYear()}`, ts: d.toISOString().replace(/\D/g, '').slice(0, 14) }; }
   return null;
 }
-let cargaLista = { at: 0, regs: null };
-async function cargaFetch(url) {
-  const r = await fetch(url, { headers: cargaHeaders(), signal: AbortSignal.timeout(20000), redirect: 'error' });
+// erro de rede/HTTPS com o motivo real (certificado, conexão recusada, tempo esgotado…)
+function motivoRede(e) {
+  const c = (e && e.cause) || {};
+  const code = c.code || e.code || '';
+  const MAP = {
+    ECONNREFUSED: 'conexão recusada', ECONNRESET: 'a conexão caiu no meio', ENOTFOUND: 'endereço não encontrado (DNS)', ETIMEDOUT: 'tempo esgotado',
+    UND_ERR_CONNECT_TIMEOUT: 'tempo esgotado para conectar', UND_ERR_SOCKET: 'a conexão caiu no meio', CERT_HAS_EXPIRED: 'certificado HTTPS vencido',
+    UNABLE_TO_VERIFY_LEAF_SIGNATURE: 'certificado HTTPS incompleto (falta a cadeia intermediária)', DEPTH_ZERO_SELF_SIGNED_CERT: 'certificado HTTPS autoassinado',
+    SELF_SIGNED_CERT_IN_CHAIN: 'certificado HTTPS autoassinado na cadeia', ERR_TLS_CERT_ALTNAME_INVALID: 'o certificado HTTPS é de outro nome', EPROTO: 'falha no HTTPS',
+  };
+  if (e && e.name === 'TimeoutError') return 'tempo esgotado (20 s)';
+  return (MAP[code] || c.message || e.message || 'falha de rede') + (code ? ` [${code}]` : '');
+}
+// ---------- período (a API exige "Data de Início") ----------
+// O nome do parâmetro não vem documentado: o servidor descobre sozinho, testando os nomes comuns e lendo a mensagem
+// de erro da API; ou use CARGA_OF_CONTAINER_PARAMS, ex.: dataInicio={ini}&dataFim={fim} (formato em CARGA_OF_CONTAINER_FORMATO).
+const pad2 = (n) => String(n).padStart(2, '0');
+const FMT_DATA = {
+  br: (d) => `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`,
+  iso: (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`,
+  isoh: (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} 00:00:00`,
+  ymd: (d) => `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}`,
+};
+const NOMES_INI = ['data_inicio', 'dataInicio', 'dataInicial', 'data_inicial', 'dt_inicio', 'dtInicio', 'dtInicial', 'dt_inicial', 'inicio', 'data_ini', 'dataIni', 'dt_ini', 'dtIni', 'datainicio', 'data_de', 'de'];
+const NOMES_FIM = ['data_fim', 'dataFim', 'dataFinal', 'data_final', 'dt_fim', 'dtFim', 'dtFinal', 'dt_final', 'fim', 'data_ate', 'dataAte', 'datafim', 'ate'];
+const cargaDias = () => Math.max(1, Math.min(365, Number((envAny('CARGA_OF_CONTAINER_DIAS') || {}).value) || 60));
+let cargaParams = null, cargaDescobrindo = null;
+// uma consulta "crua": devolve { http, msg, regs }
+async function cargaTenta(url) {
+  const cf = cargaConf();
+  const r = await fetch(url, { method: cf.metodo, headers: cf.headers, signal: AbortSignal.timeout(20000), redirect: 'follow', body: cf.metodo === 'POST' ? '{}' : undefined });
   const text = await r.text();
-  let j;
-  try { j = JSON.parse(text); } catch (e) { throw httpError(502, `A API carga_of_container respondeu algo que não é JSON (HTTP ${r.status}). Confira a URL no Render.`); }
-  if (!r.ok) throw httpError(502, `A API carga_of_container recusou a consulta (HTTP ${r.status}).`);
-  return cargaRegistros(j);
+  let j = null; try { j = JSON.parse(text.replace(/^\uFEFF/, '')); } catch (e) { /* não é JSON */ }
+  const msg = j && typeof j === 'object' && !Array.isArray(j) ? String(j.mensagemErro || j.mensagem || j.message || j.erro || '') : '';
+  const st = j && typeof j.status === 'number' ? j.status : r.status;
+  return { http: st, msg, regs: j ? cargaRegistros(j) : [], json: !!j };
+}
+const comParams = (base, q) => base + (base.includes('?') ? '&' : '?') + q;
+function periodoQuery(p, ini, fim) {
+  if (p.template) return p.template.replace('{ini}', encodeURIComponent(FMT_DATA[p.fmt](ini))).replace('{fim}', encodeURIComponent(FMT_DATA[p.fmt](fim)));
+  let q = p.ini + '=' + encodeURIComponent(FMT_DATA[p.fmt](ini));
+  if (p.fim) q += '&' + p.fim + '=' + encodeURIComponent(FMT_DATA[p.fmt](fim));
+  return q;
+}
+async function cargaPeriodo() {
+  const tpl = envAny('CARGA_OF_CONTAINER_PARAMS');
+  if (tpl) return { template: tpl.value.replace(/^\?/, ''), fmt: FMT_DATA[(envAny('CARGA_OF_CONTAINER_FORMATO') || {}).value] ? envAny('CARGA_OF_CONTAINER_FORMATO').value : 'br' };
+  if (cargaParams) return cargaParams;
+  if (cargaDescobrindo) return cargaDescobrindo;
+  cargaDescobrindo = (async () => {
+    const base = cargaConf().url, hoje = new Date(), ini = new Date(Date.now() - 7 * 864e5);
+    const pede = /in[ií]cio|inicial/i;
+    const primeira = await cargaTenta(base);
+    if (!(primeira.http === 400 && pede.test(primeira.msg))) return (cargaParams = { nenhum: true });
+    const log = [];
+    // 1) o nome do início: a mensagem deixa de pedir a Data de Início
+    let achou = null;
+    for (const nome of NOMES_INI) {
+      const t = await cargaTenta(comParams(base, nome + '=' + encodeURIComponent(FMT_DATA.br(ini))));
+      log.push(`${nome}: ${t.http} ${t.msg.slice(0, 60)}`);
+      if (!(t.http === 400 && pede.test(t.msg) && /n[aã]o informad/i.test(t.msg))) { achou = { ini: nome, t }; break; }
+    }
+    if (!achou) { console.error('[carga] não achei o parâmetro da Data de Início:', log.join(' | ')); cargaDescobrindo = null; throw httpError(502, 'A API carga_of_container pede a Data de Início e não reconheci o nome do parâmetro. Configure CARGA_OF_CONTAINER_PARAMS no Render (ex.: dataInicio={ini}&dataFim={fim}).'); }
+    // 2) o formato da data (se a API reclamar do formato)
+    let fmt = 'br';
+    if (/inv[aá]lid|formato/i.test(achou.t.msg)) {
+      for (const f of ['iso', 'isoh', 'ymd']) {
+        const t = await cargaTenta(comParams(base, achou.ini + '=' + encodeURIComponent(FMT_DATA[f](ini))));
+        log.push(`${achou.ini} ${f}: ${t.http} ${t.msg.slice(0, 60)}`);
+        if (!/inv[aá]lid|formato/i.test(t.msg)) { fmt = f; achou.t = t; break; }
+      }
+    }
+    // 3) o fim do período, se a API pedir
+    let fim = null;
+    if (/fim|final|t[eé]rmino/i.test(achou.t.msg) && achou.t.http >= 400) {
+      for (const nome of NOMES_FIM) {
+        const t = await cargaTenta(comParams(base, achou.ini + '=' + encodeURIComponent(FMT_DATA[fmt](ini)) + '&' + nome + '=' + encodeURIComponent(FMT_DATA[fmt](hoje))));
+        log.push(`${nome}: ${t.http} ${t.msg.slice(0, 60)}`);
+        if (!(t.http >= 400 && /fim|final|t[eé]rmino/i.test(t.msg) && /n[aã]o informad/i.test(t.msg))) { fim = nome; break; }
+      }
+    }
+    cargaParams = { ini: achou.ini, fim, fmt };
+    console.log('[carga] período descoberto:', JSON.stringify(cargaParams), '·', log.join(' | '));
+    return cargaParams;
+  })();
+  try { return await cargaDescobrindo; } finally { cargaDescobrindo = null; }
+}
+// URL com o período (últimos N dias até amanhã) e, opcionalmente, o container
+async function cargaUrlCom(extra) {
+  const base = cargaConf().url, p = await cargaPeriodo();
+  const fim = new Date(Date.now() + 864e5), ini = new Date(Date.now() - cargaDias() * 864e5);
+  const q = [p.nenhum ? '' : periodoQuery(p, ini, fim), extra || ''].filter(Boolean).join('&');
+  return q ? comParams(base, q) : base;
+}
+
+let cargaLista = { at: 0, regs: null };
+async function cargaFetch(url, extra) {
+  const cf = cargaConf();
+  let ultimo = null;
+  // a API às vezes falha por instantes (rede ou HTTP 5xx): tenta de novo 2 vezes
+  for (let tentativa = 0; tentativa < 3; tentativa++) {
+    if (tentativa) await new Promise((r) => setTimeout(r, 600 * tentativa));
+    let r, text;
+    try {
+      const opts = { method: cf.metodo, headers: Object.assign({}, cf.headers), signal: AbortSignal.timeout(20000), redirect: 'follow' };
+      if (cf.metodo === 'POST') { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(extra || {}); }
+      r = await fetch(url, opts);
+      text = await r.text();
+    } catch (e) {
+      ultimo = httpError(502, `Não foi possível falar com a API carga_of_container: ${motivoRede(e)}.`);
+      console.error('[carga]', urlSegura(url), motivoRede(e));
+      continue;
+    }
+    if (r.status >= 500) { ultimo = httpError(502, `A API carga_of_container falhou (HTTP ${r.status}).`); console.error('[carga]', urlSegura(url), 'HTTP', r.status, text.slice(0, 200).replace(/\s+/g, ' ')); continue; }
+    let j;
+    try { j = JSON.parse(text.replace(/^﻿/, '')); }
+    catch (e) { console.error('[carga]', urlSegura(url), 'HTTP', r.status, 'não é JSON:', text.slice(0, 200).replace(/\s+/g, ' ')); throw httpError(502, `A API carga_of_container respondeu algo que não é JSON (HTTP ${r.status}). Confira a URL no Render.`); }
+    if (!r.ok) { console.error('[carga]', urlSegura(url), 'HTTP', r.status, text.slice(0, 200).replace(/\s+/g, ' ')); throw httpError(502, `A API carga_of_container recusou a consulta (HTTP ${r.status}${j && (j.mensagemErro || j.message || j.erro) ? ': ' + (j.mensagemErro || j.message || j.erro) : ''}).`); }
+    if (j && typeof j.status === 'number' && j.status >= 400) throw httpError(502, `A API carga_of_container recusou a consulta (${j.status}${j.mensagemErro ? ': ' + j.mensagemErro : ''}).`);
+    return cargaRegistros(j);
+  }
+  throw ultimo;
+}
+async function cargaTodos() {
+  if (!cargaLista.regs || Date.now() - cargaLista.at > 120e3) cargaLista = { at: Date.now(), regs: await cargaFetch(await cargaUrlCom('')) };
+  return cargaLista.regs;
+}
+// registros de um container (pergunta direto pela API; se ela ignorar o filtro, procura na lista completa)
+async function cargaDoContainer(n) {
+  const deste = (regs) => regs.filter((it) => nroContainer(regContainer(it)) === n);
+  let erro = null;
+  for (const q of [n, fmtNroContainer(n)]) {
+    try { const regs = deste(await cargaFetch(await cargaUrlCom('nro_container=' + encodeURIComponent(q)), { nro_container: q })); if (regs.length) return regs; } catch (e) { erro = e; }
+    if (q === fmtNroContainer(q)) break;
+  }
+  try { return deste(await cargaTodos()); } catch (e) { throw erro || e; }
 }
 async function dataBaixa(container) {
   const n = nroContainer(container);
   if (n.length < 6) throw httpError(400, 'Container inválido.');
-  const base = cargaUrl(), sep = base.includes('?') ? '&' : '?';
-  const melhor = (regs) => {
-    let best = null;
-    for (const it of regs) {
-      if (nroContainer(it.nro_container) !== n) continue;
-      const d = cargaData(it.data_hora_entrada);
-      if (d && (!best || d.ts > best.ts)) best = Object.assign(d, { dataHora: String(it.data_hora_entrada) });
-    }
-    return best;
-  };
-  // 1) pergunta direto pelo container (sem e com a máscara); 2) se a API ignorar o filtro, procura na lista completa
-  let erro = null;
-  for (const q of [n, fmtNroContainer(n)]) {
-    try { const b = melhor(await cargaFetch(base + sep + 'nro_container=' + encodeURIComponent(q))); if (b) return b; } catch (e) { erro = e; }
+  let best = null;
+  for (const it of await cargaDoContainer(n)) {
+    const d = cargaData(regDataHora(it));
+    if (d && (!best || d.ts > best.ts)) best = Object.assign(d, { dataHora: String(regDataHora(it)) });
   }
-  try {
-    if (!cargaLista.regs || Date.now() - cargaLista.at > 120e3) cargaLista = { at: Date.now(), regs: await cargaFetch(base) };
-  } catch (e) { throw erro || e; }
-  return melhor(cargaLista.regs);
+  return best;
 }
 route('GET', '/api/carga/data-baixa', async (req) => {
   await requireUser(req);
   const c = String(new URL(req.url, 'http://x').searchParams.get('container') || '');
   const b = await dataBaixa(c);
   return b ? { achou: true, container: nroContainer(c), data: b.data, dataHora: b.dataHora } : { achou: false, container: nroContainer(c) };
+});
+// consulta para a tela (Administrador › Containers da Carga OF): registros de um container, ou os mais recentes
+route('GET', '/api/carga/consulta', async (req) => {
+  await requireUser(req);
+  const q = new URL(req.url, 'http://x').searchParams;
+  const n = nroContainer(q.get('container') || '');
+  const limpa = (it) => { const o = {}; for (const k in it) if (it[k] === null || typeof it[k] !== 'object') o[k] = it[k]; return o; };
+  if (n) {
+    if (n.length < 4) throw httpError(400, 'Digite ao menos 4 letras ou números do container.');
+    // parte do número: procura na lista completa
+    const regs = n.length >= 10 ? await cargaDoContainer(n) : (await cargaTodos()).filter((it) => nroContainer(regContainer(it)).includes(n));
+    return { registros: regs.slice(0, 200).map(limpa), total: regs.length };
+  }
+  const todos = await cargaTodos();
+  const ord = todos.slice().sort((a, b) => String((cargaData(regDataHora(b)) || {}).ts || '').localeCompare(String((cargaData(regDataHora(a)) || {}).ts || '')));
+  return { registros: ord.slice(0, 100).map(limpa), total: todos.length, atualizado: new Date(cargaLista.at).toISOString() };
+});
+// diagnóstico: de onde vem a URL, o que a API respondeu e quais campos vieram (sem valores)
+async function cargaDiag() {
+  const cf = cargaConf();
+  const out = { url: urlSegura(cf.url), variavel: cf.origem, login: cf.login, metodo: cf.metodo };
+  const t0 = Date.now();
+  try {
+    let url = cf.url;
+    try { const p = await cargaPeriodo(); if (!p.nenhum) { out.periodo = p.template ? p.template : `${p.ini}${p.fim ? ' e ' + p.fim : ''} (${p.fmt}), últimos ${cargaDias()} dias`; url = await cargaUrlCom(''); } }
+    catch (e) { out.periodo = 'não descoberto: ' + e.message; }
+    const r = await fetch(url, { method: cf.metodo, headers: cf.headers, signal: AbortSignal.timeout(20000), redirect: 'follow', body: cf.metodo === 'POST' ? '{}' : undefined });
+    const text = await r.text();
+    Object.assign(out, { http: r.status, tipo: r.headers.get('content-type') || '', ms: Date.now() - t0, redirecionou: r.redirected ? urlSegura(r.url) : null });
+    let j = null;
+    try { j = JSON.parse(text.replace(/^﻿/, '')); } catch (e) { out.json = false; out.inicio = text.slice(0, 160).replace(/\s+/g, ' '); return out; }
+    out.json = true;
+    const regs = cargaRegistros(j);
+    out.registros = regs.length;
+    if (j && typeof j === 'object' && !Array.isArray(j)) { const msg = j.mensagemErro || j.mensagem || j.message || j.erro || j.error; if (msg) out.mensagem = String(msg).slice(0, 300); if (j.status !== undefined) out.statusApi = j.status; }
+    out.formato = Array.isArray(j) ? `lista com ${j.length} itens` : j && typeof j === 'object' ? 'objeto com ' + Object.keys(j).slice(0, 12).join(', ') : typeof j;
+    if (regs.length) { out.campos = Object.keys(regs[0]); out.campoContainer = campo(regs[0], CAMPO_CONT); out.campoData = campo(regs[0], CAMPO_DATA); }
+    else if (j && typeof j === 'object') out.inicio = JSON.stringify(j).slice(0, 160);
+  } catch (e) { Object.assign(out, { erro: motivoRede(e), ms: Date.now() - t0 }); }
+  return out;
+}
+route('GET', '/api/carga/diag', async (req) => {
+  const user = await requireUser(req);
+  const d = await cargaDiag();
+  if (!(await isGlobalAdmin(user))) delete d.inicio;
+  return d;
 });
 // Ao digitar um motorista conhecido na coluna configurada, o servidor completa o CPF/CNPJ (vale também para quem não edita a coluna do CPF)
 // Nome do motorista apagado: o CPF/CNPJ da mesma linha também é apagado (o contrário não: apagar o CPF não mexe no nome)
