@@ -1120,6 +1120,88 @@ function motivoRede(e) {
   if (e && e.name === 'TimeoutError') return 'tempo esgotado (20 s)';
   return (MAP[code] || c.message || e.message || 'falha de rede') + (code ? ` [${code}]` : '');
 }
+// ---------- período (a API exige "Data de Início") ----------
+// O nome do parâmetro não vem documentado: o servidor descobre sozinho, testando os nomes comuns e lendo a mensagem
+// de erro da API; ou use CARGA_OF_CONTAINER_PARAMS, ex.: dataInicio={ini}&dataFim={fim} (formato em CARGA_OF_CONTAINER_FORMATO).
+const pad2 = (n) => String(n).padStart(2, '0');
+const FMT_DATA = {
+  br: (d) => `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`,
+  iso: (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`,
+  isoh: (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} 00:00:00`,
+  ymd: (d) => `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}`,
+};
+const NOMES_INI = ['data_inicio', 'dataInicio', 'dataInicial', 'data_inicial', 'dt_inicio', 'dtInicio', 'dtInicial', 'dt_inicial', 'inicio', 'data_ini', 'dataIni', 'dt_ini', 'dtIni', 'datainicio', 'data_de', 'de'];
+const NOMES_FIM = ['data_fim', 'dataFim', 'dataFinal', 'data_final', 'dt_fim', 'dtFim', 'dtFinal', 'dt_final', 'fim', 'data_ate', 'dataAte', 'datafim', 'ate'];
+const cargaDias = () => Math.max(1, Math.min(365, Number((envAny('CARGA_OF_CONTAINER_DIAS') || {}).value) || 60));
+let cargaParams = null, cargaDescobrindo = null;
+// uma consulta "crua": devolve { http, msg, regs }
+async function cargaTenta(url) {
+  const cf = cargaConf();
+  const r = await fetch(url, { method: cf.metodo, headers: cf.headers, signal: AbortSignal.timeout(20000), redirect: 'follow', body: cf.metodo === 'POST' ? '{}' : undefined });
+  const text = await r.text();
+  let j = null; try { j = JSON.parse(text.replace(/^\uFEFF/, '')); } catch (e) { /* não é JSON */ }
+  const msg = j && typeof j === 'object' && !Array.isArray(j) ? String(j.mensagemErro || j.mensagem || j.message || j.erro || '') : '';
+  const st = j && typeof j.status === 'number' ? j.status : r.status;
+  return { http: st, msg, regs: j ? cargaRegistros(j) : [], json: !!j };
+}
+const comParams = (base, q) => base + (base.includes('?') ? '&' : '?') + q;
+function periodoQuery(p, ini, fim) {
+  if (p.template) return p.template.replace('{ini}', encodeURIComponent(FMT_DATA[p.fmt](ini))).replace('{fim}', encodeURIComponent(FMT_DATA[p.fmt](fim)));
+  let q = p.ini + '=' + encodeURIComponent(FMT_DATA[p.fmt](ini));
+  if (p.fim) q += '&' + p.fim + '=' + encodeURIComponent(FMT_DATA[p.fmt](fim));
+  return q;
+}
+async function cargaPeriodo() {
+  const tpl = envAny('CARGA_OF_CONTAINER_PARAMS');
+  if (tpl) return { template: tpl.value.replace(/^\?/, ''), fmt: FMT_DATA[(envAny('CARGA_OF_CONTAINER_FORMATO') || {}).value] ? envAny('CARGA_OF_CONTAINER_FORMATO').value : 'br' };
+  if (cargaParams) return cargaParams;
+  if (cargaDescobrindo) return cargaDescobrindo;
+  cargaDescobrindo = (async () => {
+    const base = cargaConf().url, hoje = new Date(), ini = new Date(Date.now() - 7 * 864e5);
+    const pede = /in[ií]cio|inicial/i;
+    const primeira = await cargaTenta(base);
+    if (!(primeira.http === 400 && pede.test(primeira.msg))) return (cargaParams = { nenhum: true });
+    const log = [];
+    // 1) o nome do início: a mensagem deixa de pedir a Data de Início
+    let achou = null;
+    for (const nome of NOMES_INI) {
+      const t = await cargaTenta(comParams(base, nome + '=' + encodeURIComponent(FMT_DATA.br(ini))));
+      log.push(`${nome}: ${t.http} ${t.msg.slice(0, 60)}`);
+      if (!(t.http === 400 && pede.test(t.msg) && /n[aã]o informad/i.test(t.msg))) { achou = { ini: nome, t }; break; }
+    }
+    if (!achou) { console.error('[carga] não achei o parâmetro da Data de Início:', log.join(' | ')); cargaDescobrindo = null; throw httpError(502, 'A API carga_of_container pede a Data de Início e não reconheci o nome do parâmetro. Configure CARGA_OF_CONTAINER_PARAMS no Render (ex.: dataInicio={ini}&dataFim={fim}).'); }
+    // 2) o formato da data (se a API reclamar do formato)
+    let fmt = 'br';
+    if (/inv[aá]lid|formato/i.test(achou.t.msg)) {
+      for (const f of ['iso', 'isoh', 'ymd']) {
+        const t = await cargaTenta(comParams(base, achou.ini + '=' + encodeURIComponent(FMT_DATA[f](ini))));
+        log.push(`${achou.ini} ${f}: ${t.http} ${t.msg.slice(0, 60)}`);
+        if (!/inv[aá]lid|formato/i.test(t.msg)) { fmt = f; achou.t = t; break; }
+      }
+    }
+    // 3) o fim do período, se a API pedir
+    let fim = null;
+    if (/fim|final|t[eé]rmino/i.test(achou.t.msg) && achou.t.http >= 400) {
+      for (const nome of NOMES_FIM) {
+        const t = await cargaTenta(comParams(base, achou.ini + '=' + encodeURIComponent(FMT_DATA[fmt](ini)) + '&' + nome + '=' + encodeURIComponent(FMT_DATA[fmt](hoje))));
+        log.push(`${nome}: ${t.http} ${t.msg.slice(0, 60)}`);
+        if (!(t.http >= 400 && /fim|final|t[eé]rmino/i.test(t.msg) && /n[aã]o informad/i.test(t.msg))) { fim = nome; break; }
+      }
+    }
+    cargaParams = { ini: achou.ini, fim, fmt };
+    console.log('[carga] período descoberto:', JSON.stringify(cargaParams), '·', log.join(' | '));
+    return cargaParams;
+  })();
+  try { return await cargaDescobrindo; } finally { cargaDescobrindo = null; }
+}
+// URL com o período (últimos N dias até amanhã) e, opcionalmente, o container
+async function cargaUrlCom(extra) {
+  const base = cargaConf().url, p = await cargaPeriodo();
+  const fim = new Date(Date.now() + 864e5), ini = new Date(Date.now() - cargaDias() * 864e5);
+  const q = [p.nenhum ? '' : periodoQuery(p, ini, fim), extra || ''].filter(Boolean).join('&');
+  return q ? comParams(base, q) : base;
+}
+
 let cargaLista = { at: 0, regs: null };
 async function cargaFetch(url, extra) {
   const cf = cargaConf();
@@ -1149,16 +1231,15 @@ async function cargaFetch(url, extra) {
   throw ultimo;
 }
 async function cargaTodos() {
-  if (!cargaLista.regs || Date.now() - cargaLista.at > 120e3) cargaLista = { at: Date.now(), regs: await cargaFetch(cargaConf().url) };
+  if (!cargaLista.regs || Date.now() - cargaLista.at > 120e3) cargaLista = { at: Date.now(), regs: await cargaFetch(await cargaUrlCom('')) };
   return cargaLista.regs;
 }
 // registros de um container (pergunta direto pela API; se ela ignorar o filtro, procura na lista completa)
 async function cargaDoContainer(n) {
-  const base = cargaConf().url, sep = base.includes('?') ? '&' : '?';
   const deste = (regs) => regs.filter((it) => nroContainer(regContainer(it)) === n);
   let erro = null;
   for (const q of [n, fmtNroContainer(n)]) {
-    try { const regs = deste(await cargaFetch(base + sep + 'nro_container=' + encodeURIComponent(q), { nro_container: q })); if (regs.length) return regs; } catch (e) { erro = e; }
+    try { const regs = deste(await cargaFetch(await cargaUrlCom('nro_container=' + encodeURIComponent(q)), { nro_container: q })); if (regs.length) return regs; } catch (e) { erro = e; }
     if (q === fmtNroContainer(q)) break;
   }
   try { return deste(await cargaTodos()); } catch (e) { throw erro || e; }
@@ -1201,7 +1282,10 @@ async function cargaDiag() {
   const out = { url: urlSegura(cf.url), variavel: cf.origem, login: cf.login, metodo: cf.metodo };
   const t0 = Date.now();
   try {
-    const r = await fetch(cf.url, { method: cf.metodo, headers: cf.headers, signal: AbortSignal.timeout(20000), redirect: 'follow', body: cf.metodo === 'POST' ? '{}' : undefined });
+    let url = cf.url;
+    try { const p = await cargaPeriodo(); if (!p.nenhum) { out.periodo = p.template ? p.template : `${p.ini}${p.fim ? ' e ' + p.fim : ''} (${p.fmt}), últimos ${cargaDias()} dias`; url = await cargaUrlCom(''); } }
+    catch (e) { out.periodo = 'não descoberto: ' + e.message; }
+    const r = await fetch(url, { method: cf.metodo, headers: cf.headers, signal: AbortSignal.timeout(20000), redirect: 'follow', body: cf.metodo === 'POST' ? '{}' : undefined });
     const text = await r.text();
     Object.assign(out, { http: r.status, tipo: r.headers.get('content-type') || '', ms: Date.now() - t0, redirecionou: r.redirected ? urlSegura(r.url) : null });
     let j = null;

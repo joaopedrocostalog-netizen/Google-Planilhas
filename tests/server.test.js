@@ -41,19 +41,27 @@ function connect(token, doc) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 (async () => {
-  // API carga_of_container falsa: ignora o filtro e devolve tudo (o servidor precisa achar o container na lista)
+  // API carga_of_container falsa, como a do DSS: exige dataInicio (aaaa-mm-dd) e dataFim, ignora o filtro do container
+  // e devolve tudo (o servidor precisa descobrir os parâmetros e achar o container na lista)
   const CARGA_PORT = PORT + 1000;
   const cargaReqs = [];
   const cargaSrv = require('http').createServer((req, res) => {
     cargaReqs.push(req.url);
+    const u = new URL(req.url, 'http://x');
+    const erro = (m) => { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ apiVersion: '1', status: 400, mensagemErro: m, qtd_registros: 0, registros: [] })); };
+    if (req.headers.authorization !== 'Basic ' + Buffer.from('dss:segredo').toString('base64')) return erro('Usuário inválido.');
+    const di = u.searchParams.get('dataInicio'), df = u.searchParams.get('dataFim');
+    if (!di) return erro('Data de Início não informada.');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(di)) return erro('Data de Início inválida.');
+    if (!df) return erro('Data de Fim não informada.');
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ registros: [
+    res.end(JSON.stringify({ apiVersion: '1', status: 200, mensagemErro: '', qtd_registros: 3, registros: [
       { nro_container: 'TRHU 861.819-1', data_hora_entrada: '2026-11-03 22:40:00' },
       { nro_container: 'TRHU 861.819-1', data_hora_entrada: '2026-11-05 01:11:17' },
       { nro_container: 'MSCU 123.456-7', data_hora_entrada: '2026-10-30 08:00:00' },
     ] }));
   }).listen(CARGA_PORT);
-  const proc = spawn(process.execPath, [path.join(__dirname, '..', 'server', 'index.js')], { env: Object.assign({}, process.env, { PORT: String(PORT), DATABASE_URL: '', ADMIN_EMAILS: 'ana@empresa.com', carga_of_container: `http://127.0.0.1:${CARGA_PORT}/carga_of_container` }), stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = spawn(process.execPath, [path.join(__dirname, '..', 'server', 'index.js')], { env: Object.assign({}, process.env, { PORT: String(PORT), DATABASE_URL: '', ADMIN_EMAILS: 'ana@empresa.com', Carga_OF_Container: `http://127.0.0.1:${CARGA_PORT}/listarCargaContainerTerminal`, DSS_USUARIO: 'dss', DSS_SENHA: 'segredo', DSS_BASE_URL: `http://127.0.0.1:${CARGA_PORT}` }), stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';
   proc.stdout.on('data', (d) => { log += d; });
   proc.stderr.on('data', (d) => { log += d; });
@@ -321,7 +329,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     // DATA BAIXA (carga_of_container): container sem espaço, ponto e traço; data mais recente em dd/mm/aaaa
     const db = await api('GET', '/api/carga/data-baixa?container=' + encodeURIComponent('trhu8618191'), null, ana.token);
     check('DATA BAIXA vem da API em dd/mm/aaaa', [db.achou, db.data, db.container], [true, '05/11/2026', 'TRHU8618191']);
-    check('pergunta pelo container na API', cargaReqs[0], '/carga_of_container?nro_container=TRHU8618191');
+    const comPeriodo = cargaReqs.find((x) => /nro_container=TRHU8618191/.test(x)) || '';
+    check('descobriu o período e pergunta pelo container', /^\/listarCargaContainerTerminal\?dataInicio=\d{4}-\d{2}-\d{2}&dataFim=\d{4}-\d{2}-\d{2}&nro_container=TRHU8618191$/.test(comPeriodo), true);
+    const cons = await api('GET', '/api/carga/consulta?container=' + encodeURIComponent('TRHU 861.819-1'), null, ana.token);
+    check('consulta mostra os registros do container', [cons.total, cons.registros[0].nro_container], [2, 'TRHU 861.819-1']);
+    const rec = await api('GET', '/api/carga/consulta', null, ana.token);
+    check('últimas entradas, mais nova primeiro', rec.registros.map((x) => x.data_hora_entrada), ['2026-11-05 01:11:17', '2026-11-03 22:40:00', '2026-10-30 08:00:00']);
+    const dg = await api('GET', '/api/carga/diag', null, ana.token);
+    check('diagnóstico', [dg.http, dg.registros, dg.campoContainer, dg.campoData, dg.variavel, /dataInicio e dataFim \(iso\)/.test(dg.periodo)], [200, 3, 'nro_container', 'data_hora_entrada', 'Carga_OF_Container', true]);
     const nd = await api('GET', '/api/carga/data-baixa?container=ABCD0000000', null, ana.token);
     check('container fora da API', nd.achou, false);
     check('DATA BAIXA exige login', (await api('GET', '/api/carga/data-baixa?container=TRHU8618191'))._status, 401);
