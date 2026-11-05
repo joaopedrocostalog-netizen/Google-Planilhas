@@ -806,6 +806,8 @@ route('GET', '/api/docs/:id/mail', async (req, p) => {
     podeEnviar: canSendMail(perms, sheet),
     remetente: mail.configured() ? cfg.from : null,
     quem: (sheet && sheet.mailSectors) || null,
+    // por onde sai o envio: 'api' (HTTPS) quando há chave, senão 'smtp' (sem revelar a chave)
+    envio: cfg.transport || (cfg.apiKey ? 'api' : 'smtp'),
   };
 });
 // procura a conversa pelo assunto (a REFERENCIA) e devolve a mensagem mais recente
