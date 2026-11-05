@@ -78,6 +78,18 @@ function memoryStore(file) {
     async getHistory(docId, sheetId, addr, limit) {
       return (db.history[docId] || []).filter((h) => h.sheet_id === sheetId && h.addr === addr).slice(-limit).reverse().map(clone);
     },
+    // métricas: edições de células desde "since" (ISO), quantas pessoas e quem mais editou
+    async historyStats(docId, since) {
+      const by = new Map();
+      let n = 0;
+      for (const h of db.history[docId] || []) {
+        if (h.at < since) continue;
+        n++;
+        const x = by.get(h.user_id) || { id: h.user_id, name: h.user_name, n: 0 };
+        x.n++; by.set(h.user_id, x);
+      }
+      return { edicoes: n, pessoas: by.size, top: [...by.values()].sort((a, b) => b.n - a.n).slice(0, 5) };
+    },
   };
 }
 
@@ -129,6 +141,7 @@ function pgStore(url) {
         at TIMESTAMPTZ NOT NULL DEFAULT now(), before TEXT, after TEXT)`);
       await q('CREATE INDEX IF NOT EXISTS cell_history_cell ON cell_history(doc_id, sheet_id, addr, id DESC)');
       await q('ALTER TABLE cell_history ADD COLUMN IF NOT EXISTS ip TEXT');
+      await q('CREATE INDEX IF NOT EXISTS cell_history_doc_at ON cell_history(doc_id, at)');
       await q(`CREATE TABLE IF NOT EXISTS messages (
         id BIGSERIAL PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT NOT NULL, doc_id TEXT,
         text TEXT NOT NULL, ref JSONB, at TIMESTAMPTZ NOT NULL DEFAULT now(), read_at TIMESTAMPTZ)`);
@@ -220,6 +233,12 @@ function pgStore(url) {
     async getHistory(docId, sheetId, addr, limit) {
       const r = await q('SELECT user_id, user_name, ip, at, before, after FROM cell_history WHERE doc_id = $1 AND sheet_id = $2 AND addr = $3 ORDER BY id DESC LIMIT $4', [docId, sheetId, addr, limit]);
       return r.rows;
+    },
+    // métricas: edições de células desde "since" (ISO), quantas pessoas e quem mais editou
+    async historyStats(docId, since) {
+      const r = await q(`SELECT user_id AS id, max(user_name) AS name, count(*)::int AS n FROM cell_history
+        WHERE doc_id = $1 AND at >= $2 GROUP BY user_id ORDER BY n DESC`, [docId, since]);
+      return { edicoes: r.rows.reduce((t, x) => t + x.n, 0), pessoas: r.rows.length, top: r.rows.slice(0, 5) };
     },
   };
 }

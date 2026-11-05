@@ -237,6 +237,65 @@ async function versionRoom(req, id) {
 // quem vê quem: administradores veem todos; os demais só veem pessoas do mesmo setor
 const seesPeer = (viewer, peer) => !!(viewer.perms && peer.perms) && (viewer.perms.admin || (!peer.perms.admin && viewer.perms.sectorId === peer.perms.sectorId));
 const peerInfo = (c) => ({ cid: c.cid, uid: c.user.id, name: c.user.name, email: c.user.email, color: colorFor(c.user.id), avatar: avatarOf(c.user.id), presence: c.presence });
+
+// ---------- Limite de usuários e métricas da planilha ----------
+// Limite: quantas pessoas (sem contar administradores) podem estar com a planilha aberta ao mesmo tempo.
+// 0 = sem limite. Abas repetidas da mesma pessoa contam uma vez. Quem já está dentro nunca é derrubado:
+// ao baixar o limite, só quem chega depois espera vaga. Administradores sempre entram e não ocupam vaga.
+const LIMITE_MAX = 1000;
+const limites = new Map(); // id da planilha -> limite (cache do banco: settings › limite_usuarios:<id>)
+async function limiteDe(id) {
+  if (!limites.has(id)) {
+    let v = null;
+    try { v = await store.getSetting('limite_usuarios:' + id); } catch (e) { /* sem banco: sem limite */ }
+    limites.set(id, Math.min(LIMITE_MAX, Math.max(0, Math.floor(Number(v && v.max) || 0))));
+  }
+  return limites.get(id);
+}
+// pessoas diferentes conectadas (opcionalmente só quem não é administrador)
+function pessoasNaSala(room, soNaoAdmin) {
+  const s = new Set();
+  for (const c of room.clients) if (c.user && (!soNaoAdmin || !(c.perms && c.perms.admin))) s.add(c.user.id);
+  return s;
+}
+// contadores do dia (horário de Brasília), guardados no banco (settings › metricas_dia:<id>) para não sumir quando o
+// servidor gratuito dorme: pico de pessoas ao mesmo tempo, quem entrou hoje e quem esperou vaga.
+const hojeBR = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }); // aaaa-mm-dd
+const inicioHojeISO = () => new Date(hojeBR() + 'T00:00:00-03:00').toISOString();
+const diasMetricas = new Map();
+async function diaDe(id) {
+  const hoje = hojeBR();
+  let d = diasMetricas.get(id);
+  if (!d) {
+    try { d = await store.getSetting('metricas_dia:' + id); } catch (e) { d = null; }
+    if (d) diasMetricas.set(id, d);
+  }
+  if (!d || d.dia !== hoje) { d = { dia: hoje, pico: 0, picoEm: null, quem: [], bloqueados: 0, ultimosBloqueados: [] }; diasMetricas.set(id, d); }
+  return d;
+}
+const salvarDiaTimers = new Map();
+function salvarDia(id) {
+  if (salvarDiaTimers.has(id)) return;
+  salvarDiaTimers.set(id, setTimeout(() => {
+    salvarDiaTimers.delete(id);
+    const d = diasMetricas.get(id);
+    if (d) store.setSetting('metricas_dia:' + id, d).catch((e) => console.error('[métricas] não consegui guardar:', e.message));
+  }, 3000));
+}
+async function registrarEntrada(room, user) {
+  const d = await diaDe(room.id);
+  const n = pessoasNaSala(room).size;
+  let mudou = false;
+  if (n > d.pico) { d.pico = n; d.picoEm = new Date().toISOString(); mudou = true; }
+  if (!d.quem.includes(user.id) && d.quem.length < 5000) { d.quem.push(user.id); mudou = true; }
+  if (mudou) salvarDia(room.id);
+}
+async function registrarBloqueio(room, user) {
+  const d = await diaDe(room.id);
+  d.bloqueados++;
+  d.ultimosBloqueados = [{ name: user.name, email: user.email, at: new Date().toISOString() }, ...d.ultimosBloqueados].slice(0, 10);
+  salvarDia(room.id);
+}
 function sendInit(c) {
   const room = c.room;
   c.ws.send({
@@ -269,9 +328,21 @@ async function onHello(c, msg) {
   if (!room) { c.ws.send({ type: 'error', code: 'notfound', message: 'Planilha não encontrada. Ela pode ter sido excluída.' }); return c.ws.close(4004, 'inexistente'); }
   const perms = Perms.compute(permDoc(room), user);
   if (!perms) { c.ws.send({ type: 'error', code: 'denied', message: 'Você não tem acesso a esta planilha. Peça acesso ao administrador.' }); return c.ws.close(4003, 'sem acesso'); }
-  c.user = user; c.room = room; c.perms = perms;
+  // limite de pessoas ao mesmo tempo (administradores sempre entram; quem já está dentro abre mais abas)
+  if (!perms.admin) {
+    const max = await limiteDe(room.id);
+    const dentro = pessoasNaSala(room, true);
+    if (max > 0 && !dentro.has(user.id) && dentro.size >= max) {
+      registrarBloqueio(room, user).catch(() => {});
+      console.log(`[limite] ${user.email} esperou vaga na planilha ${room.id} (${dentro.size}/${max})`);
+      c.ws.send({ type: 'error', code: 'limit', message: `Esta planilha atingiu o limite de ${max} ${max === 1 ? 'pessoa conectada' : 'pessoas conectadas'} ao mesmo tempo. Tente de novo em alguns minutos ou fale com o administrador.` });
+      return c.ws.close(4029, 'limite');
+    }
+  }
+  c.user = user; c.room = room; c.perms = perms; c.since = Date.now();
   room.clients.add(c);
   sendInit(c);
+  registrarEntrada(room, user).catch(() => {});
   for (const o of room.clients) if (o !== c && seesPeer(o, c)) o.ws.send({ type: 'join', peer: peerInfo(c) });
 }
 // Valores alterados (para o histórico de edições). Inserções/exclusões de linhas e colunas não entram.
@@ -786,6 +857,72 @@ route('POST', '/api/docs/:id/logout', async (req, p) => {
   }
   if (alvos.length) console.log(`[sessões] ${user.email} deslogou ${alvos.map((a) => a.email).join(', ')} (planilha ${room.id})`);
   return { ok: true, deslogados: alvos.map((a) => a.name), pulados };
+});
+// ---------- Administrador › Métricas da planilha e limite de usuários ----------
+async function metricasRoom(req, id) {
+  const user = await requireUser(req);
+  const room = await getRoom(id);
+  if (!room) throw httpError(404, 'Planilha não encontrada.');
+  const perms = Perms.compute(permDoc(room), user);
+  if (!perms || !perms.admin) throw httpError(403, 'Somente administradores veem as métricas e mudam o limite de usuários.');
+  return { user, room };
+}
+route('GET', '/api/docs/:id/metricas', async (req, p) => {
+  const { room } = await metricasRoom(req, p.id);
+  const sectors = new Map((room.acl.sectors || []).map((s) => [s.id, s.name]));
+  const setorDe = new Map((room.acl.members || []).map((m) => [m.email, m.sector ? sectors.get(m.sector) || null : null]));
+  const nomePagina = new Map(room.data.sheets.map((s) => [s.id, s.name]));
+  // quem está conectado agora (uma linha por pessoa, com o número de abas)
+  const porPessoa = new Map();
+  for (const c of room.clients) {
+    if (!c.user) continue;
+    const x = porPessoa.get(c.user.id) || { id: c.user.id, name: c.user.name, email: c.user.email, setor: setorDe.get(c.user.email) || null, admin: !!(c.perms && c.perms.admin), abas: 0, desde: c.since || Date.now(), pagina: null };
+    x.abas++;
+    x.desde = Math.min(x.desde, c.since || Date.now());
+    if (c.presence && c.presence.sheetId) x.pagina = nomePagina.get(c.presence.sheetId) || x.pagina;
+    porPessoa.set(c.user.id, x);
+  }
+  const lista = [...porPessoa.values()].sort((a, b) => (a.admin - b.admin) || a.desde - b.desde)
+    .map((x) => Object.assign(x, { desde: new Date(x.desde).toISOString() }));
+  const naoAdmins = lista.filter((x) => !x.admin).length;
+  const max = await limiteDe(room.id);
+  const dia = await diaDe(room.id);
+  let hoje = { edicoes: 0, pessoas: 0, top: [] }, semana = { edicoes: 0, pessoas: 0, top: [] }, erroEdicoes = null;
+  try {
+    hoje = await store.historyStats(room.id, inicioHojeISO());
+    semana = await store.historyStats(room.id, new Date(Date.now() - 7 * 86400e3).toISOString());
+  } catch (e) { erroEdicoes = 'Não consegui contar as edições agora.'; }
+  const paginas = room.data.sheets.map((s) => {
+    let n = 0;
+    for (const a in s.cells || {}) { const v = s.cells[a] && s.cells[a].v; if (v !== undefined && v !== null && v !== '') n++; }
+    return { name: s.name, celulas: n, hidden: !!s.hidden };
+  });
+  let conexoes = 0;
+  for (const r of rooms.values()) conexoes += r.clients.size;
+  return {
+    agora: { pessoas: lista.length, abas: room.clients.size, naoAdmins, lista },
+    limite: { max, vagas: max ? Math.max(0, max - naoAdmins) : null },
+    hoje: { dia: dia.dia, pico: dia.pico, picoEm: dia.picoEm, acessos: dia.quem.length, bloqueados: dia.bloqueados, ultimosBloqueados: dia.ultimosBloqueados, edicoes: hoje.edicoes, editores: hoje.pessoas, top: hoje.top },
+    semana: { edicoes: semana.edicoes, editores: semana.pessoas, top: semana.top },
+    erroEdicoes,
+    planilha: {
+      titulo: room.data.title || '', paginas, celulas: paginas.reduce((t, x) => t + x.celulas, 0),
+      tamanhoKB: Math.round(Buffer.byteLength(JSON.stringify(room.data)) / 1024), versao: room.version,
+      salvoEm: room.lastSave ? new Date(room.lastSave).toISOString() : null, aSalvar: !!room.dirty,
+      membros: (room.acl.members || []).length + 1, setores: (room.acl.sectors || []).length,
+    },
+    servidor: { ligadoHaMin: Math.round(process.uptime() / 60), memoriaMB: Math.round(process.memoryUsage().rss / 1048576), salas: rooms.size, conexoes, armazenamento: store.kind },
+  };
+});
+route('PUT', '/api/docs/:id/limite', async (req, p) => {
+  const { user, room } = await metricasRoom(req, p.id);
+  const b = await readBody(req, 10000);
+  const max = Math.floor(Number(b.max));
+  if (!Number.isFinite(max) || max < 0 || max > LIMITE_MAX) throw httpError(400, `O limite deve ser um número de 0 (sem limite) a ${LIMITE_MAX}.`);
+  await store.setSetting('limite_usuarios:' + room.id, max ? { max, por: user.email, em: new Date().toISOString() } : null);
+  limites.set(room.id, max);
+  console.log(`[limite] ${user.email} mudou o limite da planilha ${room.id} para ${max || 'sem limite'}`);
+  return { ok: true, max };
 });
 route('PUT', '/api/docs/:id/share', async (req, p) => {
   const user = await requireUser(req);

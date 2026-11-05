@@ -4,6 +4,11 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '05/11/2026', title: 'Métricas da planilha e limite de usuários', items: [
+      ['Administrador', 'Novo item "Métricas da planilha e limite de usuários": quem está conectado agora (página, abas e desde quando), pico do dia, quem entrou, células editadas hoje e nos últimos 7 dias, tamanho da planilha e situação do servidor. A tela se atualiza sozinha a cada 15 segundos.'],
+      ['Limite de usuários', 'O administrador escolhe quantas pessoas podem estar com a planilha aberta ao mesmo tempo (0 = sem limite). Administradores não ocupam vaga e sempre entram; a mesma pessoa em várias abas conta uma vez; baixar o limite não desconecta ninguém.'],
+      ['Limite atingido', 'Quem chega com o limite cheio vê o aviso "Limite de pessoas atingido" com o botão Tentar de novo. As tentativas aparecem nas métricas em "Esperaram vaga".'],
+    ] },
     { date: '05/11/2026', title: 'MAPA ↔ PRÉ STACKING com confirmação, DATA BAIXA em todas as linhas, linhas de grade e crítico', items: [
       ['MAPA ↔ PRÉ STACKING', 'Com a unidade já no PRÉ STACKING, mudar um campo no MAPA (ex.: TERMINAL VAZIO / depot) ou no PRÉ STACKING pergunta "Unidade em Pré-Stacking deseja atualizar informação?"; com Sim, o outro lado é atualizado.'],
       ['DATA BAIXA', 'Sempre que um container entra no PRÉ STACKING VAZIO (pelo P.S. VZ, digitado ou colado), todas as DATA BAIXA vazias da aba são buscadas na API de uma vez. Trocar o container busca a data de novo.'],
