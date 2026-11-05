@@ -412,8 +412,11 @@ const smtp = tls.createServer(opts, (s) => {
     smtpData = '';
     await call('POST', `/api/docs/${docR.id}/mail/send`, { sheet: 'sh1', subject: 'Teste', to: 'a@b.com', html: '<p>Status</p>', text: 'Status', signature: false }, ana.token);
     check('dá para enviar sem a assinatura', /assinatura-1@costalog/.test(smtpData), false);
-    const grande = await call('POST', `/api/docs/${docR.id}/mail/send`, { sheet: 'sh1', subject: 'x', to: 'a@b.com', html: '<p>x</p>', attachments: [{ name: 'g.bin', type: 'application/octet-stream', data: Buffer.alloc(16 * 1048576).toString('base64') }] }, ana.token);
-    check('limite de 15 MB nos anexos', [grande._status, /15 MB/.test(grande.error || grande.message || '')], [413, true]);
+    const grande = await call('POST', `/api/docs/${docR.id}/mail/send`, { sheet: 'sh1', subject: 'x', to: 'a@b.com', html: '<p>x</p>', attachments: [{ name: 'g.bin', type: 'application/octet-stream', data: Buffer.alloc(18 * 1048576).toString('base64') }] }, ana.token);
+    check('limite de 15 MB nos anexos (tolerância até 17 MB)', [grande._status, /15 MB/.test(grande.error || grande.message || ''), /17 MB/.test(grande.error || grande.message || '')], [413, true, true]);
+    smtpData = '';
+    const tolerado = await call('POST', `/api/docs/${docR.id}/mail/send`, { sheet: 'sh1', subject: 'x', to: 'a@b.com', html: '<p>x</p>', signature: false, attachments: [{ name: 't.bin', type: 'application/octet-stream', data: Buffer.alloc(16 * 1048576).toString('base64') }] }, ana.token);
+    check('anexos entre 15 e 17 MB ainda são enviados', [tolerado._status, tolerado.ok], [200, true]);
     const busca = await call('POST', `/api/docs/${docR.id}/mail/find`, { sheet: 'sh1', ref: 'qualquer texto do assunto' }, ana.token);
     check('busca livre pelo assunto', [busca.achou, imapLogHas('UID SEARCH HEADER SUBJECT "qualquer texto do assunto"')], [true, true]);
     check('prévia da última mensagem vem pronta', busca.thread.preview.includes('programação') && busca.thread.preview.includes('data:image/png'), true);
