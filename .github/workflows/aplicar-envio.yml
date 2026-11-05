@@ -1,0 +1,40 @@
+# Aplica envios do Claude: quando chega um .envio/envio.diff na tempo-real, aplica o diff, confere cada pasta pelos
+# hashes de .envio/conferir.txt (a versão testada), roda o npm test e só então grava. Se algo não bater, nada é gravado.
+name: Aplicar envio do Claude
+on:
+  push:
+    branches: [tempo-real]
+    paths: ['.envio/**', '.github/workflows/aplicar-envio.yml']
+permissions:
+  contents: write
+jobs:
+  aplicar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tempo-real
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Aplicar, conferir e gravar
+        run: |
+          set -e
+          test -f .envio/envio.diff || { echo "Nada para aplicar."; exit 0; }
+          git config user.name "joaopedrocostalog-netizen"
+          git config user.email "joaopedrosilveirasantos53@gmail.com"
+          git apply --3way .envio/envio.diff
+          git add -A -- . ':!.envio'
+          while read -r p h; do
+            [ -z "$p" ] && continue
+            if [ -d "$p" ]; then got=$(git write-tree --prefix="$p/"); else got=$(git ls-files -s -- "$p" | awk '{print $2}'); fi
+            if [ "$got" != "$h" ]; then echo "::error::$p ficou diferente da versão testada. Nada foi gravado."; exit 1; fi
+            echo "$p confere"
+          done < .envio/conferir.txt
+          npm install --no-audit --no-fund
+          npm test
+          msg=$(cat .envio/mensagem.txt 2>/dev/null || echo "Envio do Claude")
+          git rm -r -q .envio
+          git commit -q -m "$msg"
+          git push origin HEAD:tempo-real
