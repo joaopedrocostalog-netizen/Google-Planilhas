@@ -114,7 +114,7 @@
     const x = sh.cells[a];
     if (!x) return;
     if (x.s && !Object.keys(x.s).length) delete x.s;
-    if ((x.v === '' || x.v === undefined || x.v === null) && !x.s && !x.note && !x.link && !x.crit && !x.esc && !x.lock && !x.swap && !x.rodo && !x.sc && !x.spot && !(x.comments && x.comments.length)) delete sh.cells[a];
+    if ((x.v === '' || x.v === undefined || x.v === null) && !x.s && !x.note && !x.link && !x.crit && !x.esc && !x.lock && !x.swap && !x.rodo && !x.sc && !x.spot && !x.psl && !(x.comments && x.comments.length)) delete sh.cells[a];
   }
   App.cleanup = cleanup;
   App.setRaw = (sh, r, c, text) => {
@@ -214,6 +214,10 @@
     }
     // veículo preenchido fora do Escalar veículo (colar, digitar…): fica aguardando confirmação da escala
     if (fwd && App.autoPendingEscala && !App._escalando && App.autoPendingEscala(fwd, inv)) {
+      [fwd, inv] = window.Patch.diffPair(before, JSON.parse(JSON.stringify(docView(), replacer)));
+    }
+    // PRÉ STACKING: P.S. CH / P.S. VZ marcados no MAPA criam as linhas; mudanças no PRÉ STACKING voltam para o MAPA
+    if (fwd && App.preStackingHook && App.preStackingHook(fwd, inv)) {
       [fwd, inv] = window.Patch.diffPair(before, JSON.parse(JSON.stringify(docView(), replacer)));
     }
     // veículo bloqueado (escala): nem administradores trocam sem destravar antes

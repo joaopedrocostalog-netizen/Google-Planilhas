@@ -30,7 +30,8 @@
     fr.readAsDataURL(f);
   });
 
-  const LIMITE = 15 * 1048576; // anexos: 15 MB somados
+  const LIMITE = 15 * 1048576; // anexos: 15 MB somados (o limite combinado)
+  const TOLERANCIA = 17 * 1048576; // passando um pouco dos 15 MB, até 17 MB, ainda deixa enviar
 
   // imagens grandes da assinatura do webmail viram uma versão leve (a de lá chega a ter vários MB)
   async function reduzImagens(html, larguraMax) {
@@ -168,7 +169,7 @@
 
     const desenhaAnexos = () => {
       const total = anexos.reduce((n, a) => n + a.size, 0);
-      q('#ms-tam').textContent = `${fmtTam(total)} de 15 MB`;
+      q('#ms-tam').textContent = total > LIMITE ? `${fmtTam(total)} de 15 MB (tolerância até 17 MB)` : `${fmtTam(total)} de 15 MB`;
       q('#ms-tam').classList.toggle('cheio', total > LIMITE * 0.9);
       q('#ms-lista').innerHTML = anexos.length
         ? anexos.map((a, i) => `<span class="ms-anexo" title="${esc(a.name)}">📎 <span class="ms-an-nome">${esc(a.name)}</span> <i>${fmtTam(a.size)}</i><button data-rm="${i}" title="Tirar">×</button></span>`).join('')
@@ -178,7 +179,7 @@
     const adiciona = async (files) => {
       for (const f of [...files]) {
         const total = anexos.reduce((n, a) => n + a.size, 0);
-        if (total + f.size > LIMITE) { notify(`${f.name} passa do limite de 15 MB somando os anexos.`); continue; }
+        if (total + f.size > TOLERANCIA) { notify(`${f.name} passa do limite de 15 MB somando os anexos (a tolerância vai até 17 MB).`); continue; }
         try { anexos.push(await lerArquivo(f)); } catch (er) { notify(er.message); }
       }
       desenhaAnexos();
