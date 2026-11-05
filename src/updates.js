@@ -4,6 +4,17 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '05/11/2026', title: 'PRÉ STACKING automático (P.S. CH / P.S. VZ), marcas SC / SPOT e anexos até 17 MB', items: [
+      ['P.S. CH', 'Marcar a caixa P.S. CH no MAPA IMPO muda o STATUS para AG. REMOÇÃO (no MAPA EXPO, AG. EMBARQUE) e cria a linha no PRÉ STACKING CHEIO, 2 linhas depois da última informação, com CLIENTE, RESERVA / DI, NAVIO, VIAGEM, OPERAÇÃO, CONTAINER, TIPO, PESO, TERMINAL, AGENDAMENTO e VISIT CODE.'],
+      ['P.S. VZ', 'Marcar P.S. VZ no MAPA IMPO muda o STATUS para AG. DEVOLUÇÃO (no MAPA EXPO, AG. RETIRADA) e cria a linha no PRÉ STACKING VAZIO com CLIENTE, ARMADOR, DEMMURAGE, RESERVA / DI, OPERAÇÃO, CONTAINER, TIPO, TERMINAL e AGENDAMENTO.'],
+      ['Clientes da regra', 'Administrador › "PRÉ STACKING VAZIO: clientes com 1 - / 2 - CONTAINER": para esses clientes, container, armador e tipo vêm das colunas 1 - e 2 -; com 2 - preenchido, são criadas 2 linhas.'],
+      ['Volta para o MAPA', 'O que for mudado no PRÉ STACKING (nas colunas que vieram do MAPA) é atualizado na linha do MAPA. A DATA do PRÉ STACKING VAZIO preenche a DATA ENTREGA VAZIO do MAPA IMPO.'],
+      ['DATA BAIXA', 'Ao criar a linha no PRÉ STACKING VAZIO (ou trocar o CONTAINER), a planilha procura o container na API carga_of_container (sem espaço, ponto e traço) e preenche a DATA BAIXA em dd/mm/aaaa.'],
+      ['Finalizado', 'STATUS FINALIZADO no PRÉ STACKING CHEIO muda o MAPA para EM ABERTO (IMPO) ou PROC. - FINALIZADO (EXPO). No PRÉ STACKING VAZIO, para AG. INTERCÂMBIO (IMPO) ou EM ABERTO (EXPO); com 2 linhas, quando as duas estiverem finalizadas.'],
+      ['Sem duplicar', 'Desmarcar e marcar de novo não cria outra linha; um Desfazer volta tudo (caixa, STATUS e linhas do PRÉ STACKING).'],
+      ['MODALIDADE', 'As marcas SC e SPOT ficam no canto superior direito, antes da seta, uma embaixo da outra, com o fundo mais transparente.'],
+      ['Enviar por e-mail', 'O limite dos anexos continua 15 MB, mas passando um pouco (até 17 MB) o envio ainda é aceito.'],
+    ] },
     { date: '05/11/2026', title: 'E-mail com assinatura, busca livre do assunto e marcas SC / SPOT', items: [
       ['Enviar por e-mail', 'Campo para procurar a conversa pela REFERENCIA ou por qualquer texto do assunto (botão para voltar à referência).'],
       ['Assinatura', 'A assinatura em imagem configurada no webmail vai em todo envio, logo abaixo da tabela. As assinaturas das mensagens anteriores continuam no histórico citado.'],
