@@ -882,8 +882,9 @@ route('POST', '/api/docs/:id/mail/find', async (req, p) => {
   delete th.body;
   return { achou: true, ref, thread: Object.assign(th, { citada, preview }), destinatarios: replyAllOf(th, cfg.from) };
 });
-// limite dos anexos (somados, em bytes): 15 MB
+// limite dos anexos (somados, em bytes): 15 MB, com tolerância até 17 MB
 const MAX_ANEXOS = Number(process.env.MAIL_MAX_ANEXOS || 15 * 1024 * 1024);
+const TOLERANCIA_ANEXOS = Number(process.env.MAIL_TOLERANCIA_ANEXOS || 17 * 1024 * 1024);
 const tamanhoB64 = (s) => Math.floor(String(s || '').replace(/=+$/, '').length * 3 / 4);
 // assinatura do e-mail (guardada no servidor; vem do webmail ou é enviada pela tela)
 const SIG_KEY = 'mailSignature';
@@ -919,7 +920,7 @@ route('PUT', '/api/docs/:id/mail/signature', async (req, p) => {
   return { ok: true, tem: true };
 });
 route('POST', '/api/docs/:id/mail/send', async (req, p) => {
-  const b = await readBody(req, Math.ceil(MAX_ANEXOS * 1.4) + 2 * 1024 * 1024);
+  const b = await readBody(req, Math.ceil(Math.max(MAX_ANEXOS, TOLERANCIA_ANEXOS) * 1.4) + 2 * 1024 * 1024);
   const { user, perms, sheet, room } = await mailRoom(req, p.id, String(b.sheet || ''));
   if (!canSendMail(perms, sheet)) throw httpError(403, 'Enviar status por e-mail não está liberado para você.');
   if (!mail.configured()) throw httpError(503, 'O e-mail ainda não está configurado no servidor.');
@@ -933,7 +934,7 @@ route('POST', '/api/docs/:id/mail/send', async (req, p) => {
     data: String(a.data || '').replace(/\s+/g, ''),
   }));
   const total = anexos.reduce((n, a) => n + tamanhoB64(a.data), 0);
-  if (total > MAX_ANEXOS) throw httpError(413, `Os anexos somam mais de ${Math.round(MAX_ANEXOS / 1048576)} MB.`);
+  if (total > Math.max(MAX_ANEXOS, TOLERANCIA_ANEXOS)) throw httpError(413, `Os anexos somam mais de ${Math.round(MAX_ANEXOS / 1048576)} MB (a tolerância vai até ${Math.round(TOLERANCIA_ANEXOS / 1048576)} MB).`);
   const cfg = mail.config();
   let html = String(b.html || ''), text = String(b.text || '');
   let inReplyTo = String(b.inReplyTo || '').trim() || null, references = String(b.references || '').trim() || null;
@@ -1038,6 +1039,81 @@ route('GET', '/api/dss/motoristas', async (req) => {
   const d = await loadDrivers(new URL(req.url, 'http://x').searchParams.get('atualizar') === '1');
   if (!d.items.length && d.error) throw httpError(d.status || 502, d.error);
   return { motoristas: d.items, atualizado: d.at || null, aviso: d.error || null };
+});
+// ---------- carga_of_container: DATA BAIXA do PRÉ STACKING VAZIO ----------
+// A API devolve registros com "nro_container" ("TRHU 861.819-1") e "data_hora_entrada" ("2026-11-05 01:11:17").
+// URL: CARGA_OF_CONTAINER_URL (ou a variável carga_of_container); sem ela, {DSS_BASE_URL}/carga_of_container.
+// Login: o mesmo do DSS (DSS_TOKEN ou DSS_USUARIO/DSS_SENHA), ou CARGA_OF_CONTAINER_TOKEN.
+const nroContainer = (x) => String(x || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+const fmtNroContainer = (n) => (/^[A-Z]{4}\d{7}$/.test(n) ? `${n.slice(0, 4)} ${n.slice(4, 7)}.${n.slice(7, 10)}-${n.slice(10)}` : n);
+function cargaUrl() {
+  const v = String(process.env.CARGA_OF_CONTAINER_URL || process.env.carga_of_container || process.env.CARGA_OF_CONTAINER || '').trim();
+  if (/^https?:\/\//i.test(v)) return v;
+  return DSS_BASE + '/' + (v ? v.replace(/^\/+/, '') : 'carga_of_container');
+}
+function cargaHeaders() {
+  const tk = process.env.CARGA_OF_CONTAINER_TOKEN || DSS_TOKEN;
+  const h = { Accept: 'application/json' };
+  if (tk) h.Authorization = 'Bearer ' + tk;
+  else if (DSS_USER && DSS_PASS) h.Authorization = 'Basic ' + Buffer.from(DSS_USER + ':' + DSS_PASS).toString('base64');
+  return h;
+}
+// todos os objetos da resposta que têm nro_container (a lista pode vir solta ou dentro de registros/data/...)
+function cargaRegistros(j, out) {
+  out = out || [];
+  if (Array.isArray(j)) { for (const x of j) cargaRegistros(x, out); return out; }
+  if (j && typeof j === 'object') {
+    if ('nro_container' in j) out.push(j);
+    else for (const k in j) if (j[k] && typeof j[k] === 'object') cargaRegistros(j[k], out);
+  }
+  return out;
+}
+// "2026-11-05 01:11:17" (ou 05/11/2026 01:11) → { data: '05/11/2026', ts }
+function cargaData(v) {
+  const t = String(v || '').trim();
+  let m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/.exec(t);
+  if (m) return { data: `${m[3]}/${m[2]}/${m[1]}`, ts: `${m[1]}${m[2]}${m[3]}${m[4] || '00'}${m[5] || '00'}${m[6] || '00'}` };
+  m = /^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?/.exec(t);
+  if (m) return { data: `${m[1]}/${m[2]}/${m[3]}`, ts: `${m[3]}${m[2]}${m[1]}${m[4] || '00'}${m[5] || '00'}${m[6] || '00'}` };
+  return null;
+}
+let cargaLista = { at: 0, regs: null };
+async function cargaFetch(url) {
+  const r = await fetch(url, { headers: cargaHeaders(), signal: AbortSignal.timeout(20000), redirect: 'error' });
+  const text = await r.text();
+  let j;
+  try { j = JSON.parse(text); } catch (e) { throw httpError(502, `A API carga_of_container respondeu algo que não é JSON (HTTP ${r.status}). Confira a URL no Render.`); }
+  if (!r.ok) throw httpError(502, `A API carga_of_container recusou a consulta (HTTP ${r.status}).`);
+  return cargaRegistros(j);
+}
+async function dataBaixa(container) {
+  const n = nroContainer(container);
+  if (n.length < 6) throw httpError(400, 'Container inválido.');
+  const base = cargaUrl(), sep = base.includes('?') ? '&' : '?';
+  const melhor = (regs) => {
+    let best = null;
+    for (const it of regs) {
+      if (nroContainer(it.nro_container) !== n) continue;
+      const d = cargaData(it.data_hora_entrada);
+      if (d && (!best || d.ts > best.ts)) best = Object.assign(d, { dataHora: String(it.data_hora_entrada) });
+    }
+    return best;
+  };
+  // 1) pergunta direto pelo container (sem e com a máscara); 2) se a API ignorar o filtro, procura na lista completa
+  let erro = null;
+  for (const q of [n, fmtNroContainer(n)]) {
+    try { const b = melhor(await cargaFetch(base + sep + 'nro_container=' + encodeURIComponent(q))); if (b) return b; } catch (e) { erro = e; }
+  }
+  try {
+    if (!cargaLista.regs || Date.now() - cargaLista.at > 120e3) cargaLista = { at: Date.now(), regs: await cargaFetch(base) };
+  } catch (e) { throw erro || e; }
+  return melhor(cargaLista.regs);
+}
+route('GET', '/api/carga/data-baixa', async (req) => {
+  await requireUser(req);
+  const c = String(new URL(req.url, 'http://x').searchParams.get('container') || '');
+  const b = await dataBaixa(c);
+  return b ? { achou: true, container: nroContainer(c), data: b.data, dataHora: b.dataHora } : { achou: false, container: nroContainer(c) };
 });
 // Ao digitar um motorista conhecido na coluna configurada, o servidor completa o CPF/CNPJ (vale também para quem não edita a coluna do CPF)
 // Nome do motorista apagado: o CPF/CNPJ da mesma linha também é apagado (o contrário não: apagar o CPF não mexe no nome)
