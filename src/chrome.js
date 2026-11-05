@@ -344,6 +344,7 @@
       { label: 'Regras de alerta (ALERTA)', icon: 'bell', cmd: 'alertRules' },
       { label: 'Enviar status por e-mail: quem pode', cmd: 'mailWho' },
       { label: 'PRÉ STACKING VAZIO: clientes com 1 - / 2 - CONTAINER', cmd: 'psRegra' }, '-',
+      { label: 'Métricas da planilha e limite de usuários', icon: 'chart', cmd: 'adminMetricas' },
       { label: 'Sessões: deslogar usuários', icon: 'lock', cmd: 'adminSessions' },
     ] },
     { label: 'Extensões', items: () => [{ label: 'Nenhuma extensão instalada', disabled: true, need: 'extensions' }] },

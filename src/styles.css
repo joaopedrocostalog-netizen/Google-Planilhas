@@ -1166,3 +1166,42 @@ body.executor .doc-title { pointer-events: none; }
 .cg-tab table { border-collapse: collapse; font-size: 12.5px; width: 100%; }
 .cg-tab th { position: sticky; top: 0; background: #f8f9fa; text-align: left; font-weight: 600; padding: 6px 8px; border-bottom: 1px solid #e0e0e0; white-space: nowrap; }
 .cg-tab td { padding: 5px 8px; border-bottom: 1px solid #f1f1f1; white-space: nowrap; }
+
+/* ---------- Administrador › Métricas da planilha e limite de usuários ---------- */
+.mt-modal .modal-body { max-height: 72vh; overflow-y: auto; }
+.mt-wrap { display: flex; flex-direction: column; gap: 14px; }
+.mt-sec h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; color: var(--ink); }
+.mt-sec h3 span { font-weight: 400; color: var(--text-2); margin-left: 6px; }
+.mt-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 22px; }
+@media (max-width: 640px) { .mt-cols { grid-template-columns: 1fr; } }
+/* o destaque da tela: as vagas, uma a uma */
+.mt-lim { border: 1px solid var(--line); border-left: 4px solid var(--red); border-radius: 8px; padding: 12px 14px; }
+.mt-seats-num { font-size: 15px; color: var(--ink); margin-bottom: 8px; }
+.mt-seats-num b { font-size: 28px; font-weight: 700; color: var(--red); margin-right: 2px; font-variant-numeric: tabular-nums; }
+.mt-seats.free .mt-seats-num b { color: var(--ink); }
+.mt-segs { display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 3px; height: 14px; margin-bottom: 6px; }
+.mt-segs i { background: #ececec; border-radius: 2px; }
+.mt-segs i.on { background: var(--red); }
+.mt-seats.full .mt-segs i.on { background: var(--red-dark); }
+.mt-bar { height: 14px; background: #ececec; border-radius: 3px; overflow: hidden; margin-bottom: 6px; }
+.mt-bar i { display: block; height: 100%; background: var(--red); }
+.mt-seats.full .mt-seats-num { color: var(--red-dark); }
+.mt-set { display: flex; align-items: center; gap: 8px; margin: 10px 0 6px; }
+.mt-set label { font-size: 13px; color: var(--text-2); }
+.mt-set .input { width: 90px; }
+.mt-dl { display: grid; grid-template-columns: auto 1fr; gap: 5px 14px; margin: 0; font-size: 13px; }
+.mt-dl dt { color: var(--text-2); }
+.mt-dl dd { margin: 0; color: var(--ink); text-align: right; font-variant-numeric: tabular-nums; }
+.mt-dl dd small { display: block; color: var(--text-3); font-size: 12px; }
+.mt-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+.mt-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.mt-table th { text-align: left; font-weight: 500; color: var(--text-2); background: #fafafa; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+.mt-table td { padding: 7px 10px; border-bottom: 1px solid #f1f1f1; vertical-align: top; }
+.mt-table tr:last-child td { border-bottom: 0; }
+.mt-table td small { display: block; color: var(--text-3); font-size: 12px; }
+.mt-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.mt-tag { font-size: 11px; color: var(--red-dark); background: var(--red-soft); border-radius: 4px; padding: 0 5px; margin-left: 4px; }
+.mt-pages { margin-top: 8px; font-size: 13px; }
+.mt-pages summary { cursor: pointer; color: var(--text-2); margin-bottom: 6px; }
+.mt-upd { font-size: 12px; }
+.mt-nm { display: block; white-space: nowrap; }

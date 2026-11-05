@@ -503,9 +503,12 @@
         const a = E.addrToStr(r, c);
         if (sameRaw(fc[a] && fc[a].v, ic[a] && ic[a].v)) continue;
         let target = null, nome = '';
-        if (back.has(c)) { target = srcCol(map, kind, back.get(c), link.n); nome = A[back.get(c)[0]][0]; }
-        else if (c === dataCol && kind === 'impo') { target = findCol(map, A.DTENTVZ); nome = 'DATA ENTREGA VAZIO'; }
+        let dtEnt = false;
+        if (back.has(c)) target = srcCol(map, kind, back.get(c), link.n);
+        else if (c === dataCol && kind === 'impo') { target = findCol(map, A.DTENTVZ); dtEnt = true; }
         if (!target) continue;
+        // na pergunta aparece o nome da coluna como está no MAPA (ex.: TERMINAL VAZIO)
+        nome = String(rawAt(sh, headerRow(sh), target) || (sh.colNames || {})[target] || '').trim() || (dtEnt ? 'DATA ENTREGA VAZIO' : A[back.get(c)[0]][0]);
         const val = readCell(ps, r, c);
         if (sameRaw(rawAt(sh, mr, target), val ? val.v : '')) continue;
         // pergunta antes de mudar o MAPA (a unidade já está no PRÉ STACKING)
@@ -518,7 +521,7 @@
             if (!kd) return null;
             const m2 = colMap(s2), row = mapaRowOf(s2, m2, lk.k, lk.id);
             if (!row) return null;
-            const col = nome === 'DATA ENTREGA VAZIO' ? findCol(m2, A.DTENTVZ) : srcCol(m2, kd, back.get(c), lk.n);
+            const col = dtEnt ? findCol(m2, A.DTENTVZ) : srcCol(m2, kd, back.get(c), lk.n);
             return col ? { sh: s2, r: row, c: col } : null;
           },
         });
