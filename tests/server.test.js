@@ -41,7 +41,19 @@ function connect(token, doc) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 (async () => {
-  const proc = spawn(process.execPath, [path.join(__dirname, '..', 'server', 'index.js')], { env: Object.assign({}, process.env, { PORT: String(PORT), DATABASE_URL: '', ADMIN_EMAILS: 'ana@empresa.com' }), stdio: ['ignore', 'pipe', 'pipe'] });
+  // API carga_of_container falsa: ignora o filtro e devolve tudo (o servidor precisa achar o container na lista)
+  const CARGA_PORT = PORT + 1000;
+  const cargaReqs = [];
+  const cargaSrv = require('http').createServer((req, res) => {
+    cargaReqs.push(req.url);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ registros: [
+      { nro_container: 'TRHU 861.819-1', data_hora_entrada: '2026-11-03 22:40:00' },
+      { nro_container: 'TRHU 861.819-1', data_hora_entrada: '2026-11-05 01:11:17' },
+      { nro_container: 'MSCU 123.456-7', data_hora_entrada: '2026-10-30 08:00:00' },
+    ] }));
+  }).listen(CARGA_PORT);
+  const proc = spawn(process.execPath, [path.join(__dirname, '..', 'server', 'index.js')], { env: Object.assign({}, process.env, { PORT: String(PORT), DATABASE_URL: '', ADMIN_EMAILS: 'ana@empresa.com', carga_of_container: `http://127.0.0.1:${CARGA_PORT}/carga_of_container` }), stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';
   proc.stdout.on('data', (d) => { log += d; });
   proc.stderr.on('data', (d) => { log += d; });
@@ -306,11 +318,19 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     check('Ana continua logada', (await api('GET', '/api/me', null, ana.token))._status, 200);
     check('Caio deslogado', (await api('GET', '/api/me', null, caioLogin.token))._status, 401);
     await api('DELETE', '/api/docs/' + d2.id, null, ana.token);
+    // DATA BAIXA (carga_of_container): container sem espaço, ponto e traço; data mais recente em dd/mm/aaaa
+    const db = await api('GET', '/api/carga/data-baixa?container=' + encodeURIComponent('trhu8618191'), null, ana.token);
+    check('DATA BAIXA vem da API em dd/mm/aaaa', [db.achou, db.data, db.container], [true, '05/11/2026', 'TRHU8618191']);
+    check('pergunta pelo container na API', cargaReqs[0], '/carga_of_container?nro_container=TRHU8618191');
+    const nd = await api('GET', '/api/carga/data-baixa?container=ABCD0000000', null, ana.token);
+    check('container fora da API', nd.achou, false);
+    check('DATA BAIXA exige login', (await api('GET', '/api/carga/data-baixa?container=TRHU8618191'))._status, 401);
   } catch (e) {
     fail++;
     console.log('ERRO:', e.message, '\n', log.slice(-2000));
   } finally {
     proc.kill();
+    cargaSrv.close();
   }
   console.log(`\n${pass} testes passaram, ${fail} falharam.`);
   process.exit(fail ? 1 : 0);
