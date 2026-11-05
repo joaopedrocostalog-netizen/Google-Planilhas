@@ -215,7 +215,8 @@
     if (isCb) {
       // coluna IMO: a caixa marcada pisca em verde (marcação própria de cada linha)
       if (!arrived && App.isImoCol && App.isImoCol(sh, c) && App.cbIsOn(dv, raw, v)) { st.hasCrit = true; crit = Math.floor(Date.now() / 550) % 2 === 1; }
-    } else if (cell && cell.crit && !arrived) {
+    } else if (cell && cell.crit && !arrived && !(v === null || v === undefined || String(v).trim() === '')) {
+      // (célula vazia não pisca: o alerta só faz sentido com o container preenchido)
       // container crítico: a célula pisca em vermelho
       st.hasCrit = true;
       crit = Math.floor(Date.now() / 550) % 2 === 1;
@@ -276,6 +277,7 @@
     st.escFor = null;
     const sh = App.sheet(), si = doc.active;
     const dpr = window.devicePixelRatio || 1;
+    st.dpr = dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvas.width / dpr, canvas.height / dpr);
@@ -336,9 +338,10 @@
     // 1) linhas de grade
     if (showGrid) {
       ctx.beginPath();
-      ctx.strokeStyle = C.grid; ctx.lineWidth = 1;
-      for (let c = c0; c <= c1; c++) { if (!colW(c)) continue; const x = Math.round(X(c + 1)) - 0.5; ctx.moveTo(x, Y(r0)); ctx.lineTo(x, Y(r1 + 1)); }
-      for (let r = r0; r <= r1; r++) { if (!rowH(r)) continue; const y = Math.round(Y(r + 1)) - 0.5; ctx.moveTo(X(c0), y); ctx.lineTo(X(c1 + 1), y); }
+      // alinhadas aos pixels da tela: com zoom ou escala do Windows (125%, 150%) todas ficam com a mesma espessura
+      ctx.strokeStyle = C.grid; ctx.lineWidth = snapLine(0, 1).lw;
+      for (let c = c0; c <= c1; c++) { if (!colW(c)) continue; const x = snapLine(X(c + 1), 1).c; ctx.moveTo(x, Y(r0)); ctx.lineTo(x, Y(r1 + 1)); }
+      for (let r = r0; r <= r1; r++) { if (!rowH(r)) continue; const y = snapLine(Y(r + 1), 1).c; ctx.moveTo(X(c0), y); ctx.lineTo(X(c1 + 1), y); }
       ctx.stroke();
     }
     // coleta células visíveis
@@ -368,7 +371,9 @@
       const bg = it.info.s.bg || (it.merge ? '#ffffff' : null);
       if (!bg) continue;
       ctx.fillStyle = bg;
-      ctx.fillRect(it.x, it.y, it.w, it.h);
+      // preenchimento nos pixels inteiros da tela (sem meia linha de grade aparecendo em uma célula e não na outra)
+      const fx = snapPx(it.x), fy = snapPx(it.y);
+      ctx.fillRect(fx, fy, snapPx(it.x + it.w) - fx, snapPx(it.y + it.h) - fy);
       if (it.merge && !it.info.s.bg && showGrid) {
         ctx.strokeStyle = C.grid; ctx.strokeRect(Math.round(it.x) - 0.5, Math.round(it.y) - 0.5, Math.round(it.w), Math.round(it.h));
       }
@@ -548,6 +553,14 @@
     ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y); ctx.closePath();
   }
 
+  // Pixels da tela: com escala do Windows (125%, 150%) ou zoom, uma linha de 1 px caía entre dois pixels e
+  // ficava ora fina, ora grossa/borrada. Tudo é alinhado à grade real de pixels (devicePixelRatio).
+  const snapPx = (v) => { const d = st.dpr || 1; return Math.round(v * d) / d; };
+  // linha de espessura w (px CSS) junto à divisa B: espessura inteira em pixels da tela e centro alinhado
+  function snapLine(B, w) {
+    const d = st.dpr || 1, wd = Math.max(1, Math.round(w * d)), R = Math.round(B * d);
+    return { c: (R - Math.ceil(wd / 2) + wd / 2) / d, lw: wd / d };
+  }
   function drawBorders(it) {
     const bd = it.info.s.bd;
     const line = (b, x1, y1, x2, y2) => {
@@ -555,17 +568,23 @@
       ctx.save();
       ctx.strokeStyle = b.color || '#000000';
       const w = b.style === 'thick' ? 3 : b.style === 'medium' ? 2 : 1;
-      ctx.lineWidth = w;
+      // espessura e posição nos pixels da tela: a mesma borda fica igual em todas as células, com qualquer zoom/escala
+      const sl = snapLine(0, w);
+      ctx.lineWidth = sl.lw;
       if (b.style === 'dashed') ctx.setLineDash([4, 2]);
       if (b.style === 'dotted') ctx.setLineDash([1, 2]);
-      const off = w % 2 ? 0.5 : 0;
+      const hor = y1 === y2;
       ctx.beginPath();
       if (b.style === 'double') {
-        const dx = y1 === y2 ? 0 : 1.5, dy = y1 === y2 ? 1.5 : 0;
-        ctx.moveTo(Math.round(x1 - dx) + off, Math.round(y1 - dy) + off); ctx.lineTo(Math.round(x2 - dx) + off, Math.round(y2 - dy) + off);
-        ctx.moveTo(Math.round(x1 + dx) + off, Math.round(y1 + dy) + off); ctx.lineTo(Math.round(x2 + dx) + off, Math.round(y2 + dy) + off);
+        const dx = hor ? 0 : 1.5, dy = hor ? 1.5 : 0;
+        for (const k of [-1, 1]) {
+          if (hor) { const yy = snapLine(y1 + k * dy, w).c; ctx.moveTo(snapPx(x1), yy); ctx.lineTo(snapPx(x2), yy); }
+          else { const xx = snapLine(x1 + k * dx, w).c; ctx.moveTo(xx, snapPx(y1)); ctx.lineTo(xx, snapPx(y2)); }
+        }
+      } else if (hor) {
+        const yy = snapLine(y1, w).c; ctx.moveTo(snapPx(x1), yy); ctx.lineTo(snapPx(x2), yy);
       } else {
-        ctx.moveTo(Math.round(x1) - off, Math.round(y1) - off); ctx.lineTo(Math.round(x2) - off, Math.round(y2) - off);
+        const xx = snapLine(x1, w).c; ctx.moveTo(xx, snapPx(y1)); ctx.lineTo(xx, snapPx(y2));
       }
       ctx.stroke();
       ctx.restore();
