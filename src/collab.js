@@ -1340,6 +1340,7 @@
       { cmd: 'alertRules', t: 'Regras de alerta (ALERTA)', d: 'O que aparece no botão ALERTA do cabeçalho: regras prontas (crítico, ARM/DEM, escala…) ou condições nas colunas, por setor ou pessoa.', s: `${doc.sheets.reduce((n, x) => n + (x.alertRules || []).length, 0)} regra(s)` },
       { cmd: 'mailWho', t: 'Enviar status por e-mail: quem pode', d: 'Quem pode usar o botão "Enviar por e-mail" do Enviar status. O e-mail sai da conta configurada no servidor.', s: Array.isArray(sh.mailSectors) && sh.mailSectors.length ? `${sh.mailSectors.length} escolhido(s)` : 'Só administradores' },
       { cmd: 'adminSessions', t: 'Sessões: deslogar usuários', d: 'Encerra o login de todas as pessoas ou só das escolhidas; quem estiver na planilha sai na hora.', s: `${cloud.peers ? new Set([...cloud.peers.values()].map((x) => x.uid)).size : 0} pessoa(s) conectada(s) agora` },
+      { cmd: 'cargaLookup', t: 'Containers da Carga OF', d: 'Coluna do container e da data de entrada preenchida pela API Carga OF Container.', s: sh.carga ? `Container na coluna ${E.numToCol(sh.carga.col)} · data na ${E.numToCol(sh.carga.dataCol)}` : 'Desativado nesta página' },
       { cmd: 'dssLookup', t: 'Motoristas do DSS', d: 'Coluna do motorista e do CPF/CNPJ preenchidos com a lista do DSS.', s: sh.lookup ? `Motorista na coluna ${E.numToCol(sh.lookup.col)} · CPF na ${E.numToCol(sh.lookup.cpfCol)}` : 'Desativado nesta página' },
     ];
     const m = App.ui.modal({

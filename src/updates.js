@@ -4,6 +4,11 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '05/11/2026', title: 'Containers da Carga OF (API carga_of_container)', items: [
+      ['Administrador', 'Novo item "Containers da Carga OF (DATA BAIXA)", no mesmo jeito dos Motoristas do DSS: escolha a coluna do CONTAINER e a da data. Ao digitar ou colar um container nessa coluna, a data de entrada vem da API em dd/mm/aaaa.'],
+      ['Consulta', 'Na mesma tela: se a API está respondendo, consulta de um container (com ou sem espaço, ponto e traço), últimas entradas e "Preencher vazios" para buscar de uma vez os containers sem data.'],
+      ['Conexão', 'Quando a API falha por instantes, a planilha tenta de novo; o erro mostra o motivo (certificado HTTPS, conexão recusada, tempo esgotado).'],
+    ] },
     { date: '05/11/2026', title: 'PRÉ STACKING automático (P.S. CH / P.S. VZ), marcas SC / SPOT e anexos até 17 MB', items: [
       ['P.S. CH', 'Marcar a caixa P.S. CH no MAPA IMPO muda o STATUS para AG. REMOÇÃO (no MAPA EXPO, AG. EMBARQUE) e cria a linha no PRÉ STACKING CHEIO, 2 linhas depois da última informação, com CLIENTE, RESERVA / DI, NAVIO, VIAGEM, OPERAÇÃO, CONTAINER, TIPO, PESO, TERMINAL, AGENDAMENTO e VISIT CODE.'],
       ['P.S. VZ', 'Marcar P.S. VZ no MAPA IMPO muda o STATUS para AG. DEVOLUÇÃO (no MAPA EXPO, AG. RETIRADA) e cria a linha no PRÉ STACKING VAZIO com CLIENTE, ARMADOR, DEMMURAGE, RESERVA / DI, OPERAÇÃO, CONTAINER, TIPO, TERMINAL e AGENDAMENTO.'],
