@@ -73,6 +73,8 @@
       if (truthy(b.swap) && !truthy(f.swap) && !inLock) return 'Somente o setor responsável pode encerrar o pedido de troca (destravando o veículo).';
       // qualquer um pode deixar "aguardando confirmação" (ao mexer no veículo fora do Escalar); confirmar é do setor da escala
       if ((b.esc || '') !== (f.esc || '') && !inEsc && f.esc !== 'p') return 'Somente o setor responsável pela escala pode escalar ou confirmar a escala.';
+      // marca do par do rodotrem: posta ao escalar (setor da escala); qualquer um pode tirar (ao apagar o veículo)
+      if (f.rodo && (b.rodo || '') !== f.rodo && !inEsc) return 'Somente o setor responsável pela escala pode escalar ou confirmar a escala.';
     }
     if (lockedCol(cols, p.c)) {
       const cav = beforeOf(colName(cols.CAVALO) + p.r);
@@ -222,7 +224,7 @@
   const EXEC_STYLE = ['nf', 'ff', 'fs', 'b', 'i', 'st', 'color', 'bg'];
   // Célula resultante quando um setor altera "before" para "after": só o valor e a formatação liberada mudam
   // marcas de linha que os setores podem mudar (quem pode cada uma é conferido em escalaCheck)
-  const FLAG_KEYS = ['crit', 'esc', 'lock', 'swap', 'city'];
+  const FLAG_KEYS = ['crit', 'esc', 'lock', 'swap', 'city', 'rodo'];
   function execMerge(before, after) {
     const out = {}, s = {};
     if (before) for (const k in before) if (k !== 'v' && k !== 's' && !FLAG_KEYS.includes(k) && k[0] !== '_') out[k] = before[k];

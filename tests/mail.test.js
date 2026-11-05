@@ -38,10 +38,24 @@ const CORPO = [
   '',
 ].join('\r\n');
 
+// corpo completo (para citar na resposta): HTML em iso-8859-1, quoted-printable, com script e imagem embutida
+const HTML_QP = '<html><head><style>p.x{color:red}</style></head><body><p class=3D"x">Boa tarde, segue a programa=E7=E3o.</p><img src=3D"cid:logo@x"><script>alert(1)</script><p onclick=3D"x()">Importa=E7=E3o</p></body></html>';
+const COMPLETO = CORPO.replace(/\r\n$/, '') + [
+  '', 'MIME-Version: 1.0', 'Content-Type: multipart/mixed; boundary="mix"', '', '--mix', 'Content-Type: multipart/alternative; boundary="alt"', '',
+  '--alt', 'Content-Type: text/plain; charset=iso-8859-1', 'Content-Transfer-Encoding: quoted-printable', '', 'Boa tarde, segue a programa=E7=E3o.', '',
+  '--alt', 'Content-Type: text/html; charset="iso-8859-1"', 'Content-Transfer-Encoding: quoted-printable', '', HTML_QP, '', '--alt--', '',
+  '--mix', 'Content-Type: application/pdf; name="a.pdf"', 'Content-Disposition: attachment; filename="a.pdf"', 'Content-Transfer-Encoding: base64', '', 'JVBERg==', '', '--mix--', '',
+].join('\r\n').replace(/^\r\n/, '\r\n');
+// resposta nossa, na pasta de enviados (mais nova que a da caixa de entrada)
+const NOSSA = [
+  'Message-ID: <nossa1@costalog.com.br>', 'References: <ref1@x> <ref2@x> <abc123@cliente.com>', 'Subject: Re: STATUS - REFERENCIA: HW 181/25',
+  'From: "Costalog - Status" <status@costalog.com.br>', 'To: "Riquelme Moura" <riquelme@costalog.com.br>', 'Cc: gerencia@costalog.com.br, status@costalog.com.br', 'Date: Thu, 05 Nov 2026 08:14:00 -0300', '',
+].join('\r\n');
+const fakeImap = { sentUids: '' };
 const appendInfo = {};
 const imap = tls.createServer(opts, (s) => {
   s.write('* OK IMAP falso pronto\r\n');
-  let buf = '', appendBytes = 0, appendTag = '';
+  let buf = '', appendBytes = 0, appendTag = '', box = '';
   s.on('data', (d) => {
     buf += d;
     let i;
@@ -58,9 +72,10 @@ const imap = tls.createServer(opts, (s) => {
       imapLog.push(line);
       const [tag, cmd] = [line.split(' ')[0], line.slice(line.indexOf(' ') + 1)];
       if (/^LOGIN/i.test(cmd)) s.write(`${tag} OK logado\r\n`);
-      else if (/^SELECT/i.test(cmd)) s.write(`* 42 EXISTS\r\n${tag} OK selecionada\r\n`);
-      else if (/^UID SEARCH/i.test(cmd)) s.write(`* SEARCH 7 19 11\r\n${tag} OK busca\r\n`);
-      else if (/^UID FETCH/i.test(cmd)) s.write(`* 5 FETCH (UID 19 BODY[HEADER.FIELDS (...)] {${Buffer.byteLength(CORPO)}}\r\n${CORPO})\r\n${tag} OK buscado\r\n`);
+      else if (/^SELECT/i.test(cmd)) { box = /SELECT "([^"]+)"/.exec(cmd)[1]; s.write(`* 42 EXISTS\r\n${tag} OK selecionada\r\n`); }
+      else if (/^UID SEARCH/i.test(cmd)) s.write(`* SEARCH ${box === 'INBOX' ? '7 19 11' : fakeImap.sentUids}\r\n${tag} OK busca\r\n`);
+      else if (/^UID FETCH/i.test(cmd) && /BODY\.PEEK\[\]/.test(cmd)) { const b = Buffer.from(box === 'INBOX' ? COMPLETO : NOSSA + '\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nStatus enviado ontem.', 'latin1'); s.write(`* 5 FETCH (UID 19 BODY[] {${b.length}}\r\n`); s.write(b); s.write(`)\r\n${tag} OK buscado\r\n`); }
+      else if (/^UID FETCH/i.test(cmd)) { const c = box === 'INBOX' ? CORPO : NOSSA; const dt = box === 'INBOX' ? '04-Nov-2026 16:15:10 -0300' : '05-Nov-2026 08:14:38 -0300'; s.write(`* 5 FETCH (UID ${box === 'INBOX' ? 19 : 21} INTERNALDATE "${dt}" RFC822.SIZE 4000 BODY[HEADER.FIELDS (...)] {${Buffer.byteLength(c)}}\r\n${c})\r\n${tag} OK buscado\r\n`); }
       else if (/^LIST/i.test(cmd)) s.write(`* LIST (\\HasNoChildren) "." INBOX\r\n* LIST (\\HasNoChildren \\Sent) "." INBOX.Enviados\r\n${tag} OK listado\r\n`);
       else if (/^APPEND/i.test(cmd)) { appendInfo.box = /APPEND "([^"]+)"/.exec(cmd)[1]; appendBytes = Number(/\{(\d+)\}/.exec(cmd)[1]); s.write('+ manda\r\n'); appendTag = tag; }
       else s.write(`${tag} OK\r\n`);
@@ -119,6 +134,26 @@ const smtp = tls.createServer(opts, (s) => {
   check('cópia com acento', th.cc, '"Importação" <importacao@costalog.com.br>, gerencia@costalog.com.br');
   check('message-id', th.messageId, '<abc123@cliente.com>');
   check('references', th.references, '<ref1@x> <ref2@x>');
+  check('procurou também nos enviados', imapLog.some((l) => l.includes('SELECT "INBOX.Enviados"')), true);
+  check('última é da caixa de entrada', [th.box, th.fromMe], ['INBOX', false]);
+
+  // corpo para citar: multipart, quoted-printable em iso-8859-1, sem script nem imagem embutida
+  const tb = await mail.findThread(cfg, 'HW 181/25', null, { withBody: true });
+  check('corpo html decodificado', tb.body.html.includes('programação'), true);
+  check('corpo texto decodificado', tb.body.text, 'Boa tarde, segue a programação.');
+  check('trecho para mostrar', tb.snippet, 'Boa tarde, segue a programação.');
+  const qb = mail.quoteBlock(tb);
+  check('citação com cabeçalho do Outlook', /<b>De:<\/b> &quot;Riquelme Moura&quot;/.test(qb.html) && qb.html.includes('<b>Assunto:</b> STATUS - REFERÊNCIA: HW 181/25'), true);
+  check('citação mantém o conteúdo', qb.html.includes('Importação') && qb.html.includes('p.x{color:red}'), true);
+  check('citação sem script, cid nem onclick', /<script|cid:|onclick/i.test(qb.html), false);
+  check('citação em texto', qb.text.includes('-----Mensagem original-----') && qb.text.includes('Boa tarde, segue a programação.'), true);
+  check('anexo da anterior não entra', /JVBERg/.test(qb.html + qb.text), false);
+
+  // nossa resposta nos enviados é a mais nova: a conversa continua a partir dela
+  fakeImap.sentUids = '21';
+  const tn = await mail.findThread(cfg, 'HW 181/25');
+  check('última é a nossa resposta', [tn.box, tn.uid, tn.fromMe, tn.messageId, tn.total], ['INBOX.Enviados', 21, true, '<nossa1@costalog.com.br>', 4]);
+  fakeImap.sentUids = '';
   check('senha não vaza no log', imapLog.some((l) => l.includes('segredo')), true); // vai no LOGIN, mas só para o servidor
 
   // ---------- SMTP ----------
@@ -157,8 +192,9 @@ const smtp = tls.createServer(opts, (s) => {
     let body = '';
     rq.on('data', (d) => { body += d; });
     rq.on('end', () => {
-      apiReq = { auth: rq.headers.authorization, body: JSON.parse(body) };
       rs.writeHead(200, { 'Content-Type': 'application/json' });
+      if (rq.method === 'GET') return rs.end(JSON.stringify({ id: 'abc-123', message_id: '<0103abc@sa-east-1.amazonses.com>' }));
+      apiReq = { auth: rq.headers.authorization, body: JSON.parse(body) };
       rs.end(JSON.stringify({ id: 'abc-123' }));
     });
   });
@@ -181,6 +217,7 @@ const smtp = tls.createServer(opts, (s) => {
   check('encadeamento pela API', apiReq.body.headers, { 'In-Reply-To': '<abc123@cliente.com>', References: '<ref1@x> <abc123@cliente.com>' });
   check('anexo pela API', apiReq.body.attachments[0].filename, 'cte.pdf');
   check('achou a pasta de enviados', ra.enviados, 'INBOX.Enviados');
+  check('cópia em Enviados com o mesmo Message-ID do envio', /Message-ID: <0103abc@sa-east-1\.amazonses\.com>/.test(appendInfo.raw), true);
   check('cópia guardada tem o assunto', mail.decodeHeader(/Subject: (.*)/.exec(appendInfo.raw)[1]), 'Re: STATUS - REFERÊNCIA: HW 181/25');
   check('cópia guardada tem a tabela', appendInfo.raw.includes(Buffer.from('<table><tr><td>HW 181/25</td></tr></table>').toString('base64')), true);
 
@@ -296,6 +333,24 @@ const smtp = tls.createServer(opts, (s) => {
     check('rota mandou para 3', enviado.destinatarios.length, 3);
     check('rota manteve a conversa', /In-Reply-To: <abc123@cliente\.com>/.test(smtpData), true);
     check('rota levou o anexo', smtpData.includes(Buffer.from('pdf falso').toString('base64')), true);
+    check('busca não manda o corpo inteiro', [achou.thread.body, achou.thread.citada, achou.thread.snippet], [undefined, true, 'Boa tarde, segue a programação.']);
+
+    // com a REFERENCIA, o servidor responde à última mensagem e cita o histórico
+    smtpData = '';
+    const cont = await call('POST', `/api/docs/${docR.id}/mail/send`, {
+      sheet: 'sh1', subject: 'Re: STATUS - REFERÊNCIA: HW 181/25', to: achou.destinatarios.to, ref: 'HW 181/25', quote: true,
+      html: '<p>Status novo</p>', text: 'Status novo',
+    }, ana.token);
+    check('envio na conversa', cont.ok, true);
+    check('responde à última mensagem', /In-Reply-To: <abc123@cliente\.com>/.test(smtpData) && /References: <ref1@x> <ref2@x> <abc123@cliente\.com>/.test(smtpData), true);
+    const partes = [...smtpData.matchAll(/\r\n\r\n([A-Za-z0-9+/=\r\n]{40,})/g)].map((m) => Buffer.from(m[1].replace(/\r\n/g, ''), 'base64').toString('utf8')).join('\n');
+    check('histórico citado no corpo', partes.includes('Status novo') && partes.includes('<b>De:</b>') && partes.includes('programação'), true);
+
+    // nossa resposta é a última: vai de novo para as mesmas pessoas
+    fakeImap.sentUids = '21';
+    const achou2 = await call('POST', `/api/docs/${docR.id}/mail/find`, { sheet: 'sh1', ref: 'HW 181/25' }, ana.token);
+    check('última nossa: mesmos destinatários', [achou2.thread.fromMe, achou2.destinatarios.to, achou2.destinatarios.cc], [true, '"Riquelme Moura" <riquelme@costalog.com.br>', 'gerencia@costalog.com.br']);
+    fakeImap.sentUids = '';
   } finally { proc.kill(); }
 
   imap.close(); smtp.close();

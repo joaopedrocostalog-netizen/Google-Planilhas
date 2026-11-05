@@ -389,8 +389,14 @@
       case 'ack': cloud.pending.delete(m.id); if (!cloud.pending.size) setStatus('online'); break;
       case 'patch': App.applyRemote(m.patch); break;
       case 'reject': cloud.pending.delete(m.id); notify(m.reason); break;
-      case 'join': cloud.peers.set(m.peer.cid, m.peer); renderPeers(); notify(`${m.peer.name} entrou na planilha.`); break;
-      case 'presence': cloud.peers.set(m.peer.cid, m.peer); renderPeers(); break;
+      case 'join': {
+        // a mesma pessoa abrindo outra aba (ou reconectando) não é anunciada de novo
+        const known = [...cloud.peers.values()].some((x) => x.uid === m.peer.uid);
+        m.peer._at = Date.now(); cloud.peers.set(m.peer.cid, m.peer); renderPeers();
+        if (!known) notify(`${m.peer.name} entrou na planilha.`);
+        break;
+      }
+      case 'presence': m.peer._at = Date.now(); cloud.peers.set(m.peer.cid, m.peer); renderPeers(); break;
       case 'leave': cloud.peers.delete(m.cid); renderPeers(); break;
       case 'dm': App.emit('dm', m.msg); break;
       case 'dmRead': App.emit('dmRead', m); break;
@@ -560,19 +566,54 @@
     }, 120);
   }
   ['selection', 'sheet', 'editStart', 'editEnd'].forEach((ev) => App.on(ev, sendPresence));
+  // uma bolinha por pessoa (várias abas ou reconexões da mesma pessoa contam uma vez; a própria pessoa não aparece)
+  function peopleOnline() {
+    const meId = cloud.me && cloud.me.id;
+    const by = new Map();
+    for (const p of cloud.peers.values()) {
+      const k = p.uid || p.email || p.cid;
+      if (meId && k === meId) continue;
+      const cur = by.get(k);
+      if (!cur) { by.set(k, Object.assign({}, p, { tabs: 1 })); continue; }
+      const tabs = cur.tabs + 1;
+      by.set(k, Object.assign({}, (p._at || 0) >= (cur._at || 0) ? p : cur, { tabs }));
+    }
+    return [...by.values()].sort((a, b) => String(a.name).localeCompare(String(b.name), 'pt-BR'));
+  }
+  function peopleList(anchor, people, goTo) {
+    document.querySelectorAll('.peers-pop').forEach((x) => x.remove());
+    const pop = document.createElement('div');
+    pop.className = 'peers-pop';
+    pop.innerHTML = `<div class="pp-head"><b>Na planilha agora</b><span>${people.length} ${people.length === 1 ? 'pessoa' : 'pessoas'}</span></div>
+      <div class="pp-list">${people.map((p) => `<div class="pp-row" data-cid="${esc(p.cid)}">${App.avatarHtml({ id: p.uid, name: p.name, color: p.color, avatar: p.avatar }, 32)}
+        <span class="pp-who"><b>${esc(p.name)}</b><small>${esc(p.email)}${p.tabs > 1 ? ` · ${p.tabs} abas` : ''}</small></span>
+        <button class="btn btn-sm" data-go="${esc(p.cid)}" title="Ir até onde a pessoa está">Ir até</button>${p.uid && App.chat ? `<button class="icon-btn" data-msg="${esc(p.uid)}" title="Enviar mensagem">${icon('comment', 16)}</button>` : ''}</div>`).join('')}</div>`;
+    document.body.appendChild(pop);
+    const r = anchor.getBoundingClientRect();
+    pop.style.top = r.bottom + 6 + 'px';
+    pop.style.right = Math.max(8, window.innerWidth - r.right - 40) + 'px';
+    pop.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => { pop.remove(); goTo(people.find((x) => x.cid === b.dataset.go)); }));
+    pop.querySelectorAll('[data-msg]').forEach((b) => (b.onclick = () => { pop.remove(); App.chat.open(b.dataset.msg); }));
+    const off = (e) => { if (!pop.contains(e.target) && !anchor.contains(e.target)) { pop.remove(); document.removeEventListener('mousedown', off, true); } };
+    setTimeout(() => document.addEventListener('mousedown', off, true), 0);
+  }
   function renderPeers() {
     const box = $('peers');
-    const list = [...cloud.peers.values()];
+    const meId = cloud.me && cloud.me.id;
+    const list = [...cloud.peers.values()].filter((p) => !meId || p.uid !== meId);
     if (box) {
-      const shown = list.slice(0, 5);
-      box.innerHTML = shown.map((p) => `<button class="peer${p.avatar ? ' has-img' : ''}" data-cid="${esc(p.cid)}" style="background:${p.color};${p.avatar ? `box-shadow:0 0 0 2px ${p.color};` : ''}" title="${esc(p.name)} (${esc(p.email)})">${App.avatarInner({ id: p.uid, name: p.name, avatar: p.avatar })}</button>`).join('') +
-        (list.length > 5 ? `<span class="peer more" title="${list.slice(5).map((p) => esc(p.name)).join(', ')}">+${list.length - 5}</span>` : '');
+      const people = peopleOnline();
+      const shown = people.slice(0, 5);
+      box.innerHTML = shown.map((p) => `<button class="peer${p.avatar ? ' has-img' : ''}" data-cid="${esc(p.cid)}" style="background:${p.color};${p.avatar ? `box-shadow:0 0 0 2px ${p.color};` : ''}" title="${esc(p.name)} (${esc(p.email)})${p.tabs > 1 ? ' · ' + p.tabs + ' abas' : ''}">${App.avatarInner({ id: p.uid, name: p.name, avatar: p.avatar })}</button>`).join('') +
+        (people.length > 5 ? `<button class="peer more" title="Ver todas as ${people.length} pessoas">+${people.length - 5}</button>` : '');
       const goTo = (p) => {
         if (!p || !p.presence || !p.presence.sel) return notify(`${p ? p.name : 'A pessoa'} ainda não selecionou nenhuma célula.`);
         const i = doc.sheets.findIndex((s) => s.id === p.presence.sheetId);
         if (i >= 0 && i !== doc.active) App.run('switchSheet', i);
         App.grid.select(p.presence.sel.r1, p.presence.sel.c1);
       };
+      const more = box.querySelector('.peer.more');
+      if (more) more.onclick = (e) => { e.stopPropagation(); peopleList(more, people, goTo); };
       box.querySelectorAll('.peer[data-cid]').forEach((b) => (b.onclick = () => {
         const p = cloud.peers.get(b.dataset.cid);
         if (!p) return;
@@ -1131,7 +1172,7 @@
   // Os setores são executores: digitam as informações nas colunas liberadas. Todo o resto
   // (formatação, regras, estrutura, filtros, congelar, tamanho de linhas e colunas) é dos administradores,
   // e essas opções nem aparecem para eles.
-  const EXEC_OK = new Set(['insertProcess', 'informCriticals', 'sendStatus', 'escalarVeiculo', 'confirmarEscala', 'bloquearVeiculo', 'destravarVeiculo', 'pedirTroca', 'messages', 'undo', 'redo', 'cut', 'copy', 'paste', 'pasteValues', 'find', 'findReplace', 'clearValues',
+  const EXEC_OK = new Set(['insertProcess', 'informCriticals', 'sendStatus', 'printDoc', 'escalarVeiculo', 'confirmarEscala', 'bloquearVeiculo', 'destravarVeiculo', 'pedirTroca', 'messages', 'undo', 'redo', 'cut', 'copy', 'paste', 'pasteValues', 'find', 'findReplace', 'clearValues',
     'zoom', 'toggleFormulaBar', 'toggleMenus', 'fullscreen', 'toggleGridlines', 'toggleFormulas', 'switchSheet', 'nextSheet', 'prevSheet',
     'selectAll', 'selectColumn', 'selectRow', 'insertDate', 'insertTime', 'insertDateTime', 'fillDown', 'fillRight',
     'print', 'download', 'openCloud', 'share', 'login', 'cellHistory', 'cellHistoryAll', 'shortcuts', 'about', 'updates', 'functionList', 'columnStats',
@@ -1298,6 +1339,7 @@
       { cmd: 'critColumn', arg: App.selRect().c1, t: 'Coluna do alerta de crítico', d: 'Coluna onde o alerta de container crítico pisca. Selecione a coluna antes de usar.', s: `Agora: coluna ${E.numToCol(App.critCol(sh))} · usar a coluna ${E.numToCol(App.selRect().c1)}` },
       { cmd: 'alertRules', t: 'Regras de alerta (ALERTA)', d: 'O que aparece no botão ALERTA do cabeçalho: regras prontas (crítico, ARM/DEM, escala…) ou condições nas colunas, por setor ou pessoa.', s: `${doc.sheets.reduce((n, x) => n + (x.alertRules || []).length, 0)} regra(s)` },
       { cmd: 'mailWho', t: 'Enviar status por e-mail: quem pode', d: 'Quem pode usar o botão "Enviar por e-mail" do Enviar status. O e-mail sai da conta configurada no servidor.', s: Array.isArray(sh.mailSectors) && sh.mailSectors.length ? `${sh.mailSectors.length} escolhido(s)` : 'Só administradores' },
+      { cmd: 'adminSessions', t: 'Sessões: deslogar usuários', d: 'Encerra o login de todas as pessoas ou só das escolhidas; quem estiver na planilha sai na hora.', s: `${cloud.peers ? new Set([...cloud.peers.values()].map((x) => x.uid)).size : 0} pessoa(s) conectada(s) agora` },
       { cmd: 'dssLookup', t: 'Motoristas do DSS', d: 'Coluna do motorista e do CPF/CNPJ preenchidos com a lista do DSS.', s: sh.lookup ? `Motorista na coluna ${E.numToCol(sh.lookup.col)} · CPF na ${E.numToCol(sh.lookup.cpfCol)}` : 'Desativado nesta página' },
     ];
     const m = App.ui.modal({
@@ -1309,6 +1351,57 @@
     m.el.querySelectorAll('.adm-card [data-i]').forEach((b) => (b.onclick = () => { const c = cards[+b.dataset.i]; m.close ? m.close() : m.el.close(); App.run(c.cmd, c.arg); }));
   }
   def('adminPanel', 'Controle do administrador', adminPanel);
+
+  // ---------- Sessões: deslogar todos ou pessoas escolhidas ----------
+  async function adminSessions() {
+    if (!App.cloudMode || !cloud.id) return notify('Disponível nas planilhas da nuvem.');
+    if (!cloud.realPerms || !cloud.realPerms.admin) return notify('Somente administradores encerram sessões.');
+    let list;
+    try { list = await api('GET', `/api/docs/${cloud.id}/sessions`); } catch (e) { return notify(e.message); }
+    const m = App.ui.modal({
+      title: 'Sessões — deslogar usuários', width: '560px', enterSubmits: false,
+      body: `<p class="sp-hint">Encerra o login da pessoa em todos os aparelhos: quem estiver com a planilha aberta sai na hora e precisa entrar de novo com a senha.</p>
+        <input class="input" id="ss-q" placeholder="Procurar pessoa…" autocomplete="off">
+        <div class="ss-list" id="ss-list"></div>`,
+      buttons: [{ label: 'Fechar' }],
+    });
+    const box = m.el.querySelector('#ss-list'), qi = m.el.querySelector('#ss-q');
+    const draw = () => {
+      const k = qi.value.trim().toLowerCase();
+      const vis = list.filter((x) => !k || (x.name + ' ' + x.email + ' ' + (x.setor || '')).toLowerCase().includes(k));
+      box.innerHTML = vis.map((x) => `<label class="ss-row${x.eu ? ' me' : ''}"><input type="checkbox" data-id="${esc(x.id)}"${x.eu ? ' disabled' : ''}>
+        ${App.avatarHtml({ id: x.id, name: x.name, color: '#5f6368' }, 30)}
+        <span class="ss-who"><b>${esc(x.name)}${x.eu ? ' (você)' : ''}${x.owner ? ' · dono' : ''}</b><small>${esc(x.email)}${x.setor ? ' · ' + esc(x.setor) : ''}</small></span>
+        <span class="ss-st ${x.online ? 'on' : x.conectado ? 'mid' : ''}">${x.online ? (x.online > 1 ? `nesta planilha (${x.online} abas)` : 'nesta planilha agora') : x.conectado ? 'em outra planilha' : 'fora agora'}</span></label>`).join('') || '<p class="sp-hint">Ninguém encontrado.</p>';
+      box.querySelectorAll('input').forEach((x) => (x.onchange = upd));
+      upd();
+    };
+    qi.oninput = draw;
+    qi.onkeydown = (e) => e.stopPropagation();
+    const foot = m.el.querySelector('.modal-foot');
+    const bSel = document.createElement('button'); bSel.className = 'btn'; bSel.textContent = 'Deslogar selecionados';
+    const bAll = document.createElement('button'); bAll.className = 'btn btn-primary'; bAll.textContent = 'Deslogar todos';
+    foot.prepend(bAll); foot.prepend(bSel);
+    const picked = () => [...box.querySelectorAll('input:checked')].map((x) => x.dataset.id);
+    function upd() { const n = picked().length; bSel.disabled = !n; bSel.textContent = n ? `Deslogar selecionados (${n})` : 'Deslogar selecionados'; }
+    const go = async (body, what) => {
+      App.ui.modal({
+        title: 'Encerrar sessões', width: '440px',
+        body: `<p class="modal-text">${what} Quem estiver usando a planilha sai na hora (alterações já enviadas ficam salvas).</p>`,
+        buttons: [{ label: 'Cancelar' }, { label: 'Deslogar', primary: true, action: async () => {
+          try {
+            const r = await api('POST', `/api/docs/${cloud.id}/logout`, body);
+            notify(r.deslogados.length ? `Sessão encerrada: ${r.deslogados.join(', ')}.${r.pulados.length ? ` Não dá para deslogar: ${r.pulados.join(', ')}.` : ''}` : (r.pulados.length ? `Não dá para deslogar: ${r.pulados.join(', ')}.` : 'Ninguém para deslogar.'));
+            list = await api('GET', `/api/docs/${cloud.id}/sessions`); draw();
+          } catch (e) { notify(e.message); }
+        } }],
+      });
+    };
+    bSel.onclick = () => { const ids = picked(); if (ids.length) go({ users: ids }, `Deslogar ${ids.length === 1 ? (list.find((x) => x.id === ids[0]) || {}).name : ids.length + ' pessoas'}?`); };
+    bAll.onclick = () => go({ all: true }, 'Deslogar todas as pessoas desta planilha (menos você)?');
+    draw();
+  }
+  def('adminSessions', 'Sessões: deslogar usuários', adminSessions);
 
   def('openCloud', 'Planilhas na nuvem', openCloudDialog);
   def('saveToCloud', 'Salvar na nuvem', () => saveToCloud(false));

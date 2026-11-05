@@ -178,6 +178,7 @@
     return u.locked.length ? `<button class="chat-unlock" data-m="${m.id}">🔓 Destravar para troca (${u.locked.length === 1 ? 'linha ' + u.locked[0] : 'linhas ' + u.locked.join(' e ')})</button>`
       : `<button class="chat-unlock done" data-m="${m.id}" disabled>✓ Já destravado</button>`;
   }
+  let pickerTab = 'Figurinhas';
   function stickerHtml(k) { return `<span class="chat-stk" style="--stk:${k[3]}"><span class="chat-stk-emo">${k[1]}</span><b>${esc(k[2])}</b></span>`; }
   // painel de emojis (vão para o texto) e figurinhas (são enviadas na hora)
   function emojiPicker(body, ta) {
@@ -185,12 +186,15 @@
     if (pop) { pop.remove(); return; }
     pop = document.createElement('div');
     pop.className = 'emo-pop';
-    let tab = 'Figurinhas';
+    let tab = pickerTab;
     const tabs = ['Figurinhas', ...Object.keys(EMOJIS)];
+    const ICON = { Figurinhas: '🏷️', Rostos: '😀', Gestos: '👍', Trabalho: '✅', Transporte: '🚚', Outros: '❤️' };
     const draw = () => {
-      pop.innerHTML = `<div class="emo-tabs">${tabs.map((t) => `<button class="emo-tab${t === tab ? ' on' : ''}" data-t="${esc(t)}">${t === 'Figurinhas' ? '🖼️ Figurinhas' : esc(EMOJIS[t].split(' ')[0] + ' ' + t)}</button>`).join('')}</div>
-        <div class="emo-grid${tab === 'Figurinhas' ? ' stk' : ''}">${tab === 'Figurinhas' ? STICKERS.map((k) => `<button class="emo-stk" data-k="${k[0]}" title="Enviar figurinha">${stickerHtml(k)}</button>`).join('')
-          : EMOJIS[tab].split(' ').map((e) => `<button class="emo-i" data-e="${esc(e)}">${e}</button>`).join('')}</div>`;
+      pickerTab = tab;
+      pop.innerHTML = `<div class="emo-head"><div class="emo-tabs">${tabs.map((t) => `<button class="emo-tab${t === tab ? ' on' : ''}" data-t="${esc(t)}" title="${esc(t)}">${ICON[t] || '🙂'}</button>`).join('')}</div><span class="emo-title">${esc(tab)}</span></div>
+        <div class="emo-grid${tab === 'Figurinhas' ? ' stk' : ''}">${tab === 'Figurinhas' ? STICKERS.map((k) => `<button class="emo-stk" data-k="${k[0]}" title="Enviar a figurinha &quot;${esc(k[2])}&quot;" style="--stk:${k[3]}"><span class="stk-emo">${k[1]}</span><span class="stk-txt">${esc(k[2])}</span></button>`).join('')
+          : EMOJIS[tab].split(' ').map((e) => `<button class="emo-i" data-e="${esc(e)}">${e}</button>`).join('')}</div>
+        <p class="emo-hint"><b>${esc(tab)}</b> · ${tab === 'Figurinhas' ? 'clique para enviar a figurinha na hora' : 'clique para pôr o emoji no texto'}</p>`;
       pop.querySelectorAll('.emo-tab').forEach((b) => (b.onclick = (e) => { e.stopPropagation(); tab = b.dataset.t; draw(); }));
       pop.querySelectorAll('.emo-i').forEach((b) => (b.onclick = (e) => {
         e.stopPropagation();

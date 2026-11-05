@@ -215,6 +215,7 @@
           }
         });
       });
+      const rodoId = 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
       const go = () => {
         App._escalando = true;
         let done;
@@ -230,6 +231,8 @@
             sh.cells[a] = sh.cells[a] || { v: '' };
             sh.cells[a].esc = ok ? 'ok' : 'p';
             delete sh.cells[a].swap;
+            // rodotrem: as 2 linhas ficam marcadas como par
+            if (rows.length === 2 && v.rodo) sh.cells[a].rodo = rodoId; else delete sh.cells[a].rodo;
           });
         })); } finally { App._escalando = false; }
         if (done === false) return;
@@ -248,20 +251,53 @@
     }
   }
 
-  // rodotrem: a linha de cima ou de baixo com o mesmo CAVALO entra junto (bloquear, destravar, pedir troca)
-  function withPair(sh, rows) {
-    const c = cols(sh).CAVALO, si = doc.sheets.indexOf(sh);
-    if (!c || si < 0) return rows;
-    const out = new Set(rows);
-    App.withReal(() => {
-      for (const r of rows) {
-        const plate = norm(text(si, sh, r, c));
+  // rodotrem: as 2 linhas com a mesma placa de CAVALO andam juntas (confirmar, bloquear, destravar, pedir troca, alertas).
+  // O par é reconhecido pela marca "rodo" (posta ao escalar), pela linha vizinha com a mesma placa ou, na escala
+  // manual, pela outra linha da mesma data com a mesma placa e outra carreta (ou que a ESCALA DE FROTA diz ser rodotrem).
+  let pairCache = { ver: -1 };
+  function plateIndex(sh) {
+    if (pairCache.ver === baseVer && pairCache.sh === sh) return pairCache;
+    const tc = cols(sh), si = doc.sheets.indexOf(sh);
+    const map = new Map();
+    let fleet = new Set();
+    if (tc.CAVALO && si >= 0) App.withReal(() => {
+      const used = App.usedRange(sh);
+      for (let r = firstRow(sh, tc.CAVALO); r <= used.maxR; r++) {
+        const plate = norm(text(si, sh, r, tc.CAVALO));
         if (!plate) continue;
-        for (const d of [-1, 1]) if (r + d >= 1 && norm(text(si, sh, r + d, c)) === plate) out.add(r + d);
+        if (!map.has(plate)) map.set(plate, []);
+        map.get(plate).push({ r, day: rowDate(sh, r), car: norm(text(si, sh, r, tc.CARRETA)), rodo: (cavCell(sh, r) || {}).rodo || null });
       }
+      const src = srcSheet(sh);
+      if (src && src.sh !== sh) { try { fleet = new Set(vehiclesToday(src).list.filter((v) => v.rodo).map((v) => norm(v.CAVALO))); } catch (e) { /* sem a escala */ } }
     });
+    pairCache = { ver: baseVer, sh, map, fleet };
+    return pairCache;
+  }
+  function pairOf(sh, r) {
+    const ix = plateIndex(sh);
+    for (const [plate, list] of ix.map) {
+      const me = list.find((x) => x.r === r);
+      if (!me) continue;
+      const others = list.filter((x) => x.r !== r);
+      if (!others.length) return null;
+      if (me.rodo) { const o = others.find((x) => x.rodo === me.rodo); if (o) return o.r; }
+      const free = others.filter((x) => !x.rodo || !me.rodo);
+      const near = free.find((x) => Math.abs(x.r - r) === 1);
+      if (near) return near.r;
+      const sameDay = free.filter((x) => x.day === me.day && (x.car !== me.car || ix.fleet.has(plate)));
+      if (sameDay.length) return sameDay.sort((a, b) => Math.abs(a.r - r) - Math.abs(b.r - r))[0].r;
+      return null;
+    }
+    return null;
+  }
+  function withPair(sh, rows) {
+    if (!cols(sh).CAVALO || doc.sheets.indexOf(sh) < 0) return rows;
+    const out = new Set(rows);
+    for (const r of rows) { const p = pairOf(sh, r); if (p) out.add(p); }
     return [...out].sort((a, b) => a - b);
   }
+  const isRodo = (sh, rows) => rows.length === 2 && withPair(sh, [rows[0]]).includes(rows[1]);
   // 2ª viagem: o mesmo motorista já escalado em outra linha na mesma data → registra na aba JORNADA
   function jornada(sh, rows, v, valueFor) {
     const tc = cols(sh), si = doc.sheets.indexOf(sh);
@@ -383,7 +419,7 @@
       for (const r of (canEscalar(sh) ? cleared : [])) {
         if (rows.has(r) || has(r, tc.CAVALO) || has(r, tc.CARRETA) || has(r, tc.MOTORISTA)) continue;
         const cav = sh.cells[E.addrToStr(r, tc.CAVALO)];
-        if (cav && cav.esc && !cav.lock) { delete cav.esc; delete cav.swap; App.cleanup(sh, E.addrToStr(r, tc.CAVALO)); changed = true; }
+        if (cav && cav.esc && !cav.lock) { delete cav.esc; delete cav.swap; delete cav.rodo; App.cleanup(sh, E.addrToStr(r, tc.CAVALO)); changed = true; }
       }
       for (const r of rows) {
         const a = E.addrToStr(r, tc.CAVALO);
@@ -738,11 +774,17 @@
   function confirmarEscala() {
     const sh = App.sheet();
     if (!canEscalar(sh)) return notify('Confirmar escala não está liberado para o seu setor.');
-    const rows = rowsWith(sh, (x) => x.esc === 'p');
+    // rodotrem: confirma as 2 linhas da mesma placa, mesmo que só uma esteja selecionada
+    const sel = App.withReal(() => selRows());
+    const rows = rowsWith(sh, (x) => x.esc === 'p', true);
     if (!rows.length) return notify('Não há escala esperando confirmação na seleção.');
     const falta = App.withReal(() => rows.map((r) => [r, App.vehicleMissingFields(sh, doc.active, r)]).filter((x) => x[1].length));
     if (falta.length) return notify(`Preencha antes de confirmar: ${falta.map(([r, f]) => `linha ${r} (${f.join(', ')})`).join('; ')}.`);
-    setFlags('Confirmar escala', rows, (x) => { x.esc = 'ok'; }, `Escala confirmada (${rowTxt(rows)}).`);
+    const extra = rows.filter((r) => !sel.includes(r));
+    const rodo = App.withReal(() => rows.filter((r) => withPair(sh, [r]).length > 1));
+    const msg = rodo.length >= 2 ? `Escala confirmada — rodotrem ${App.withReal(() => text(doc.active, sh, rodo[0], cols(sh).CAVALO))} (linhas ${rodo.join(' e ')})${rows.length > rodo.length ? ` e mais ${rows.length - rodo.length} linha(s)` : ''}.`
+      : `Escala confirmada (${rowTxt(rows)}).`;
+    setFlags('Confirmar escala', rows, (x) => { x.esc = 'ok'; }, msg + (extra.length && rodo.length < 2 ? ` Junto: linha ${extra.join(', ')}.` : ''));
   }
   function bloquear() {
     const sh = App.sheet();
@@ -867,7 +909,7 @@
     if (!tc.CAVALO) return;
     const p = App.realCell ? App.realCell(hit.r, hit.c) : { r: hit.r, c: hit.c };
     if (!p || p.c !== tc.CAVALO) return;
-    const flags = App.withReal(() => selRows().map((r) => cavCell(sh, r) || {}));
+    const flags = App.withReal(() => withPair(sh, selRows()).map((r) => cavCell(sh, r) || {}));
     const extra = [];
     if (canEscalar(sh)) {
       extra.push({ label: 'Escalar veículo', icon: 'plus', cmd: 'escalarVeiculo' });
@@ -888,5 +930,5 @@
   def('destravarVeiculo', 'Destravar veículo para troca', destravar);
   def('pedirTroca', 'Pedir troca do veículo', pedirTroca);
   def('escalaConfig', 'Escala de veículos: quem pode usar', config);
-  App.escala = { dateKey, vehiclesToday, srcSheet, canEscalar, canLock, chatUnlockState, unlockFromChat, withPair };
+  App.escala = { dateKey, vehiclesToday, srcSheet, canEscalar, canLock, chatUnlockState, unlockFromChat, withPair, isRodo };
 })(window.App);

@@ -109,10 +109,22 @@
         };
       }
       const kc = keyCols(sh, rule);
-      for (let r = r0; r <= used.maxR && out.length < 500; r++) {
+      const hits = [];
+      for (let r = r0; r <= used.maxR && hits.length < 1000; r++) {
         let hit = false;
         try { hit = test(r); } catch (e) { hit = false; }
-        if (hit) out.push({ r, cols: kc.map((c) => ({ c, t: txt(r, c) })).filter((x) => x.t) });
+        if (hit) hits.push(r);
+      }
+      // rodotrem (2 linhas com a mesma placa): conta como 1 alerta só
+      const hitSet = new Set(hits), done = new Set();
+      const pair = tc.CAVALO && App.escala && App.escala.withPair;
+      for (const r of hits) {
+        if (done.has(r) || out.length >= 500) continue;
+        let rows = [r];
+        if (pair) { try { rows = rows.concat(pair(sh, [r]).filter((x) => x !== r && hitSet.has(x) && !done.has(x))); } catch (e) { /* sem par */ } }
+        rows.forEach((x) => done.add(x));
+        const cols = kc.map((c) => ({ c, t: [...new Set(rows.map((x) => txt(x, c)).filter(Boolean))].join(' / ') })).filter((x) => x.t);
+        out.push({ r, rows, rodo: rows.length > 1, cols });
       }
     });
     return out;
@@ -130,6 +142,7 @@
     });
     last = { list, total: list.reduce((s, x) => s + x.rows.length, 0) };
     renderButton();
+    renderTicker();
     if (panel && !panel.hidden) renderPanel();
     return last;
   }
@@ -145,6 +158,55 @@
     btn.querySelector('.al-n').textContent = last.total > 999 ? '999+' : String(last.total);
     btn.querySelector('.al-n').hidden = !last.total;
     btn.title = last.total ? `${last.total} ${last.total === 1 ? 'alerta' : 'alertas'} — clique para ver` : 'Nenhum alerta agora';
+    if (btn.hidden && ticker) ticker.hidden = true;
+  }
+
+  // ---------- Letreiro ao lado do botão: os alertas do momento passando ----------
+  let ticker = null, tickerSig = '';
+  function renderTicker() {
+    if (!btn) return;
+    if (!ticker) {
+      ticker = document.createElement('div');
+      ticker.id = 'al-ticker';
+      ticker.className = 'al-ticker';
+      ticker.innerHTML = '<div class="al-track"></div>';
+      btn.parentNode.appendChild(ticker);
+      ticker.addEventListener('click', (e) => {
+        const it = e.target.closest('.al-tk');
+        if (!it) return togglePanel();
+        const g = last.list[+it.dataset.g];
+        if (!g) return;
+        const c = (g.rule.conds && g.rule.conds[0] && g.rule.conds[0].col) || (g.rows[0].cols[0] || {}).c || 1;
+        goTo(g.sh, +it.dataset.r, c);
+      });
+      window.addEventListener('resize', placeTicker);
+    }
+    const items = [];
+    last.list.forEach((g, gi) => g.rows.slice(0, 40).forEach((x) => items.push(`<button class="al-tk" data-g="${gi}" data-r="${x.r}" style="--al:${esc(g.rule.color || '#d93025')}"><b>${esc(g.rule.name)}</b> <span>${x.rodo ? 'Linhas ' + x.rows.join(' e ') + ' (rodotrem)' : 'Linha ' + x.r}${x.cols.length ? ' · ' + x.cols.map((y) => esc(y.t.slice(0, 30))).join(' · ') : ''}</span></button>`)));
+    const sig = items.join('');
+    ticker.hidden = !items.length;
+    if (sig !== tickerSig) {
+      tickerSig = sig;
+      const track = ticker.querySelector('.al-track');
+      // o conteúdo vai duas vezes, para o letreiro rodar sem emenda
+      track.innerHTML = `<div class="al-run">${sig}</div><div class="al-run" aria-hidden="true">${sig}</div>`;
+      requestAnimationFrame(() => {
+        const w = track.firstChild ? track.firstChild.scrollWidth : 0;
+        track.style.animationDuration = Math.max(12, Math.round(w / 55)) + 's';
+      });
+    }
+    placeTicker();
+  }
+  // entre o botão ALERTA e os botões da direita; some quando não há espaço
+  function placeTicker() {
+    if (!ticker || !btn || ticker.hidden && !last.total) return;
+    const bar = btn.parentNode, right = bar.querySelector('.appbar-right');
+    const b = bar.getBoundingClientRect(), a = btn.getBoundingClientRect();
+    const lim = right ? right.getBoundingClientRect().left : b.right;
+    const left = a.right - b.left + 10, width = Math.min(560, lim - a.right - 20);
+    ticker.style.left = left + 'px';
+    ticker.style.width = Math.max(0, width) + 'px';
+    ticker.classList.toggle('al-off', width < 90 || !last.total);
   }
 
   // ---------- Painel com os alertas ----------
@@ -167,11 +229,11 @@
       return;
     }
     body.innerHTML = last.list.map((g, gi) => {
-      const rows = g.rows.filter((x) => !k || x.cols.some((y) => y.t.toLowerCase().includes(k)) || String(x.r).includes(k) || g.rule.name.toLowerCase().includes(k));
+      const rows = g.rows.filter((x) => !k || x.cols.some((y) => y.t.toLowerCase().includes(k)) || (x.rows || [x.r]).some((n) => String(n).includes(k)) || g.rule.name.toLowerCase().includes(k));
       if (!rows.length) return '';
       return `<section class="al-group" style="--al:${esc(g.rule.color || '#d93025')}"><div class="al-gh"><b>${esc(g.rule.name)}</b><span class="al-cnt">${rows.length}</span><small>${esc(g.sh.name)}</small></div>
         ${g.rule.msg ? `<p class="al-msg">${esc(g.rule.msg)}</p>` : ''}
-        <div class="al-rows">${rows.slice(0, 200).map((x) => `<button class="al-row" data-g="${gi}" data-r="${x.r}"><span class="al-ln">Linha ${x.r}</span>${x.cols.map((y) => `<span class="al-v">${esc(y.t.slice(0, 40))}</span>`).join('')}</button>`).join('')}
+        <div class="al-rows">${rows.slice(0, 200).map((x) => `<button class="al-row" data-g="${gi}" data-r="${x.r}"><span class="al-ln">${x.rodo ? `Linhas ${x.rows.join(' e ')} <i class="al-rodo">rodotrem</i>` : `Linha ${x.r}`}</span>${x.cols.map((y) => `<span class="al-v">${esc(y.t.slice(0, 40))}</span>`).join('')}</button>`).join('')}
         ${rows.length > 200 ? `<p class="sp-hint">+ ${rows.length - 200} linhas</p>` : ''}</div></section>`;
     }).join('') || '<p class="sp-hint">Nada encontrado.</p>';
     body.querySelectorAll('.al-row').forEach((b) => (b.onclick = () => { const g = last.list[+b.dataset.g]; const c = (g.rule.conds && g.rule.conds[0] && g.rule.conds[0].col) || (g.rows[0].cols[0] || {}).c || 1; goTo(g.sh, +b.dataset.r, c); }));

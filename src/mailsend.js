@@ -21,6 +21,7 @@
   };
   App.on('sheet', () => { infoFor = null; });
 
+  const quando = (th) => { const d = new Date(th.when || th.date); return isNaN(d) ? th.date : d.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }); };
   const fmtTam = (n) => (n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB');
   const lerArquivo = (f) => new Promise((resolve, reject) => {
     const fr = new FileReader();
@@ -56,7 +57,7 @@
 
     q('#ms-step').className = 'ms-step ' + (th ? 'ok' : 'warn');
     q('#ms-step').innerHTML = th
-      ? `✓ Conversa encontrada: <b>${esc(th.subject)}</b><small>Última mensagem de ${esc(th.from)} em ${esc(th.date)}${th.total > 1 ? ` · ${th.total} mensagens com este assunto` : ''}. A resposta vai na mesma conversa.</small>`
+      ? `✓ Conversa encontrada: <b>${esc(th.subject)}</b><small>Última mensagem ${th.fromMe ? 'enviada por nós' : 'de ' + esc(th.from)} em ${esc(quando(th))}${th.total > 1 ? ` · ${th.total} mensagens com este assunto` : ''}. A resposta continua a mesma conversa.</small>`
       : `Nenhuma mensagem com <b>${esc(grupo.ref)}</b> no assunto. Dá para enviar como e-mail novo — confira os destinatários.`;
 
     q('#ms-form').hidden = false;
@@ -70,6 +71,8 @@ Segue o status atualizado:</textarea></label>
         <input type="file" id="ms-file" multiple hidden></div>
       <p class="sp-label">Vai assim no corpo (${grupo.n} ${grupo.n === 1 ? 'linha' : 'linhas'})</p>
       <div class="st-box ms-prev">${grupo.html}</div>
+      ${th && th.citada ? `<label class="inline ms-hist"><input type="checkbox" id="ms-quote" checked> Incluir embaixo o histórico da conversa (a última mensagem, como no "Responder a todos" do Outlook)</label>
+      ${th.snippet ? `<div class="ms-quote"><b>${th.fromMe ? 'Nossa última mensagem' : esc(th.from)}</b> · ${esc(quando(th))}<p>${esc(th.snippet)}${th.snippet.length >= 400 ? '…' : ''}</p></div>` : ''}` : ''}
       <p class="sp-hint">Sai de <b>${esc(dados.remetente || '')}</b>. Confira os destinatários: a mensagem é enviada de verdade.</p>`;
 
     const desenhaAnexos = () => {
@@ -105,6 +108,7 @@ Segue o status atualizado:</textarea></label>
         const r = await api('POST', `/api/docs/${cloud().id}/mail/send`, {
           sheet: sh.id, subject: q('#ms-sub').value.trim(), to, cc: q('#ms-cc').value.trim(),
           html: introHtml + grupo.html, text: (intro ? intro + '\n\n' : '') + grupo.tsv,
+          ref: th ? grupo.ref : '', quote: !!(q('#ms-quote') && q('#ms-quote').checked),
           inReplyTo: th ? th.messageId : null,
           references: th ? [th.references, th.messageId].filter(Boolean).join(' ') : null,
           attachments: anexos.map((a) => ({ name: a.name, type: a.type, data: a.data })),
