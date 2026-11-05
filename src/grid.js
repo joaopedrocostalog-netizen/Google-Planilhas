@@ -222,7 +222,7 @@
       s = Object.assign({}, s, crit ? { bg: '#d93025', color: '#ffffff', b: true } : { bg: '#fce8e6', color: '#b3261e', b: true });
     }
     // escala de veículos: não confirmada = vermelho (por cima da formatação condicional);
-    // pedido de troca = CAVALO, CARRETA e MOTORISTA piscando em azul; bloqueado = cadeado no CAVALO
+    // pedido de troca = CAVALO, CARRETA, MOTORISTA, CPF e CONTATO piscando em azul; bloqueado = cadeado no CAVALO
     let locked = false, swap = false;
     if (window.Perms && window.Perms.escalaCols) {
       if (st.escFor !== sh) { st.escFor = sh; st.escCols = window.Perms.escalaCols(sh); }
@@ -231,7 +231,7 @@
         const cav = sh.cells[E.addrToStr(r, ec.CAVALO)];
         if (cav && (cav.esc || cav.lock || cav.swap)) {
           const vehicle = c === ec.CAVALO || c === ec.CARRETA || c === ec.MOTORISTA;
-          if (cav.swap && vehicle) {
+          if (cav.swap) {
             st.hasCrit = true;
             s = Object.assign({}, s, Math.floor(Date.now() / 550) % 2 ? { bg: '#1a73e8', color: '#ffffff', b: true } : { bg: '#d2e3fc', color: '#0b3d91', b: true });
           } else if (cav.esc === 'p' && String(raw).trim() !== '') s = Object.assign({}, s, { bg: '#d93025', color: '#ffffff' }); // célula vazia não fica vermelha

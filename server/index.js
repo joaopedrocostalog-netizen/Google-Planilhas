@@ -734,6 +734,57 @@ route('GET', '/api/docs/:id/share', async (req, p) => {
   const online = [...room.clients].map((c) => c.user.email);
   return { acl: Object.assign({}, room.acl, { members }), owner: owner ? publicUser(owner) : null, sheets: room.data.sheets.map((s) => ({ id: s.id, name: s.name })), online, isOwner: room.ownerId === user.id };
 });
+// ---------- Sessões: o administrador desloga todos ou pessoas escolhidas ----------
+async function sessionsRoom(req, id) {
+  const user = await requireUser(req);
+  const room = await getRoom(id);
+  if (!room) throw httpError(404, 'Planilha não encontrada.');
+  const perms = Perms.compute(permDoc(room), user);
+  if (!perms || !perms.admin) throw httpError(403, 'Somente administradores encerram sessões.');
+  return { user, room };
+}
+// pessoas com acesso à planilha (dono, membros com conta e quem está conectado agora)
+async function docPeople(room) {
+  const byId = new Map();
+  const add = (u, extra) => { if (u && !byId.has(u.id)) byId.set(u.id, Object.assign({ id: u.id, name: u.name, email: u.email }, extra || {})); };
+  add(await store.getUserById(room.ownerId), { owner: true });
+  for (const m of room.acl.members || []) { const u = await store.getUserByEmail(m.email); add(u, { sector: m.sector || null }); }
+  for (const c of room.clients) add(c.user);
+  return [...byId.values()];
+}
+route('GET', '/api/docs/:id/sessions', async (req, p) => {
+  const { user, room } = await sessionsRoom(req, p.id);
+  const online = new Map();
+  for (const r of rooms.values()) for (const c of r.clients) if (c.user) online.set(c.user.id, (online.get(c.user.id) || 0) + (r === room ? 1 : 0));
+  const people = await docPeople(room);
+  const sectors = new Map((room.acl.sectors || []).map((s) => [s.id, s.name]));
+  return people.map((x) => Object.assign(x, { online: online.get(x.id) || 0, conectado: online.has(x.id), setor: x.sector ? sectors.get(x.sector) || null : null, eu: x.id === user.id }))
+    .sort((a, b) => (b.online - a.online) || String(a.name).localeCompare(String(b.name), 'pt-BR'));
+});
+route('POST', '/api/docs/:id/logout', async (req, p) => {
+  const { user, room } = await sessionsRoom(req, p.id);
+  const b = await readBody(req, 100000);
+  const people = await docPeople(room);
+  const souGlobal = await isGlobalAdmin(user), souDono = room.ownerId === user.id;
+  const pedidos = b.all ? people.map((x) => x.id) : (Array.isArray(b.users) ? b.users.map(String) : []);
+  const alvos = [], pulados = [];
+  for (const id of pedidos) {
+    const pessoa = people.find((x) => x.id === id);
+    if (!pessoa || id === user.id) continue; // só quem tem acesso a esta planilha; nunca a própria pessoa
+    if ((pessoa.owner && !souDono && !souGlobal) || (!souGlobal && await isGlobalAdmin(pessoa))) { pulados.push(pessoa.name); continue; }
+    alvos.push(pessoa);
+  }
+  for (const a of alvos) {
+    await store.deleteUserSessions(a.id);
+    for (const [k, v] of sessionCache) if (v.user && v.user.id === a.id) sessionCache.delete(k);
+    for (const r of rooms.values()) for (const c of [...r.clients]) if (c.user && c.user.id === a.id) {
+      c.ws.send({ type: 'error', code: 'auth', message: 'Sua sessão foi encerrada pelo administrador. Entre de novo para continuar.' });
+      c.ws.close(4001, 'deslogado');
+    }
+  }
+  if (alvos.length) console.log(`[sessões] ${user.email} deslogou ${alvos.map((a) => a.email).join(', ')} (planilha ${room.id})`);
+  return { ok: true, deslogados: alvos.map((a) => a.name), pulados };
+});
 route('PUT', '/api/docs/:id/share', async (req, p) => {
   const user = await requireUser(req);
   const room = await getRoom(p.id);
@@ -793,6 +844,8 @@ function replyAllOf(th, myAddr) {
     seen.add(addr);
     return true;
   });
+  // a última mensagem da conversa foi nossa: a resposta vai de novo para as mesmas pessoas
+  if (th.fromMe) { const to2 = pick(th.to), cc2 = pick(th.cc); return { to: to2.join(', '), cc: cc2.join(', ') }; }
   const to = pick(th.from);
   const cc = pick(th.to).concat(pick(th.cc));
   return { to: to.join(', '), cc: cc.join(', ') };
@@ -820,10 +873,12 @@ route('POST', '/api/docs/:id/mail/find', async (req, p) => {
   if (ref.length < 3) throw httpError(400, 'Referência muito curta para procurar no e-mail.');
   const cfg = mail.config();
   let th;
-  try { th = await mail.findThread(cfg, ref, b.mailbox ? String(b.mailbox) : 'INBOX'); }
+  try { th = await mail.findThread(cfg, ref, b.mailbox ? String(b.mailbox) : null, { withBody: true }); }
   catch (e) { throw httpError(502, 'Não foi possível falar com o servidor de e-mail: ' + e.message); }
   if (!th) return { achou: false, ref };
-  return { achou: true, ref, thread: th, destinatarios: replyAllOf(th, cfg.from) };
+  const citada = !!th.body;
+  delete th.body;
+  return { achou: true, ref, thread: Object.assign(th, { citada }), destinatarios: replyAllOf(th, cfg.from) };
 });
 const MAX_ANEXOS = Number(process.env.MAIL_MAX_ANEXOS || 20 * 1024 * 1024);
 route('POST', '/api/docs/:id/mail/send', async (req, p) => {
@@ -842,15 +897,24 @@ route('POST', '/api/docs/:id/mail/send', async (req, p) => {
   }));
   const total = anexos.reduce((n, a) => n + a.data.length, 0);
   if (total > MAX_ANEXOS) throw httpError(413, 'Os anexos somam mais do que o limite permitido.');
+  const cfg = mail.config();
+  let html = String(b.html || ''), text = String(b.text || '');
+  let inReplyTo = String(b.inReplyTo || '').trim() || null, references = String(b.references || '').trim() || null;
+  // resposta na conversa: o servidor acha de novo a última mensagem com a REFERENCIA no assunto,
+  // responde a ela (In-Reply-To/References) e cita o histórico embaixo, como o Outlook faz
+  const ref = String(b.ref || '').trim();
+  if (ref.length >= 3) {
+    let th = null;
+    try { th = await mail.findThread(cfg, ref, null, { withBody: b.quote !== false }); }
+    catch (e) { throw httpError(502, 'Não foi possível falar com o servidor de e-mail: ' + e.message); }
+    if (th) {
+      if (th.messageId) { inReplyTo = th.messageId; references = [th.references, th.messageId].filter(Boolean).join(' '); }
+      if (b.quote !== false && th.body) { const qb = mail.quoteBlock(th); html += qb.html; text += qb.text; }
+    }
+  }
   let r;
   try {
-    r = await mail.send(mail.config(), {
-      to, cc, subject,
-      html: String(b.html || ''), text: String(b.text || ''),
-      inReplyTo: String(b.inReplyTo || '').trim() || null,
-      references: String(b.references || '').trim() || null,
-      attachments: anexos,
-    });
+    r = await mail.send(cfg, { to, cc, subject, html, text, inReplyTo, references, attachments: anexos });
   } catch (e) { throw httpError(502, 'O servidor de e-mail recusou o envio: ' + e.message); }
   console.log(`[e-mail] ${user.email} enviou "${subject}" para ${r.rcpt.length} destinatário(s) na planilha ${room.id}`);
   return { ok: true, messageId: r.messageId, destinatarios: r.rcpt, por: user.name };

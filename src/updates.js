@@ -4,6 +4,17 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '05/11/2026', title: 'Rodotrem, letreiro de alertas, impressão de documentos e sessões', items: [
+      ['Rodotrem', 'Confirmar escala (também na escala manual) reconhece o rodotrem e confirma as duas linhas com a mesma placa, mesmo selecionando só uma. Ao escalar um rodotrem, as 2 linhas ficam marcadas como par.'],
+      ['Pedido de troca', 'Ao pedir a troca, CAVALO, CARRETA, MOTORISTA, CPF e CONTATO piscam em azul (antes só as 3 primeiras).'],
+      ['ALERTA', 'Rodotrem conta como 1 alerta só (aparece "Linhas 5 e 6 · rodotrem"). Ao lado do botão ALERTA, um letreiro passa os alertas do momento; clique num deles para ir à linha, e pare o mouse em cima para ler.'],
+      ['Imprimir', 'Botão direito na linha › Imprimir: Minuta de devolução, Minuta de devolução (Glovis), Ordem de coleta, Liberação de vazio e Ficha completa da linha. Uma página por linha selecionada, com opção de salvar em PDF.'],
+      ['Administrador', 'Administrador › "Sessões: deslogar usuários": encerra o login de todos ou só das pessoas escolhidas; quem estiver na planilha sai na hora.'],
+      ['Chat', 'Emojis e figurinhas reorganizados: abas com ícones (sem barra de rolagem), figurinhas inteiras em blocos menores e figurinha enviada com visual de cartão.'],
+      ['Pessoas na planilha', 'As bolinhas do topo não repetem mais a mesma pessoa (várias abas contam uma vez) e o "+N" abre a lista com todos, com "Ir até" e mensagem.'],
+      ['Enviar status', 'A coluna STATUS da tabela foi trocada pela OBSERVAÇÃO.'],
+      ['Enviar por e-mail', 'A resposta continua a conversa: responde à última mensagem do assunto (inclusive uma resposta nossa nos Enviados) e leva embaixo o histórico citado ("De / Enviada em / Para / Assunto"), como o Outlook.'],
+    ] },
     { date: '04/11/2026', title: 'Envio de e-mail por HTTPS (a hospedagem bloqueia SMTP)', items: [
       ['Enviar por e-mail', 'O servidor onde a planilha roda (Render) bloqueia as portas de SMTP, então o envio passa a sair por HTTPS, pelo serviço de envio configurado. A busca da conversa continua por IMAP, que funciona normalmente.'],
       ['Enviar por e-mail', 'A resposta continua caindo dentro da mesma conversa do cliente (mantém In-Reply-To e References), com a tabela, os anexos e o remetente de sempre.'],

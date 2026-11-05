@@ -76,7 +76,7 @@ function reader(sock) {
         if (buf.length < w.bytes) return;
         const out = buf.subarray(0, w.bytes);
         buf = buf.subarray(w.bytes);
-        waiters.shift(); w.resolve(out.toString('utf8'));
+        waiters.shift(); w.resolve(Buffer.from(out));
         continue;
       }
       const i = buf.indexOf('\r\n');
@@ -98,7 +98,8 @@ async function imapOpen(cfg) {
   let rd = reader(sock);
   await rd.line(); // saudação
   let n = 0;
-  const cmd = async (text) => {
+  // binary: o conteúdo dos literais vem byte a byte (latin1), para decodificar depois com o charset certo
+  const cmd = async (text, binary) => {
     const tag = 'a' + ++n;
     sock.write(tag + ' ' + text + '\r\n');
     const lines = [];
@@ -107,7 +108,7 @@ async function imapOpen(cfg) {
       // literal: o servidor avisa quantos bytes vêm a seguir
       const lit = /\{(\d+)\}$/.exec(line);
       // o conteudo do literal comeca numa linha nova (senao o 1o cabecalho gruda no prefixo do FETCH)
-      if (lit) { const body = await rd.bytes(Number(lit[1])); line = line.replace(/\{\d+\}$/, '') + '\r\n' + body; }
+      if (lit) { const body = await rd.bytes(Number(lit[1])); line = line.replace(/\{\d+\}$/, '') + '\r\n' + body.toString(binary ? 'latin1' : 'utf8'); }
       if (line.startsWith(tag + ' ')) {
         const rest = line.slice(tag.length + 1);
         if (/^OK/i.test(rest)) return lines;
@@ -145,36 +146,145 @@ function parseHeaders(text) {
   return out;
 }
 // decodifica =?UTF-8?B?...?= e =?UTF-8?Q?...?= nos cabeçalhos
-function decodeHeader(s) {
-  return String(s || '').replace(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g, (m, cs, enc, txt) => {
-    try {
-      if (/^b$/i.test(enc)) return Buffer.from(txt, 'base64').toString('utf8');
-      return Buffer.from(txt.replace(/_/g, ' ').replace(/=([0-9A-Fa-f]{2})/g, (x, h) => String.fromCharCode(parseInt(h, 16))), 'binary').toString('utf8');
-    } catch (e) { return m; }
-  }).replace(/\?=\s+=\?/g, '');
+function decodeBytes(buf, charset) {
+  let cs = String(charset || 'utf-8').trim().replace(/^"|"$/g, '').toLowerCase();
+  if (!cs || cs === 'us-ascii' || cs === 'ascii') cs = 'utf-8';
+  try { return new TextDecoder(cs).decode(buf); } catch (e) { return Buffer.from(buf).toString('latin1'); }
 }
-// Procura, na caixa de entrada, a mensagem MAIS RECENTE cujo assunto contém o texto
-async function findThread(cfg, needle, mailbox) {
+function decodeHeader(s) {
+  return String(s || '').replace(/(=\?[^?]+\?[BbQq]\?[^?]*\?=)\s+(?==\?)/g, '$1').replace(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g, (m, cs, enc, txt) => {
+    try {
+      const charset = cs.split('*')[0];
+      if (/^b$/i.test(enc)) return decodeBytes(Buffer.from(txt, 'base64'), charset);
+      return decodeBytes(Buffer.from(txt.replace(/_/g, ' ').replace(/=([0-9A-Fa-f]{2})/g, (x, h) => String.fromCharCode(parseInt(h, 16))), 'latin1'), charset);
+    } catch (e) { return m; }
+  });
+}
+
+// ---------- Corpo da mensagem (MIME), para citar a mensagem anterior na resposta ----------
+const paramOf = (v, name) => { const m = new RegExp('(?:^|;)\\s*' + name + '\\s*=\\s*("([^"]*)"|[^;\\s]+)', 'i').exec(v || ''); return m ? (m[2] !== undefined ? m[2] : m[1]) : ''; };
+function decodeBody(body, cte) {
+  const t = String(cte || '').trim().toLowerCase();
+  if (t === 'base64') return Buffer.from(body.replace(/[^A-Za-z0-9+/=]/g, ''), 'base64');
+  if (t === 'quoted-printable') return Buffer.from(body.replace(/=\r?\n/g, '').replace(/=([0-9A-Fa-f]{2})/g, (x, h) => String.fromCharCode(parseInt(h, 16))), 'latin1');
+  return Buffer.from(body, 'latin1');
+}
+// raw: mensagem inteira em latin1 (um caractere por byte) → { html, text } da parte de texto
+function parseMime(raw, out, depth) {
+  out = out || { html: '', text: '' };
+  if ((depth || 0) > 8) return out;
+  const sep = /\r?\n\r?\n/.exec(raw);
+  const head = sep ? raw.slice(0, sep.index) : raw, body = sep ? raw.slice(sep.index + sep[0].length) : '';
+  const h = parseHeaders(head);
+  const ct = h['content-type'] || 'text/plain';
+  const type = ct.split(';')[0].trim().toLowerCase();
+  if (/attachment/i.test(h['content-disposition'] || '')) return out;
+  if (type.startsWith('multipart/')) {
+    const b = paramOf(ct, 'boundary');
+    if (!b) return out;
+    const pieces = body.split('--' + b);
+    for (let i = 1; i < pieces.length; i++) {
+      const p = pieces[i];
+      if (p.startsWith('--')) break;
+      parseMime(p.replace(/^[ \t]*\r?\n/, '').replace(/\r?\n$/, ''), out, (depth || 0) + 1);
+    }
+    return out;
+  }
+  if (type !== 'text/html' && type !== 'text/plain') return out;
+  const txt = decodeBytes(decodeBody(body, h['content-transfer-encoding']), paramOf(ct, 'charset'));
+  if (type === 'text/html' && !out.html) out.html = txt;
+  if (type === 'text/plain' && !out.text) out.text = txt.replace(/\s+$/, '');
+  return out;
+}
+const escHtml = (s) => String(s || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// HTML seguro para ir citado: só o que está dentro do <body> (com os estilos do <head>), sem scripts nem imagens embutidas
+function quotableHtml(parts) {
+  let html = parts.html;
+  if (!html && parts.text) return '<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt">' + escHtml(parts.text).replace(/\r?\n/g, '<br>') + '</div>';
+  if (!html) return '';
+  const styles = (html.match(/<style[\s\S]*?<\/style>/gi) || []).join('');
+  const bm = /<body[^>]*>([\s\S]*?)(<\/body>|$)/i.exec(html);
+  html = bm ? bm[1] : html.replace(/<head[\s\S]*?<\/head>/i, '');
+  html = html.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<(iframe|object|embed|form)[\s\S]*?<\/\1>/gi, '')
+    .replace(/<img[^>]+src\s*=\s*["']?cid:[^>]*>/gi, '')
+    .replace(/\s+on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/(href|src)\s*=\s*(["'])\s*javascript:[^"']*\2/gi, '$1="#"');
+  return styles + html;
+}
+// "quarta-feira, 4 de novembro de 2026 16:15", no fuso de São Paulo
+function dataPt(d) {
+  try {
+    const dt = new Date(d);
+    if (isNaN(dt)) return String(d || '');
+    return new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(dt).replace(' às ', ' ');
+  } catch (e) { return String(d || ''); }
+}
+// bloco "mensagem original" no estilo do Outlook, para a resposta seguir a conversa
+function quoteBlock(th) {
+  if (!th || !th.body) return { html: '', text: '' };
+  const linha = (k, v) => (v ? `<b>${k}</b> ${escHtml(v)}<br>` : '');
+  const html = '<br><div style="border:none;border-top:solid #E1E1E1 1.0pt;padding:3.0pt 0cm 0cm 0cm"><p style="font-family:Calibri,Arial,sans-serif;font-size:11pt;margin:0 0 8px">' +
+    linha('De:', th.from) + linha('Enviada em:', dataPt(th.when || th.date)) + linha('Para:', th.to) + linha('Cc:', th.cc) + linha('Assunto:', th.subject) +
+    '</p></div>' + quotableHtml(th.body);
+  const t = th.body.text || String(th.body.html || '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<br\s*\/?>|<\/p>|<\/div>|<\/tr>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+  const text = '\n\n-----Mensagem original-----\n' + [['De', th.from], ['Enviada em', dataPt(th.when || th.date)], ['Para', th.to], ['Cc', th.cc], ['Assunto', th.subject]].filter((x) => x[1]).map((x) => x[0] + ': ' + x[1]).join('\n') + '\n\n' + t.trim();
+  return { html, text };
+}
+// INTERNALDATE do IMAP ("04-Nov-2026 16:15:00 -0300") → milissegundos
+function imapDate(s) { const t = Date.parse(String(s || '').replace(/^(\d{1,2})-(\w{3})-(\d{4})/, '$1 $2 $3')); return isNaN(t) ? 0 : t; }
+const addrOf = (s) => { const m = /<([^>]+)>/.exec(String(s || '')); return (m ? m[1] : String(s || '')).trim().toLowerCase(); };
+// Procura a mensagem MAIS RECENTE cujo assunto contém o texto, na caixa de entrada e nos Enviados
+// (a última da conversa pode ser uma resposta nossa). withBody: traz também o corpo, para citar na resposta.
+const HDRS = 'MESSAGE-ID REFERENCES IN-REPLY-TO SUBJECT FROM TO CC REPLY-TO DATE';
+const MAX_CITAR = 8 * 1024 * 1024;
+async function findThread(cfg, needle, mailbox, opts) {
+  opts = opts || {};
   const im = await imapOpen(cfg);
   try {
-    await im.cmd('SELECT ' + imapQuote(mailbox || 'INBOX'));
-    const res = await im.cmd('UID SEARCH HEADER SUBJECT ' + imapQuote(needle));
-    const line = res.find((l) => /^\* SEARCH/i.test(l)) || '';
-    const uids = line.replace(/^\* SEARCH/i, '').trim().split(/\s+/).filter((x) => /^\d+$/.test(x)).map(Number);
-    if (!uids.length) return null;
-    const uid = Math.max(...uids);
-    const fetched = await im.cmd(`UID FETCH ${uid} (BODY.PEEK[HEADER.FIELDS (MESSAGE-ID REFERENCES IN-REPLY-TO SUBJECT FROM TO CC REPLY-TO DATE)])`);
-    const h = parseHeaders(fetched.join('\r\n'));
-    return {
-      uid, total: uids.length,
+    const boxes = [mailbox || 'INBOX'];
+    if (!mailbox) { const sent = await sentMailbox(im); if (sent && sent.toUpperCase() !== 'INBOX') boxes.push(sent); }
+    let best = null, total = 0;
+    for (const box of boxes) {
+      try { await im.cmd('SELECT ' + imapQuote(box)); } catch (e) { continue; }
+      const res = await im.cmd('UID SEARCH HEADER SUBJECT ' + imapQuote(needle));
+      const line = res.find((l) => /^\* SEARCH/i.test(l)) || '';
+      const uids = line.replace(/^\* SEARCH/i, '').trim().split(/\s+/).filter((x) => /^\d+$/.test(x)).map(Number);
+      if (!uids.length) continue;
+      total += uids.length;
+      const uid = Math.max(...uids);
+      const raw = (await im.cmd(`UID FETCH ${uid} (INTERNALDATE RFC822.SIZE BODY.PEEK[HEADER.FIELDS (${HDRS})])`)).join('\r\n');
+      const h = parseHeaders(raw);
+      const di = /INTERNALDATE "([^"]+)"/i.exec(raw), sz = /RFC822\.SIZE (\d+)/i.exec(raw);
+      const when = (di && imapDate(di[1])) || Date.parse(h.date || '') || 0;
+      if (!best || when > best.when) best = { box, uid, when, size: sz ? Number(sz[1]) : 0, h };
+    }
+    if (!best) return null;
+    const h = best.h, from = decodeHeader(h['reply-to'] || h.from || '');
+    const me = [cfg.from, cfg.user].map(addrOf);
+    const out = {
+      uid: best.uid, total, box: best.box,
       subject: decodeHeader(h.subject || ''),
-      from: decodeHeader(h['reply-to'] || h.from || ''),
+      from,
       to: decodeHeader(h.to || ''),
       cc: decodeHeader(h.cc || ''),
       date: h.date || '',
+      when: best.when ? new Date(best.when).toISOString() : '',
       messageId: (h['message-id'] || '').trim(),
       references: (h.references || '').trim(),
+      fromMe: me.includes(addrOf(h.from || '')),
     };
+    if (opts.withBody && best.size <= MAX_CITAR) {
+      try {
+        await im.cmd('SELECT ' + imapQuote(best.box));
+        const lines = await im.cmd(`UID FETCH ${best.uid} (BODY.PEEK[])`, true);
+        const first = lines.find((l) => /FETCH/i.test(l) && l.includes('\r\n')) || '';
+        const raw = first.slice(first.indexOf('\r\n') + 2);
+        out.body = parseMime(raw);
+        const t = (out.body.text || String(out.body.html || '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ')).replace(/\s+/g, ' ').trim();
+        out.snippet = t.slice(0, 400);
+      } catch (e) { out.body = null; }
+    }
+    return out;
   } finally { im.close(); }
 }
 
@@ -255,7 +365,7 @@ const chunk76 = (s) => s.replace(/(.{76})/g, '$1\r\n');
 function buildMessage(cfg, msg) {
   const bound = '=_p' + Math.random().toString(36).slice(2) + Date.now().toString(36);
   const alt = '=_a' + Math.random().toString(36).slice(2);
-  const id = '<' + Date.now().toString(36) + '.' + Math.random().toString(36).slice(2) + '@' + (cfg.from.split('@')[1] || 'localhost') + '>';
+  const id = msg.messageId || '<' + Date.now().toString(36) + '.' + Math.random().toString(36).slice(2) + '@' + (cfg.from.split('@')[1] || 'localhost') + '>';
   const atts = msg.attachments || [];
   const head = [
     'From: ' + (cfg.fromName ? encWord(cfg.fromName) + ' ' : '') + '<' + cfg.from + '>',
@@ -315,7 +425,19 @@ async function sendApi(cfg, msg) {
   let j = {};
   try { j = JSON.parse(txt); } catch (e) { /* resposta sem json */ }
   if (!r.ok) throw new Error(j.message || j.error || ('o serviço de envio respondeu ' + r.status));
-  return { ok: true, messageId: j.id ? '<' + j.id + '@resend>' : '', rcpt: to.concat(cc), via: 'api' };
+  return { ok: true, id: j.id || '', messageId: j.id ? '<' + j.id + '@resend>' : '', rcpt: to.concat(cc), via: 'api' };
+}
+// Message-ID que o serviço de envio deu à mensagem: a cópia em Enviados usa o mesmo, para as respostas seguirem a conversa
+async function apiMessageId(cfg, id) {
+  if (!id) return null;
+  for (let i = 0; i < 3; i++) {
+    try {
+      const r = await fetch(cfg.apiUrl.replace(/\/+$/, '') + '/' + encodeURIComponent(id), { headers: { Authorization: 'Bearer ' + cfg.apiKey }, signal: AbortSignal.timeout(8000) });
+      if (r.ok) { const j = await r.json(); const m = j.message_id || j.messageId; if (m) return /^</.test(m) ? m : '<' + m + '>'; }
+    } catch (e) { /* tenta de novo */ }
+    await new Promise((res) => setTimeout(res, 700));
+  }
+  return null;
 }
 async function send(cfg, msg) {
   const modo = cfg.transport || (cfg.apiKey ? 'api' : 'smtp');
@@ -324,7 +446,11 @@ async function send(cfg, msg) {
     const r = await sendApi(cfg, msg);
     // cópia na pasta Enviados do webmail (se falhar, o e-mail já foi: só avisa no log)
     if (cfg.guardarEnviados) {
-      try { r.enviados = await saveToSent(cfg, buildMessage(cfg, msg).raw); }
+      try {
+        const mid = await apiMessageId(cfg, r.id);
+        if (mid) r.messageId = mid;
+        r.enviados = await saveToSent(cfg, buildMessage(cfg, Object.assign({}, msg, mid ? { messageId: mid } : {})).raw);
+      }
       catch (e) { console.error('[e-mail] enviado, mas não deu para guardar em Enviados:', e.message); }
     }
     return r;
@@ -362,4 +488,4 @@ async function diag(cfg, candidates) {
   return out;
 }
 
-module.exports = { config, configured, findThread, send, sendApi, sendSmtp, saveToSent, sentMailbox, diag, buildMessage, parseHeaders, decodeHeader, encAddress, addressesOf, imapQuote };
+module.exports = { config, configured, findThread, parseMime, quoteBlock, quotableHtml, send, sendApi, sendSmtp, saveToSent, sentMailbox, diag, buildMessage, parseHeaders, decodeHeader, encAddress, addressesOf, imapQuote };

@@ -8,9 +8,9 @@
   const doc = App.doc;
   const COLS = ['DATA', 'MODALIDADE', 'DI / DTA', 'CLIENTE', 'REFERENCIA', 'CONTAINER', 'TIPO', 'CAVALO', 'CARRETA', 'MOTORISTA', 'PESO',
     'TERMINAL COLETA', 'DATA / HORA - COLETA', 'ENTREGA - 1', 'ENTREGA - 2', 'CHEGADA NO TERMINAL', 'SAÍDA DO TERMINAL', 'CHEGADA NO CLIENTE',
-    'SAÍDA DO CLIENTE', 'STATUS', 'TERMINAL VAZIO', 'DATA / HORA - DEPOT'];
+    'SAÍDA DO CLIENTE', 'OBSERVAÇÃO', 'TERMINAL VAZIO', 'DATA / HORA - DEPOT'];
   const OPTIONAL = new Set(['ENTREGA - 2']); // só entra quando alguma linha tiver
-  const ALT = { 'ENTREGA - 1': ['ENTREGA'], 'DI / DTA': ['DI', 'DTA'], 'TERMINAL VAZIO': ['TERMINAL DE VAZIO'],
+  const ALT = { 'ENTREGA - 1': ['ENTREGA'], 'DI / DTA': ['DI', 'DTA'], 'TERMINAL VAZIO': ['TERMINAL DE VAZIO'], 'OBSERVAÇÃO': ['OBSERVACOES', 'OBS', 'OBS.'],
     'CHEGADA NO TERMINAL': ['CHEGADA NO TERMINAL / EADI'], 'SAÍDA DO TERMINAL': ['SAÍDA DO TERMINAL / EADI'] };
   const norm = (s) => (window.Perms && window.Perms.normName ? window.Perms.normName(s) : String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''));
 

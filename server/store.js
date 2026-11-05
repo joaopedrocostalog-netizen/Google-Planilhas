@@ -38,6 +38,7 @@ function memoryStore(file) {
     async createSession(hash, userId) { db.sessions[hash] = { user_id: userId, created_at: Date.now() }; persist(); },
     async getSession(hash) { return clone(db.sessions[hash]); },
     async deleteSession(hash) { delete db.sessions[hash]; persist(); },
+    async deleteUserSessions(userId) { let n = 0; for (const k of Object.keys(db.sessions)) if (db.sessions[k].user_id === userId) { delete db.sessions[k]; n++; } persist(); return n; },
     async listDocsFor(user) {
       return Object.values(db.docs)
         .filter((d) => d.owner_id === user.id || (d.acl.members || []).some((m) => m.email === user.email))
@@ -167,6 +168,7 @@ function pgStore(url) {
     async createSession(hash, userId) { await q('INSERT INTO sessions (token, user_id) VALUES ($1, $2)', [hash, userId]); },
     async getSession(hash) { const r = await row('SELECT user_id, extract(epoch from created_at) * 1000 AS created_at FROM sessions WHERE token = $1', [hash]); return r ? { user_id: r.user_id, created_at: Number(r.created_at) } : null; },
     async deleteSession(hash) { await q('DELETE FROM sessions WHERE token = $1', [hash]); },
+    async deleteUserSessions(userId) { const r = await q('DELETE FROM sessions WHERE user_id = $1', [userId]); return r.rowCount || 0; },
     async listDocsFor(user) {
       const r = await q(`SELECT id, title, owner_id, acl, updated_at FROM docs
         WHERE owner_id = $1 OR acl->'members' @> $2::jsonb ORDER BY updated_at DESC LIMIT 500`, [user.id, JSON.stringify([{ email: user.email }])]);

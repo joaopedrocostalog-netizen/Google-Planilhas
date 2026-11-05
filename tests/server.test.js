@@ -283,6 +283,29 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
     check('não-dono não exclui', (await api('DELETE', '/api/docs/' + doc.id, null, bia.token))._status, 403);
     check('dono exclui', (await api('DELETE', '/api/docs/' + doc.id, null, ana.token)).ok, true);
+
+    // sessões: o administrador desloga uma pessoa (ou todos) e ela cai na hora
+    const d2 = await api('POST', '/api/docs', { title: 'Sessões', data: { sheets: [{ id: 's1', name: 'P', rows: 10, cols: 5, cells: {} }] } }, ana.token);
+    await api('PUT', `/api/docs/${d2.id}/share`, { acl: { link: 'none', sectors: [], members: [{ email: 'bia@empresa.com', role: 'editor' }, { email: 'caio@empresa.com', role: 'editor' }] } }, ana.token);
+    const biaLogin = await api('POST', '/api/login', { email: 'bia@empresa.com', password: 'segredo2' });
+    const B2 = await connect(biaLogin.token, d2.id);
+    await B2.wait('init');
+    check('quem não é admin não vê as sessões', (await api('GET', `/api/docs/${d2.id}/sessions`, null, biaLogin.token))._status, 403);
+    const ses = await api('GET', `/api/docs/${d2.id}/sessions`, null, ana.token);
+    check('lista as pessoas da planilha', ses.map((x) => x.email).sort(), ['ana@empresa.com', 'bia@empresa.com', 'caio@empresa.com']);
+    check('mostra quem está na planilha', ses.find((x) => x.email === 'bia@empresa.com').online, 1);
+    const biaId = ses.find((x) => x.email === 'bia@empresa.com').id;
+    const lo = await api('POST', `/api/docs/${d2.id}/logout`, { users: [biaId] }, ana.token);
+    check('deslogou a Bia', lo.deslogados, ['Bia']);
+    const ev = await B2.wait('error');
+    check('Bia cai na hora', [ev.code, /encerrada pelo administrador/.test(ev.message)], ['auth', true]);
+    check('token da Bia não vale mais', (await api('GET', '/api/me', null, biaLogin.token))._status, 401);
+    const caioLogin = await api('POST', '/api/login', { email: 'caio@empresa.com', password: 'segredo3' });
+    const todos = await api('POST', `/api/docs/${d2.id}/logout`, { all: true }, ana.token);
+    check('deslogar todos não inclui quem pediu', [todos.deslogados.includes('Ana'), todos.deslogados.includes('Caio')], [false, true]);
+    check('Ana continua logada', (await api('GET', '/api/me', null, ana.token))._status, 200);
+    check('Caio deslogado', (await api('GET', '/api/me', null, caioLogin.token))._status, 401);
+    await api('DELETE', '/api/docs/' + d2.id, null, ana.token);
   } catch (e) {
     fail++;
     console.log('ERRO:', e.message, '\n', log.slice(-2000));
