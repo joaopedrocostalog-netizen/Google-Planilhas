@@ -169,12 +169,14 @@ const permDoc = (room) => ({ ownerId: room.ownerId, acl: room.acl, data: room.da
 // uma gravação por vez e sempre a versão mais nova. Ao sair o último usuário ou ao desligar, grava na hora.
 const SAVE_EVERY = 10000;
 function scheduleSave(room) {
+  if (room.temp) return; // sala do teste de carga: só na memória
   room.dirty = true;
   if (room.timer || room.saving) return;
   const wait = Math.max(2500, SAVE_EVERY - (Date.now() - (room.lastSave || 0)));
   room.timer = setTimeout(() => { room.timer = null; saveRoom(room); }, wait);
 }
 async function saveRoom(room) {
+  if (room.temp) return;
   if (room.saving) { room.again = true; return room.saving; }
   if (!room.dirty) return;
   clearTimeout(room.timer); room.timer = null;
@@ -329,7 +331,7 @@ async function onHello(c, msg) {
   const perms = Perms.compute(permDoc(room), user);
   if (!perms) { c.ws.send({ type: 'error', code: 'denied', message: 'Você não tem acesso a esta planilha. Peça acesso ao administrador.' }); return c.ws.close(4003, 'sem acesso'); }
   // limite de pessoas ao mesmo tempo (administradores sempre entram; quem já está dentro abre mais abas)
-  if (!perms.admin) {
+  if (!perms.admin && !room.temp) {
     const max = await limiteDe(room.id);
     const dentro = pessoasNaSala(room, true);
     if (max > 0 && !dentro.has(user.id) && dentro.size >= max) {
@@ -342,7 +344,8 @@ async function onHello(c, msg) {
   c.user = user; c.room = room; c.perms = perms; c.since = Date.now();
   room.clients.add(c);
   sendInit(c);
-  registrarEntrada(room, user).catch(() => {});
+  if (!room.temp) registrarEntrada(room, user).catch(() => {});
+  painel.entrou(room, c).catch(() => {});
   for (const o of room.clients) if (o !== c && seesPeer(o, c)) o.ws.send({ type: 'join', peer: peerInfo(c) });
 }
 // Valores alterados (para o histórico de edições). Inserções/exclusões de linhas e colunas não entram.
@@ -372,7 +375,8 @@ function onPatch(c, msg) {
   const clears = lookupClears(room, p);
   Patch.apply(room.data, p);
   room.version++;
-  if (hist.length) store.addHistory(room.id, Object.assign({}, c.user, { ip: c.ip }), hist).catch((e) => console.error('Falha ao gravar histórico', e.message));
+  painel.editou(room, hist.length).catch(() => {});
+  if (hist.length && !room.temp) store.addHistory(room.id, Object.assign({}, c.user, { ip: c.ip }), hist).catch((e) => console.error('Falha ao gravar histórico', e.message));
   const structural = !!(p.order || Object.values(p.sheets || {}).some((e) => e.created || e.removed));
   const accessChanged = Object.values(p.sheets || {}).some((e) => (e.props && 'access' in e.props) || (e.created && e.created.access));
   // quem teve as permissões por coluna alteradas recebe a planilha de novo (com as colunas certas)
@@ -415,6 +419,7 @@ function onLeave(c) {
   if (!room) return;
   room.clients.delete(c);
   broadcast(room, c, { type: 'leave', cid: c.cid });
+  painel.saiu(room, c).catch(() => {});
   if (!room.clients.size) {
     saveRoom(room).then(() => { if (!room.clients.size && !room.dirty) { clearTimeout(room.timer); rooms.delete(room.id); } });
   }
@@ -486,6 +491,8 @@ const route = (method, pattern, fn) => routes.push({ method, re: new RegExp('^' 
 
 // ao subir, testa a API carga_of_container uma vez e deixa o resultado no log (ajuda a achar URL ou login errados)
 setTimeout(() => { if (!process.env.CARGA_DIAG_OFF) cargaDiag().then((d) => console.log('[carga] diagnóstico:', JSON.stringify(Object.assign({}, d, { inicio: undefined })))).catch(() => {}); }, 4000);
+// Administrador › Métricas: gráficos e teste de carga (server/painel.js)
+const painel = require('./painel.js')({ store, rooms, route, requireUser, getRoom, httpError, readBody, Perms, permDoc, uid });
 route('GET', '/api/health', async () => ({ ok: true, store: store.kind, rooms: rooms.size, dss: !!(process.env.DSS_TOKEN || ((process.env.DSS_USUARIO || process.env.DSS_USERNAME) && (process.env.DSS_SENHA || process.env.DSS_PASSWORD))), dssMotoristas: drivers.items.length, dssErro: drivers.error || null }));
 route('POST', '/api/register', async (req) => {
   const b = await readBody(req, 100000);
@@ -1630,9 +1637,10 @@ function describeDbError(e) {
   for (let attempt = 1; ; attempt++) {
     try { await store.init(); await loadColors(); setTimeout(() => { loadDrivers().catch(() => {}); }, 3000); break; }
     catch (e) {
-      console.error(`Não foi possível iniciar o banco de dados (tentativa ${attempt}/6): ${describeDbError(e)}`);
-      if (attempt >= 6) process.exit(1);
-      await new Promise((r) => setTimeout(r, attempt * 3000));
+      // o banco gratuito às vezes demora a acordar: até 12 tentativas, esperando até 15 s entre elas
+      console.error(`Não foi possível iniciar o banco de dados (tentativa ${attempt}/12): ${describeDbError(e)}`);
+      if (attempt >= 12) process.exit(1);
+      await new Promise((r) => setTimeout(r, Math.min(15000, attempt * 3000)));
     }
   }
   server.listen(PORT, () => console.log(`Planilhas no ar na porta ${PORT} (armazenamento: ${store.kind})`));

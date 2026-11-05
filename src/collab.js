@@ -1353,7 +1353,7 @@
       { cmd: 'critColumn', arg: App.selRect().c1, t: 'Coluna do alerta de crítico', d: 'Coluna onde o alerta de container crítico pisca. Selecione a coluna antes de usar.', s: `Agora: coluna ${E.numToCol(App.critCol(sh))} · usar a coluna ${E.numToCol(App.selRect().c1)}` },
       { cmd: 'alertRules', t: 'Regras de alerta (ALERTA)', d: 'O que aparece no botão ALERTA do cabeçalho: regras prontas (crítico, ARM/DEM, escala…) ou condições nas colunas, por setor ou pessoa.', s: `${doc.sheets.reduce((n, x) => n + (x.alertRules || []).length, 0)} regra(s)` },
       { cmd: 'mailWho', t: 'Enviar status por e-mail: quem pode', d: 'Quem pode usar o botão "Enviar por e-mail" do Enviar status. O e-mail sai da conta configurada no servidor.', s: Array.isArray(sh.mailSectors) && sh.mailSectors.length ? `${sh.mailSectors.length} escolhido(s)` : 'Só administradores' },
-      { cmd: 'adminMetricas', t: 'Métricas da planilha e limite de usuários', d: 'Quem está conectado, movimento do dia e da semana, tamanho da planilha e quantas pessoas podem estar com ela aberta ao mesmo tempo.', s: 'Administradores não ocupam vaga' },
+      { cmd: 'adminMetricas', t: 'Métricas da planilha, gráficos e teste de pico', d: 'Quem está conectado, gráficos do dia (pessoas, sessões, edições, linhas com informação), limite de pessoas ao mesmo tempo e teste de pico de usuários.', s: 'Administradores não ocupam vaga' },
       { cmd: 'adminSessions', t: 'Sessões: deslogar usuários', d: 'Encerra o login de todas as pessoas ou só das escolhidas; quem estiver na planilha sai na hora.', s: `${cloud.peers ? new Set([...cloud.peers.values()].map((x) => x.uid)).size : 0} pessoa(s) conectada(s) agora` },
       { cmd: 'cargaLookup', t: 'Containers da Carga OF', d: 'Coluna do container e da data de entrada preenchida pela API Carga OF Container.', s: sh.carga ? `Container na coluna ${E.numToCol(sh.carga.col)} · data na ${E.numToCol(sh.carga.dataCol)}` : 'Desativado nesta página' },
       { cmd: 'dssLookup', t: 'Motoristas do DSS', d: 'Coluna do motorista e do CPF/CNPJ preenchidos com a lista do DSS.', s: sh.lookup ? `Motorista na coluna ${E.numToCol(sh.lookup.col)} · CPF na ${E.numToCol(sh.lookup.cpfCol)}` : 'Desativado nesta página' },
@@ -1419,131 +1419,7 @@
   }
   def('adminSessions', 'Sessões: deslogar usuários', adminSessions);
 
-  // ---------- Métricas da planilha e limite de usuários ----------
-  // Quem está conectado, o movimento do dia e da semana, o tamanho da planilha e o limite de pessoas ao mesmo tempo.
-  // A tela se atualiza sozinha a cada 15 s enquanto estiver aberta.
-  async function adminMetricas() {
-    if (!App.cloudMode || !cloud.id) return notify('Disponível nas planilhas da nuvem.');
-    if (!cloud.realPerms || !cloud.realPerms.admin) return notify('Somente administradores veem as métricas da planilha.');
-    let d;
-    try { d = await api('GET', `/api/docs/${cloud.id}/metricas`); } catch (e) { return notify(e.message); }
-    const docId = cloud.id;
-    let timer = null;
-    const m = App.ui.modal({
-      title: 'Métricas da planilha', width: '680px', cls: 'mt-modal', enterSubmits: false,
-      body: '<div class="mt-wrap"></div>',
-      buttons: [{ label: 'Fechar' }],
-      onClose: () => clearInterval(timer),
-    });
-    const wrap = m.el.querySelector('.mt-wrap');
-    const foot = m.el.querySelector('.modal-foot');
-    const bUp = document.createElement('button'); bUp.className = 'btn'; bUp.textContent = 'Atualizar';
-    foot.prepend(bUp);
-    const n = (x) => Number(x || 0).toLocaleString('pt-BR');
-    const hora = (iso) => iso ? new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—';
-    const ha = (iso) => { const min = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000)); return min < 1 ? 'agora' : min < 60 ? `há ${min} min` : `há ${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')}`; };
-    // uma linha por pessoa que esperou vaga (a lista mais recente primeiro), com a hora da última tentativa
-    const esperaram = (l) => {
-      const vistos = new Map();
-      for (const x of l || []) if (!vistos.has(x.email)) vistos.set(x.email, x);
-      return [...vistos.values()].slice(0, 3).map((x) => `<small>${esc(x.name)}, última às ${hora(x.at)}</small>`).join('');
-    };
-    const linhas = (rows) => `<dl class="mt-dl">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
-    function barra() {
-      const max = d.limite.max, oc = d.agora.naoAdmins;
-      if (!max) return `<div class="mt-seats free"><div class="mt-seats-num"><b>${n(oc)}</b> ${oc === 1 ? 'pessoa conectada' : 'pessoas conectadas'}</div><p class="sp-hint">Sem limite: qualquer pessoa com acesso entra.</p></div>`;
-      const cheio = oc >= max;
-      const seg = max <= 40
-        ? `<div class="mt-segs" style="--n:${max}">${Array.from({ length: max }, (_, i) => `<i class="${i < oc ? 'on' : ''}"></i>`).join('')}</div>`
-        : `<div class="mt-bar"><i style="width:${Math.min(100, (oc / max) * 100)}%"></i></div>`;
-      return `<div class="mt-seats${cheio ? ' full' : ''}"><div class="mt-seats-num"><b>${n(oc)}</b> de ${n(max)} ${max === 1 ? 'vaga ocupada' : 'vagas ocupadas'}</div>${seg}
-        <p class="sp-hint">${cheio ? 'Limite atingido: quem tentar entrar agora vê um aviso para tentar de novo mais tarde.' : `${n(max - oc)} ${max - oc === 1 ? 'vaga livre' : 'vagas livres'}.`}</p></div>`;
-    }
-    function draw() {
-      const A = d.agora, H = d.hoje, S = d.semana, P = d.planilha, V = d.servidor;
-      const quem = A.lista.map((x) => `<tr><td><b>${esc(x.name)}</b>${x.admin ? ' <span class="mt-tag">admin</span>' : ''}<small>${esc(x.setor || x.email)}</small></td>
-        <td>${esc(x.pagina || '—')}</td><td class="num">${x.abas}</td><td>${ha(x.desde)}</td></tr>`).join('');
-      const top = (t) => t && t.length ? t.slice(0, 3).map((x) => `<span class="mt-nm">${esc(x.name)} (${n(x.n)})</span>`).join('') : '—';
-      wrap.innerHTML = `
-        <section class="mt-sec mt-lim">
-          <h3>Limite de pessoas ao mesmo tempo</h3>
-          ${barra()}
-          <div class="mt-set"><label for="mt-max">Limite</label><input class="input" id="mt-max" type="number" min="0" max="1000" step="1" value="${d.limite.max || 0}"><button class="btn btn-primary" id="mt-save">Salvar limite</button></div>
-          <p class="sp-hint">0 = sem limite. Administradores não ocupam vaga e sempre entram. A mesma pessoa em várias abas conta uma vez. Baixar o limite não desconecta ninguém: só quem chegar depois espera vaga.</p>
-        </section>
-        <section class="mt-sec">
-          <h3>Conectados agora <span>${n(A.pessoas)} ${A.pessoas === 1 ? 'pessoa' : 'pessoas'}, ${n(A.abas)} ${A.abas === 1 ? 'aba' : 'abas'}</span></h3>
-          <div class="mt-table-wrap"><table class="mt-table"><thead><tr><th>Pessoa</th><th>Página</th><th class="num">Abas</th><th>Entrou</th></tr></thead><tbody>${quem || '<tr><td colspan="4" class="sp-hint">Ninguém conectado.</td></tr>'}</tbody></table></div>
-        </section>
-        <div class="mt-cols">
-          <section class="mt-sec">
-            <h3>Hoje</h3>
-            ${linhas([
-              ['Pico ao mesmo tempo', H.pico ? `${n(H.pico)} às ${hora(H.picoEm)}` : '—'],
-              ['Pessoas que entraram', n(H.acessos)],
-              ['Esperaram vaga', H.bloqueados ? `${n(H.bloqueados)} ${H.bloqueados === 1 ? 'tentativa' : 'tentativas'}${esperaram(H.ultimosBloqueados)}` : '0'],
-              ['Células editadas', d.erroEdicoes ? esc(d.erroEdicoes) : `${n(H.edicoes)} por ${n(H.editores)} ${H.editores === 1 ? 'pessoa' : 'pessoas'}`],
-              ['Quem mais editou', top(H.top)],
-            ])}
-          </section>
-          <section class="mt-sec">
-            <h3>Últimos 7 dias</h3>
-            ${linhas([
-              ['Células editadas', d.erroEdicoes ? '—' : n(S.edicoes)],
-              ['Pessoas que editaram', n(S.editores)],
-              ['Quem mais editou', top(S.top)],
-            ])}
-          </section>
-        </div>
-        <div class="mt-cols">
-          <section class="mt-sec">
-            <h3>Planilha</h3>
-            ${linhas([
-              ['Células preenchidas', n(P.celulas)],
-              ['Tamanho', P.tamanhoKB >= 1024 ? `${(P.tamanhoKB / 1024).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} MB` : `${n(P.tamanhoKB)} KB`],
-              ['Pessoas com acesso', `${n(P.membros)}${P.setores ? ` em ${n(P.setores)} ${P.setores === 1 ? 'setor' : 'setores'}` : ''}`],
-              ['Última gravação', P.salvoEm ? `${hora(P.salvoEm)}${P.aSalvar ? ' (gravando alterações)' : ''}` : (P.aSalvar ? 'gravando alterações' : 'sem alterações desde que abriu')],
-              ['Alterações recebidas', n(P.versao)],
-            ])}
-            <details class="mt-pages"><summary>Células por página (${P.paginas.length})</summary>${linhas(P.paginas.map((x) => [x.name + (x.hidden ? ' (oculta)' : ''), n(x.celulas)]))}</details>
-          </section>
-          <section class="mt-sec">
-            <h3>Servidor</h3>
-            ${linhas([
-              ['Ligado há', V.ligadoHaMin >= 60 ? `${Math.floor(V.ligadoHaMin / 60)} h ${V.ligadoHaMin % 60} min` : `${n(V.ligadoHaMin)} min`],
-              ['Memória em uso', `${n(V.memoriaMB)} MB`],
-              ['Planilhas abertas', n(V.salas)],
-              ['Conexões no total', n(V.conexoes)],
-            ])}
-          </section>
-        </div>
-        <p class="sp-hint mt-upd">Atualizado às ${new Date().toLocaleTimeString('pt-BR')}. A tela se atualiza sozinha a cada 15 segundos.</p>`;
-      const inp = wrap.querySelector('#mt-max');
-      inp.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); salvar(); } };
-      wrap.querySelector('#mt-save').onclick = salvar;
-    }
-    async function recarregar() {
-      if (!document.body.contains(m.el) || cloud.id !== docId) { clearInterval(timer); return; }
-      // não redesenha enquanto o administrador digita o limite
-      const ativo = document.activeElement && document.activeElement.id === 'mt-max';
-      try { d = await api('GET', `/api/docs/${docId}/metricas`); if (!ativo) draw(); } catch (e) { /* tenta na próxima */ }
-    }
-    async function salvar() {
-      const inp = wrap.querySelector('#mt-max');
-      const max = Math.floor(Number(inp.value));
-      if (!Number.isFinite(max) || max < 0 || max > 1000) { notify('Use um número de 0 (sem limite) a 1000.'); inp.focus(); return; }
-      try {
-        await api('PUT', `/api/docs/${docId}/limite`, { max });
-        notify(max ? `Limite salvo: ${max} ${max === 1 ? 'pessoa' : 'pessoas'} ao mesmo tempo.` : 'Limite removido: sem limite de pessoas.');
-        inp.blur();
-        d = await api('GET', `/api/docs/${docId}/metricas`); draw();
-      } catch (e) { notify(e.message); }
-    }
-    bUp.onclick = () => { if (document.activeElement) document.activeElement.blur(); recarregar(); };
-    draw();
-    timer = setInterval(recarregar, 15000);
-  }
-  def('adminMetricas', 'Métricas da planilha e limite de usuários', adminMetricas);
+  // Administrador › Métricas da planilha (abas Agora, Gráficos e Teste de pico): ver src/painel.js
 
   def('openCloud', 'Planilhas na nuvem', openCloudDialog);
   def('saveToCloud', 'Salvar na nuvem', () => saveToCloud(false));
