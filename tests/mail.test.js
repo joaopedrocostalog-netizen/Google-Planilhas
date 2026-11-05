@@ -38,13 +38,22 @@ const CORPO = [
   '',
 ].join('\r\n');
 
+const appendInfo = {};
 const imap = tls.createServer(opts, (s) => {
   s.write('* OK IMAP falso pronto\r\n');
-  let buf = '';
+  let buf = '', appendBytes = 0, appendTag = '';
   s.on('data', (d) => {
     buf += d;
     let i;
     while ((i = buf.indexOf('\r\n')) >= 0) {
+      if (appendBytes) {
+        if (Buffer.byteLength(buf) < appendBytes) return;
+        appendInfo.raw = buf.slice(0, appendBytes);
+        buf = buf.slice(appendBytes).replace(/^\r\n/, '');
+        appendBytes = 0;
+        s.write(`${appendTag} OK guardado\r\n`);
+        continue;
+      }
       const line = buf.slice(0, i); buf = buf.slice(i + 2);
       imapLog.push(line);
       const [tag, cmd] = [line.split(' ')[0], line.slice(line.indexOf(' ') + 1)];
@@ -52,6 +61,8 @@ const imap = tls.createServer(opts, (s) => {
       else if (/^SELECT/i.test(cmd)) s.write(`* 42 EXISTS\r\n${tag} OK selecionada\r\n`);
       else if (/^UID SEARCH/i.test(cmd)) s.write(`* SEARCH 7 19 11\r\n${tag} OK busca\r\n`);
       else if (/^UID FETCH/i.test(cmd)) s.write(`* 5 FETCH (UID 19 BODY[HEADER.FIELDS (...)] {${Buffer.byteLength(CORPO)}}\r\n${CORPO})\r\n${tag} OK buscado\r\n`);
+      else if (/^LIST/i.test(cmd)) s.write(`* LIST (\\HasNoChildren) "." INBOX\r\n* LIST (\\HasNoChildren \\Sent) "." INBOX.Enviados\r\n${tag} OK listado\r\n`);
+      else if (/^APPEND/i.test(cmd)) { appendInfo.box = /APPEND "([^"]+)"/.exec(cmd)[1]; appendBytes = Number(/\{(\d+)\}/.exec(cmd)[1]); s.write('+ manda\r\n'); appendTag = tag; }
       else s.write(`${tag} OK\r\n`);
     }
   });
@@ -138,6 +149,88 @@ const smtp = tls.createServer(opts, (s) => {
   smtpData = '';
   await mail.send(cfg, { to: 'a@b.com', subject: 'x', text: '.importante\nfim', html: '<p>.x</p>' });
   check('ponto no início protegido', smtpData.includes('\r\n..'), false); // o conteúdo vai em base64, sem pontos soltos
+
+  // ---------- envio por HTTPS (API) com cópia em Enviados ----------
+  const http = require('http');
+  let apiReq = null;
+  const apiSrv = http.createServer((rq, rs) => {
+    let body = '';
+    rq.on('data', (d) => { body += d; });
+    rq.on('end', () => {
+      apiReq = { auth: rq.headers.authorization, body: JSON.parse(body) };
+      rs.writeHead(200, { 'Content-Type': 'application/json' });
+      rs.end(JSON.stringify({ id: 'abc-123' }));
+    });
+  });
+  await new Promise((r) => apiSrv.listen(9087, '127.0.0.1', r));
+  process.env.MAIL_API_URL = 'http://127.0.0.1:9087/emails';
+  process.env.RESEND_API_KEY = 'chave-de-teste';
+  const cfgApi = mail.config();
+  check('escolhe a API quando há chave', cfgApi.apiKey, 'chave-de-teste');
+
+  const ra = await mail.send(cfgApi, {
+    to: '"Riquelme" <riquelme@costalog.com.br>', cc: 'importacao@costalog.com.br',
+    subject: 'Re: STATUS - REFERÊNCIA: HW 181/25', text: 'Segue.', html: '<table><tr><td>HW 181/25</td></tr></table>',
+    inReplyTo: '<abc123@cliente.com>', references: '<ref1@x> <abc123@cliente.com>',
+    attachments: [{ name: 'cte.pdf', type: 'application/pdf', data: Buffer.from('pdf').toString('base64') }],
+  });
+  check('enviou pela API', ra.via, 'api');
+  check('usou a chave', apiReq.auth, 'Bearer chave-de-teste');
+  check('remetente com nome', apiReq.body.from, '"Status Costalog" <status@costalog.com.br>');
+  check('destinatários da API', [apiReq.body.to, apiReq.body.cc], [['riquelme@costalog.com.br'], ['importacao@costalog.com.br']]);
+  check('encadeamento pela API', apiReq.body.headers, { 'In-Reply-To': '<abc123@cliente.com>', References: '<ref1@x> <abc123@cliente.com>' });
+  check('anexo pela API', apiReq.body.attachments[0].filename, 'cte.pdf');
+  check('achou a pasta de enviados', ra.enviados, 'INBOX.Enviados');
+  check('cópia guardada tem o assunto', mail.decodeHeader(/Subject: (.*)/.exec(appendInfo.raw)[1]), 'Re: STATUS - REFERÊNCIA: HW 181/25');
+  check('cópia guardada tem a tabela', appendInfo.raw.includes(Buffer.from('<table><tr><td>HW 181/25</td></tr></table>').toString('base64')), true);
+
+  // erro da API vira mensagem legível
+  apiSrv.close();
+  await new Promise((r) => setTimeout(r, 50));
+  const errSrv = http.createServer((rq, rs) => { rs.writeHead(403, { 'Content-Type': 'application/json' }); rs.end(JSON.stringify({ message: 'domínio não verificado' })); });
+  await new Promise((r) => errSrv.listen(9088, '127.0.0.1', r));
+  process.env.MAIL_API_URL = 'http://127.0.0.1:9088/emails';
+  let erro = '';
+  try { await mail.send(mail.config(), { to: 'a@b.com', subject: 'x', html: '<p>x</p>' }); } catch (e) { erro = e.message; }
+  check('erro da API explicado', erro, 'domínio não verificado');
+  errSrv.close();
+  delete process.env.RESEND_API_KEY;
+  delete process.env.MAIL_API_URL;
+
+  // ---------- certificado do provedor (*.m9.network) acessado por outro nome, com verificação ligada ----------
+  {
+    const KEY2 = path.join(CERT, 'k2.pem'), CRT2 = path.join(CERT, 'c2.pem');
+    execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-keyout', KEY2, '-out', CRT2, '-days', '1', '-nodes',
+      '-subj', '/CN=m9.network', '-addext', 'subjectAltName=DNS:*.m9.network,DNS:m9.network'], { stdio: 'ignore' });
+    const prov = tls.createServer({ key: fs.readFileSync(KEY2), cert: fs.readFileSync(CRT2) }, (sk) => {
+      sk.write('* OK Supramail5 IMAP Proxy Ready\r\n');
+      let b = '';
+      sk.on('data', (d) => {
+        b += d; let i;
+        while ((i = b.indexOf('\r\n')) >= 0) {
+          const line = b.slice(0, i); b = b.slice(i + 2);
+          const tag = line.split(' ')[0];
+          if (/ UID SEARCH/i.test(line)) sk.write(`* SEARCH\r\n${tag} OK\r\n`); else sk.write(`${tag} OK\r\n`);
+        }
+      });
+    });
+    await new Promise((r) => prov.listen(9995, '127.0.0.1', r));
+    // processo à parte: só ele confia no certificado de teste (NODE_EXTRA_CA_CERTS), como um certificado real
+    const tenta = (tlsName) => new Promise((resolve) => {
+      const env = Object.assign({}, process.env, { NODE_EXTRA_CA_CERTS: CRT2, MAIL_IMAP_HOST: '127.0.0.1', MAIL_IMAP_PORT: '9995',
+        MAIL_IMAP_SECURE: '1', MAIL_TLS_STRICT: '1', MAIL_USER: 'u', MAIL_PASS: 'p', MAIL_TLS_NAME: tlsName || '' });
+      const code = `const m=require(${JSON.stringify(path.join(__dirname, '..', 'server', 'mail.js'))});m.findThread(m.config(),'X').then(r=>console.log(JSON.stringify({ok:true,r})),e=>console.log(JSON.stringify({ok:false,e:e.message})))`;
+      const { execFile } = require('child_process');
+      execFile(process.execPath, ['-e', code], { env, timeout: 15000 }, (err, out) => { try { resolve(JSON.parse(String(out).trim().split('\n').pop())); } catch (e) { resolve({ ok: false, e: String(err || out) }); } });
+    });
+    const semNome = await tenta('');
+    check('sem MAIL_TLS_NAME recusa o certificado do provedor', semNome.ok === false && /altnames/.test(semNome.e), true);
+    const comNome = await tenta('m9.network');
+    check('com MAIL_TLS_NAME aceita, mantendo a verificação', comNome.ok, true);
+    const nomeErrado = await tenta('outro-provedor.com');
+    check('nome errado continua recusando', nomeErrado.ok === false && /altnames|does not match/i.test(nomeErrado.e), true);
+    prov.close();
+  }
 
   // ---------- diagnóstico ----------
   const d = await mail.diag(cfg, [

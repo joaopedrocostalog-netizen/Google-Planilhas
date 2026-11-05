@@ -806,6 +806,8 @@ route('GET', '/api/docs/:id/mail', async (req, p) => {
     podeEnviar: canSendMail(perms, sheet),
     remetente: mail.configured() ? cfg.from : null,
     quem: (sheet && sheet.mailSectors) || null,
+    // por onde sai o envio: 'api' (HTTPS) quando há chave, senão 'smtp' (sem revelar a chave)
+    envio: cfg.transport || (cfg.apiKey ? 'api' : 'smtp'),
   };
 });
 // procura a conversa pelo assunto (a REFERENCIA) e devolve a mensagem mais recente
@@ -874,6 +876,9 @@ route('GET', '/api/mail/diag', async (req) => {
     alvos.push({ nome: 'IMAP STARTTLS', host: h, port: 143, secure: false });
     alvos.push({ nome: 'SMTP TLS', host: h, port: 465, secure: true });
     alvos.push({ nome: 'SMTP STARTTLS', host: h, port: 587, secure: false });
+    // portas alternativas: alguns provedores oferecem a 2525 quando a 465/587 está bloqueada na saída
+    alvos.push({ nome: 'SMTP alt', host: h, port: 2525, secure: false });
+    alvos.push({ nome: 'SMTP 25', host: h, port: 25, secure: false });
   }
   if (!alvos.length) return { erro: 'Nenhum host para testar. Passe ?hosts=a.com,b.com' };
   return { configurado: mail.configured(), testes: await mail.diag(cfg, alvos) };

@@ -4,6 +4,11 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '04/11/2026', title: 'Envio de e-mail por HTTPS (a hospedagem bloqueia SMTP)', items: [
+      ['Enviar por e-mail', 'O servidor onde a planilha roda (Render) bloqueia as portas de SMTP, então o envio passa a sair por HTTPS, pelo serviço de envio configurado. A busca da conversa continua por IMAP, que funciona normalmente.'],
+      ['Enviar por e-mail', 'A resposta continua caindo dentro da mesma conversa do cliente (mantém In-Reply-To e References), com a tabela, os anexos e o remetente de sempre.'],
+      ['Enviados', 'Uma cópia da mensagem enviada é guardada na pasta Enviados do webmail, para o histórico ficar completo para quem olha pelo Supramail.'],
+    ] },
     { date: '04/11/2026', title: 'Enviar status por e-mail, direto da planilha', items: [
       ['Enviar status', 'Botão "✉ Enviar por e-mail" em cada referência. A planilha procura no e-mail a conversa com aquela REFERENCIA no assunto, monta o responder a todos com a tabela no corpo e envia.'],
       ['Enviar status', 'Antes de enviar aparece uma tela com a conversa encontrada, o assunto, o Para e a Cópia (todos editáveis), a mensagem de abertura e a prévia da tabela. Nada sai sem você confirmar.'],

@@ -6,15 +6,16 @@
   const notify = (m) => App.emit('notify', m);
   const icon = (n, s) => App.icon(n, s);
   const api = (...a) => App.collab.api(...a);
-  const cloud = App.cloud;
+  // App.cloud é criado pelo collab.js, que carrega depois deste arquivo: ler sempre na hora
+  const cloud = () => App.cloud || {};
 
   let info = null, infoFor = null;
   // o servidor diz se o e-mail está configurado e se esta pessoa pode enviar nesta página
   App.mailInfo = async (sh) => {
-    if (!App.cloudMode || !cloud.id) return { configurado: false, podeEnviar: false };
-    const key = cloud.id + '|' + sh.id;
+    if (!App.cloudMode || !cloud().id) return { configurado: false, podeEnviar: false };
+    const key = cloud().id + '|' + sh.id;
     if (infoFor === key && info) return info;
-    try { info = await api('GET', `/api/docs/${cloud.id}/mail?sheet=${encodeURIComponent(sh.id)}`); infoFor = key; }
+    try { info = await api('GET', `/api/docs/${cloud().id}/mail?sheet=${encodeURIComponent(sh.id)}`); infoFor = key; }
     catch (e) { info = { configurado: false, podeEnviar: false, erro: e.message }; infoFor = key; }
     return info;
   };
@@ -45,7 +46,7 @@
     const d = m.el, q = (x) => d.querySelector(x);
     let achado = null;
 
-    try { achado = await api('POST', `/api/docs/${cloud.id}/mail/find`, { sheet: sh.id, ref: grupo.ref }); }
+    try { achado = await api('POST', `/api/docs/${cloud().id}/mail/find`, { sheet: sh.id, ref: grupo.ref }); }
     catch (e) { q('#ms-step').className = 'ms-step err'; q('#ms-step').textContent = e.message; return; }
     if (!d.isConnected) return;
 
@@ -101,7 +102,7 @@ Segue o status atualizado:</textarea></label>
       const introHtml = intro ? intro.split('\n').map((l) => `<p>${esc(l)}</p>`).join('') : '';
       btn.disabled = true; btn.textContent = 'Enviando…';
       try {
-        const r = await api('POST', `/api/docs/${cloud.id}/mail/send`, {
+        const r = await api('POST', `/api/docs/${cloud().id}/mail/send`, {
           sheet: sh.id, subject: q('#ms-sub').value.trim(), to, cc: q('#ms-cc').value.trim(),
           html: introHtml + grupo.html, text: (intro ? intro + '\n\n' : '') + grupo.tsv,
           inReplyTo: th ? th.messageId : null,
