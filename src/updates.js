@@ -4,6 +4,14 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '05/11/2026', title: 'E-mail com assinatura, busca livre do assunto e marcas SC / SPOT', items: [
+      ['Enviar por e-mail', 'Campo para procurar a conversa pela REFERENCIA ou por qualquer texto do assunto (botão para voltar à referência).'],
+      ['Assinatura', 'A assinatura em imagem configurada no webmail vai em todo envio, logo abaixo da tabela. As assinaturas das mensagens anteriores continuam no histórico citado.'],
+      ['Tela de envio', 'Situação da busca ao lado do título, "Última mensagem da conversa" mostrada como no e-mail, mensagem antes da tabela maior, anexos com arrastar e soltar e limite de 15 MB somados.'],
+      ['Remetente', 'O nome que aparece para quem recebe passa a ser "Follow-up | Costalog".'],
+      ['Validação de dados', 'A lista com todas as regras fica em ordem de coluna (C, depois D, depois F…) e mostra o nome da coluna.'],
+      ['MODALIDADE', 'Botão direito na coluna MODALIDADE: "Operação sem custos (SC)" e "Operação FRETE SPOT". A marca aparece pequena, em vermelho, no canto esquerdo da célula.'],
+    ] },
     { date: '05/11/2026', title: 'Rodotrem, letreiro de alertas, impressão de documentos e sessões', items: [
       ['Rodotrem', 'Confirmar escala (também na escala manual) reconhece o rodotrem e confirma as duas linhas com a mesma placa, mesmo selecionando só uma. Ao escalar um rodotrem, as 2 linhas ficam marcadas como par.'],
       ['Pedido de troca', 'Ao pedir a troca, CAVALO, CARRETA, MOTORISTA, CPF e CONTATO piscam em azul (antes só as 3 primeiras).'],

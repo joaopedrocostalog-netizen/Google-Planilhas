@@ -279,7 +279,10 @@
     };
     const render = (body) => {
       if (editing) return renderRule(body);
-      body.innerHTML = `<div class="cf-list">${sh.dv.map((d) => `<div class="cf-item" data-id="${d.id}"><span class="cf-chip">${icon(d.type === 'checkbox' ? 'checkbox' : 'dropdown', 16)}</span><div><b>${esc((DV_TYPES.find((t) => t[0] === d.type) || [, ''])[1])}</b><small>${esc(App.rangeText(d.range))}</small></div><button class="icon-btn cf-del" title="Excluir regra">${icon('close', 16)}</button></div>`).join('') || '<p class="sp-hint">Nenhuma regra de validação nesta página.</p>'}</div>
+      // em ordem de coluna (C, depois D, depois F…) e, na mesma coluna, de linha
+      const ordered = sh.dv.slice().sort((x, y) => (x.range.c1 - y.range.c1) || (x.range.r1 - y.range.r1) || (x.range.c2 - y.range.c2));
+      const colLbl = (d) => 'Coluna ' + (App.colLabelOf ? App.colLabelOf(sh, d.range.c1) : App.E.numToCol(d.range.c1)) + (d.range.c2 > d.range.c1 ? ' até ' + App.E.numToCol(d.range.c2) : '');
+      body.innerHTML = `<div class="cf-list">${ordered.map((d) => `<div class="cf-item" data-id="${d.id}"><span class="cf-chip">${icon(d.type === 'checkbox' ? 'checkbox' : 'dropdown', 16)}</span><div><b>${esc(colLbl(d))} — ${esc((DV_TYPES.find((t) => t[0] === d.type) || [, ''])[1])}</b><small>${esc(App.rangeText(d.range))}</small></div><button class="icon-btn cf-del" title="Excluir regra">${icon('close', 16)}</button></div>`).join('') || '<p class="sp-hint">Nenhuma regra de validação nesta página.</p>'}</div>
         <button class="btn sp-add">${icon('plus', 16)} Adicionar regra</button>
         <div class="sp-foot"><button class="btn btn-primary sp-done">Concluído</button></div>`;
       body.querySelector('.sp-add').onclick = () => { editing = newRule(); sh.dv.push(editing); preview(); render(body); };

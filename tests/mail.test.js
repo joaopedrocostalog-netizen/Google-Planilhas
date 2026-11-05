@@ -39,11 +39,13 @@ const CORPO = [
 ].join('\r\n');
 
 // corpo completo (para citar na resposta): HTML em iso-8859-1, quoted-printable, com script e imagem embutida
-const HTML_QP = '<html><head><style>p.x{color:red}</style></head><body><p class=3D"x">Boa tarde, segue a programa=E7=E3o.</p><img src=3D"cid:logo@x"><script>alert(1)</script><p onclick=3D"x()">Importa=E7=E3o</p></body></html>';
+const HTML_QP = '<html><head><style>p.x{color:red}</style></head><body><p class=3D"x">Boa tarde, segue a programa=E7=E3o.</p><img src=3D"cid:logo@x"><script>alert(1)</script><p onclick=3D"x()">Importa=E7=E3o</p><img src=3D"cid:assin@x" width=3D"300"></body></html>';
+const PNG1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 const COMPLETO = CORPO.replace(/\r\n$/, '') + [
   '', 'MIME-Version: 1.0', 'Content-Type: multipart/mixed; boundary="mix"', '', '--mix', 'Content-Type: multipart/alternative; boundary="alt"', '',
   '--alt', 'Content-Type: text/plain; charset=iso-8859-1', 'Content-Transfer-Encoding: quoted-printable', '', 'Boa tarde, segue a programa=E7=E3o.', '',
   '--alt', 'Content-Type: text/html; charset="iso-8859-1"', 'Content-Transfer-Encoding: quoted-printable', '', HTML_QP, '', '--alt--', '',
+  '--mix', 'Content-Type: image/png; name="assinatura.png"', 'Content-ID: <assin@x>', 'Content-Disposition: inline; filename="assinatura.png"', 'Content-Transfer-Encoding: base64', '', PNG1, '',
   '--mix', 'Content-Type: application/pdf; name="a.pdf"', 'Content-Disposition: attachment; filename="a.pdf"', 'Content-Transfer-Encoding: base64', '', 'JVBERg==', '', '--mix--', '',
 ].join('\r\n').replace(/^\r\n/, '\r\n');
 // resposta nossa, na pasta de enviados (mais nova que a da caixa de entrada)
@@ -52,6 +54,7 @@ const NOSSA = [
   'From: "Costalog - Status" <status@costalog.com.br>', 'To: "Riquelme Moura" <riquelme@costalog.com.br>', 'Cc: gerencia@costalog.com.br, status@costalog.com.br', 'Date: Thu, 05 Nov 2026 08:14:00 -0300', '',
 ].join('\r\n');
 const fakeImap = { sentUids: '' };
+const imapLogHas = (t) => imapLog.some((l) => l.includes(t));
 const appendInfo = {};
 const imap = tls.createServer(opts, (s) => {
   s.write('* OK IMAP falso pronto\r\n');
@@ -145,9 +148,13 @@ const smtp = tls.createServer(opts, (s) => {
   const qb = mail.quoteBlock(tb);
   check('citação com cabeçalho do Outlook', /<b>De:<\/b> &quot;Riquelme Moura&quot;/.test(qb.html) && qb.html.includes('<b>Assunto:</b> STATUS - REFERÊNCIA: HW 181/25'), true);
   check('citação mantém o conteúdo', qb.html.includes('Importação') && qb.html.includes('p.x{color:red}'), true);
-  check('citação sem script, cid nem onclick', /<script|cid:|onclick/i.test(qb.html), false);
+  check('citação sem script, imagem perdida nem onclick', /<script|cid:logo@x|onclick/i.test(qb.html), false);
   check('citação em texto', qb.text.includes('-----Mensagem original-----') && qb.text.includes('Boa tarde, segue a programação.'), true);
   check('anexo da anterior não entra', /JVBERg/.test(qb.html + qb.text), false);
+  check('assinatura da mensagem anterior continua (imagem embutida)', [qb.html.includes('cid:assin@x'), qb.images.map((x) => [x.cid, x.type, x.data])], [true, [['assin@x', 'image/png', PNG1]]]);
+  check('prévia mostra a imagem', mail.previewHtml(tb.body).includes('data:image/png;base64,' + PNG1), true);
+  const sp = mail.splitInlineImages('<p>Att.</p><img src="data:image/jpeg;base64,QUJD" width="743">', 'assinatura');
+  check('assinatura com data: vira cid', [sp.html, sp.images.map((x) => [x.cid, x.type, x.data])], ['<p>Att.</p><img src="cid:assinatura-1@costalog" width="743">', [['assinatura-1@costalog', 'image/jpeg', 'QUJD']]]);
 
   // nossa resposta nos enviados é a mais nova: a conversa continua a partir dela
   fakeImap.sentUids = '21';
@@ -168,6 +175,11 @@ const smtp = tls.createServer(opts, (s) => {
     attachments: [{ name: 'CTE 123.pdf', type: 'application/pdf', data: Buffer.from('arquivo de teste').toString('base64') }],
   });
   check('enviou', r.ok, true);
+  const salvoSmtp = smtpData, salvoLog = smtpLog.length;
+  smtpData = '';
+  await mail.send(cfg, { to: 'a@b.com', subject: 'com assinatura', html: '<p>x</p><img src="cid:assinatura-1@costalog">', text: 'x', inline: [{ cid: 'assinatura-1@costalog', type: 'image/png', name: 'assinatura.png', data: PNG1 }] });
+  check('SMTP: imagem embutida com Content-ID', /multipart\/related/.test(smtpData) && /Content-ID: <assinatura-1@costalog>/.test(smtpData) && /Content-Disposition: inline/.test(smtpData), true);
+  smtpData = salvoSmtp; smtpLog.length = salvoLog;
   check('destinatários', r.rcpt, ['riquelme@costalog.com.br', 'importacao@costalog.com.br', 'gerencia@costalog.com.br']);
   check('RCPT TO por pessoa', smtpLog.filter((l) => /^RCPT TO/i.test(l)).length, 3);
   check('assunto codificado', /Subject: =\?UTF-8\?B\?/.test(smtpData), true);
@@ -220,6 +232,9 @@ const smtp = tls.createServer(opts, (s) => {
   check('cópia em Enviados com o mesmo Message-ID do envio', /Message-ID: <0103abc@sa-east-1\.amazonses\.com>/.test(appendInfo.raw), true);
   check('cópia guardada tem o assunto', mail.decodeHeader(/Subject: (.*)/.exec(appendInfo.raw)[1]), 'Re: STATUS - REFERÊNCIA: HW 181/25');
   check('cópia guardada tem a tabela', appendInfo.raw.includes(Buffer.from('<table><tr><td>HW 181/25</td></tr></table>').toString('base64')), true);
+  await mail.send(cfgApi, { to: 'a@b.com', subject: 'x', html: '<img src="cid:assinatura-1@costalog">', inline: [{ cid: 'assinatura-1@costalog', type: 'image/png', name: 'assinatura.png', data: PNG1 }] });
+  check('API: imagem embutida com content_id', apiReq.body.attachments.map((a) => [a.filename, a.content_id]), [['assinatura.png', 'assinatura-1@costalog']]);
+  check('cópia em Enviados também leva a imagem', /Content-ID: <assinatura-1@costalog>/.test(appendInfo.raw), true);
 
   // erro da API vira mensagem legível
   apiSrv.close();
@@ -233,6 +248,40 @@ const smtp = tls.createServer(opts, (s) => {
   errSrv.close();
   delete process.env.RESEND_API_KEY;
   delete process.env.MAIL_API_URL;
+
+  // ---------- assinatura do webmail (Roundcube falso) ----------
+  {
+    const passos = [];
+    const rc = http.createServer((rq, rs) => {
+      let body = '';
+      rq.on('data', (d) => { body += d; });
+      rq.on('end', () => {
+        const u = rq.url, ck = rq.headers.cookie || '';
+        passos.push(rq.method + ' ' + u);
+        if (rq.method === 'GET' && u === '/?_task=login') { rs.writeHead(200, { 'Set-Cookie': 'roundcube_sessid=s1; path=/' }); return rs.end('<form><input type="hidden" name="_token" value="tok123"></form>'); }
+        if (rq.method === 'POST' && u === '/?_task=login') {
+          const f = new URLSearchParams(body);
+          const ok = f.get('_token') === 'tok123' && f.get('_user') === 'status@costalog.com.br' && f.get('_pass') === 'segredo' && ck.includes('roundcube_sessid=s1');
+          rs.writeHead(302, ok ? { Location: '/?_task=mail', 'Set-Cookie': 'roundcube_sessauth=a1; path=/' } : { Location: '/?_task=login' });
+          return rs.end();
+        }
+        const logado = ck.includes('roundcube_sessauth=a1');
+        if (u === '/?_task=settings&_action=identities') { rs.writeHead(200); return rs.end(logado ? '<tr id="rcmrow777"><td>Follow-Up</td></tr>' : 'login'); }
+        if (u.startsWith('/?_task=settings&_action=edit-identity&_iid=777')) {
+          rs.writeHead(200);
+          return rs.end(logado ? '<input name="_name" class="ff_name" value="Follow-Up | Costalog"><input type="checkbox" name="_html_signature" value="1" checked><textarea name="_signature" id="x">&lt;p&gt;&amp;nbsp;&lt;/p&gt;&lt;p&gt;&lt;img src=&quot;data:image/png;base64,' + PNG1 + '&quot; width=&quot;743&quot; height=&quot;223&quot; /&gt;&lt;/p&gt;</textarea><script>var x={"request_token":"tok999"}</script>' : 'login');
+        }
+        rs.writeHead(200); rs.end('');
+      });
+    });
+    await new Promise((r) => rc.listen(9089, '127.0.0.1', r));
+    process.env.MAIL_WEBMAIL_URL = 'http://127.0.0.1:9089';
+    const w = await mail.webmailSignature(mail.config());
+    await new Promise((r) => setTimeout(r, 150));
+    check('assinatura lida do webmail', [w.name, w.html], ['Follow-Up | Costalog', '<p>&nbsp;</p><p><img src="data:image/png;base64,' + PNG1 + '" width="743" height="223" /></p>']);
+    check('entrou e saiu do webmail', [passos.includes('POST /?_task=login'), passos.some((x) => x.startsWith('GET /?_task=logout'))], [true, true]);
+    rc.close();
+  }
 
   // ---------- certificado do provedor (*.m9.network) acessado por outro nome, com verificação ligada ----------
   {
@@ -342,9 +391,32 @@ const smtp = tls.createServer(opts, (s) => {
       html: '<p>Status novo</p>', text: 'Status novo',
     }, ana.token);
     check('envio na conversa', cont.ok, true);
+    check('histórico leva a imagem da assinatura anterior', /Content-ID: <assin@x>/.test(smtpData), true);
     check('responde à última mensagem', /In-Reply-To: <abc123@cliente\.com>/.test(smtpData) && /References: <ref1@x> <ref2@x> <abc123@cliente\.com>/.test(smtpData), true);
     const partes = [...smtpData.matchAll(/\r\n\r\n([A-Za-z0-9+/=\r\n]{40,})/g)].map((m) => Buffer.from(m[1].replace(/\r\n/g, ''), 'base64').toString('utf8')).join('\n');
     check('histórico citado no corpo', partes.includes('Status novo') && partes.includes('<b>De:</b>') && partes.includes('programação'), true);
+
+    // assinatura guardada no servidor (vinda do webmail, já reduzida pela tela) vai em todo envio
+    const semSig = await call('GET', `/api/docs/${docR.id}/mail/signature?sheet=sh1`, null, ana.token);
+    check('sem assinatura ainda', semSig.tem, false);
+    const negSig = await call('PUT', `/api/docs/${docR.id}/mail/signature`, { sheet: 'sh1', html: '<p>x</p>' }, bia.token);
+    check('quem não envia não muda a assinatura', negSig._status, 403);
+    const putSig = await call('PUT', `/api/docs/${docR.id}/mail/signature`, { sheet: 'sh1', html: '<p>Att.</p><img src="data:image/png;base64,' + PNG1 + '" width="743"><script>alert(1)</script>', origem: 'webmail' }, ana.token);
+    check('assinatura salva', putSig.ok, true);
+    const getSig = await call('GET', `/api/docs/${docR.id}/mail/signature?sheet=sh1`, null, ana.token);
+    check('assinatura volta com a imagem e sem script', [getSig.tem, getSig.html.includes('data:image/png;base64,' + PNG1), /script/.test(getSig.html), getSig.origem], [true, true, false, 'webmail']);
+    smtpData = '';
+    await call('POST', `/api/docs/${docR.id}/mail/send`, { sheet: 'sh1', subject: 'Teste', to: 'a@b.com', html: '<p>Status</p>', text: 'Status' }, ana.token);
+    const corpoSig = [...smtpData.matchAll(/\r\n\r\n([A-Za-z0-9+/=\r\n]{40,})/g)].map((m) => Buffer.from(m[1].replace(/\r\n/g, ''), 'base64').toString('utf8')).join('\n');
+    check('envio leva a assinatura embutida', [corpoSig.includes('<p>Att.</p><img src="cid:assinatura-1@costalog"'), /Content-ID: <assinatura-1@costalog>/.test(smtpData)], [true, true]);
+    smtpData = '';
+    await call('POST', `/api/docs/${docR.id}/mail/send`, { sheet: 'sh1', subject: 'Teste', to: 'a@b.com', html: '<p>Status</p>', text: 'Status', signature: false }, ana.token);
+    check('dá para enviar sem a assinatura', /assinatura-1@costalog/.test(smtpData), false);
+    const grande = await call('POST', `/api/docs/${docR.id}/mail/send`, { sheet: 'sh1', subject: 'x', to: 'a@b.com', html: '<p>x</p>', attachments: [{ name: 'g.bin', type: 'application/octet-stream', data: Buffer.alloc(16 * 1048576).toString('base64') }] }, ana.token);
+    check('limite de 15 MB nos anexos', [grande._status, /15 MB/.test(grande.error || grande.message || '')], [413, true]);
+    const busca = await call('POST', `/api/docs/${docR.id}/mail/find`, { sheet: 'sh1', ref: 'qualquer texto do assunto' }, ana.token);
+    check('busca livre pelo assunto', [busca.achou, imapLogHas('UID SEARCH HEADER SUBJECT "qualquer texto do assunto"')], [true, true]);
+    check('prévia da última mensagem vem pronta', busca.thread.preview.includes('programação') && busca.thread.preview.includes('data:image/png'), true);
 
     // nossa resposta é a última: vai de novo para as mesmas pessoas
     fakeImap.sentUids = '21';
