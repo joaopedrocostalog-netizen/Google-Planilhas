@@ -1209,6 +1209,7 @@ async function cargaDiag() {
     out.json = true;
     const regs = cargaRegistros(j);
     out.registros = regs.length;
+    if (j && typeof j === 'object' && !Array.isArray(j)) { const msg = j.mensagemErro || j.mensagem || j.message || j.erro || j.error; if (msg) out.mensagem = String(msg).slice(0, 300); if (j.status !== undefined) out.statusApi = j.status; }
     out.formato = Array.isArray(j) ? `lista com ${j.length} itens` : j && typeof j === 'object' ? 'objeto com ' + Object.keys(j).slice(0, 12).join(', ') : typeof j;
     if (regs.length) { out.campos = Object.keys(regs[0]); out.campoContainer = campo(regs[0], CAMPO_CONT); out.campoData = campo(regs[0], CAMPO_DATA); }
     else if (j && typeof j === 'object') out.inicio = JSON.stringify(j).slice(0, 160);
