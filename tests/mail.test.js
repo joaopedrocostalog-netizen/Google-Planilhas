@@ -197,6 +197,41 @@ const smtp = tls.createServer(opts, (s) => {
   delete process.env.RESEND_API_KEY;
   delete process.env.MAIL_API_URL;
 
+  // ---------- certificado do provedor (*.m9.network) acessado por outro nome, com verificação ligada ----------
+  {
+    const KEY2 = path.join(CERT, 'k2.pem'), CRT2 = path.join(CERT, 'c2.pem');
+    execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-keyout', KEY2, '-out', CRT2, '-days', '1', '-nodes',
+      '-subj', '/CN=m9.network', '-addext', 'subjectAltName=DNS:*.m9.network,DNS:m9.network'], { stdio: 'ignore' });
+    const prov = tls.createServer({ key: fs.readFileSync(KEY2), cert: fs.readFileSync(CRT2) }, (sk) => {
+      sk.write('* OK Supramail5 IMAP Proxy Ready\r\n');
+      let b = '';
+      sk.on('data', (d) => {
+        b += d; let i;
+        while ((i = b.indexOf('\r\n')) >= 0) {
+          const line = b.slice(0, i); b = b.slice(i + 2);
+          const tag = line.split(' ')[0];
+          if (/ UID SEARCH/i.test(line)) sk.write(`* SEARCH\r\n${tag} OK\r\n`); else sk.write(`${tag} OK\r\n`);
+        }
+      });
+    });
+    await new Promise((r) => prov.listen(9995, '127.0.0.1', r));
+    // processo à parte: só ele confia no certificado de teste (NODE_EXTRA_CA_CERTS), como um certificado real
+    const tenta = (tlsName) => new Promise((resolve) => {
+      const env = Object.assign({}, process.env, { NODE_EXTRA_CA_CERTS: CRT2, MAIL_IMAP_HOST: '127.0.0.1', MAIL_IMAP_PORT: '9995',
+        MAIL_IMAP_SECURE: '1', MAIL_TLS_STRICT: '1', MAIL_USER: 'u', MAIL_PASS: 'p', MAIL_TLS_NAME: tlsName || '' });
+      const code = `const m=require(${JSON.stringify(path.join(__dirname, '..', 'server', 'mail.js'))});m.findThread(m.config(),'X').then(r=>console.log(JSON.stringify({ok:true,r})),e=>console.log(JSON.stringify({ok:false,e:e.message})))`;
+      const { execFile } = require('child_process');
+      execFile(process.execPath, ['-e', code], { env, timeout: 15000 }, (err, out) => { try { resolve(JSON.parse(String(out).trim().split('\n').pop())); } catch (e) { resolve({ ok: false, e: String(err || out) }); } });
+    });
+    const semNome = await tenta('');
+    check('sem MAIL_TLS_NAME recusa o certificado do provedor', semNome.ok === false && /altnames/.test(semNome.e), true);
+    const comNome = await tenta('m9.network');
+    check('com MAIL_TLS_NAME aceita, mantendo a verificação', comNome.ok, true);
+    const nomeErrado = await tenta('outro-provedor.com');
+    check('nome errado continua recusando', nomeErrado.ok === false && /altnames|does not match/i.test(nomeErrado.e), true);
+    prov.close();
+  }
+
   // ---------- diagnóstico ----------
   const d = await mail.diag(cfg, [
     { nome: 'imap', host: '127.0.0.1', port: 9993, secure: true },

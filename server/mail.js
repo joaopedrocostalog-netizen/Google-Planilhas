@@ -20,6 +20,9 @@ function config() {
     imapSecure: env('MAIL_IMAP_SECURE') ? env('MAIL_IMAP_SECURE') !== '0' : null,
     smtpSecure: env('MAIL_SMTP_SECURE') ? env('MAIL_SMTP_SECURE') !== '0' : null,
     rejectUnauthorized: env('MAIL_TLS_STRICT') !== '0',
+    // o certificado do servidor pode ser do provedor (ex.: *.m9.network) e não do endereço usado:
+    // continua validando a cadeia, só que contra este nome
+    tlsName: env('MAIL_TLS_NAME'),
     // envio por HTTPS (usado quando a hospedagem bloqueia as portas de SMTP, como o Render)
     apiKey: env('RESEND_API_KEY', 'MAIL_API_KEY'),
     apiUrl: env('MAIL_API_URL') || 'https://api.resend.com/emails',
@@ -30,11 +33,16 @@ function config() {
 }
 const configured = () => { const c = config(); return !!(c.imapHost && c.user && c.pass); };
 
-function connect({ host, port, secure, rejectUnauthorized, timeout = 20000 }) {
+const tlsOpts = (host, rejectUnauthorized, tlsName) => {
+  const o = { rejectUnauthorized, servername: host };
+  if (tlsName) o.checkServerIdentity = (h, cert) => tls.checkServerIdentity(tlsName, cert);
+  return o;
+};
+function connect({ host, port, secure, rejectUnauthorized, tlsName, timeout = 20000 }) {
   return new Promise((resolve, reject) => {
     const done = (fn) => (x) => { clearTimeout(t); sock.removeAllListeners('error'); fn(x); };
     const sock = secure
-      ? tls.connect({ host, port, rejectUnauthorized, servername: host })
+      ? tls.connect(Object.assign({ host, port }, tlsOpts(host, rejectUnauthorized, tlsName)))
       : net.connect({ host, port });
     const t = setTimeout(() => { sock.destroy(); reject(new Error(`Sem resposta de ${host}:${port} (tempo esgotado).`)); }, timeout);
     sock.once(secure ? 'secureConnect' : 'connect', done(() => {
@@ -46,9 +54,9 @@ function connect({ host, port, secure, rejectUnauthorized, timeout = 20000 }) {
   });
 }
 // upgrade de uma conexão aberta para TLS (STARTTLS)
-function upgrade(sock, host, rejectUnauthorized) {
+function upgrade(sock, host, rejectUnauthorized, tlsName) {
   return new Promise((resolve, reject) => {
-    const s = tls.connect({ socket: sock, servername: host, rejectUnauthorized }, () => resolve(s));
+    const s = tls.connect(Object.assign({ socket: sock }, tlsOpts(host, rejectUnauthorized, tlsName)), () => resolve(s));
     s.once('error', reject);
   });
 }
@@ -86,7 +94,7 @@ function reader(sock) {
 function imapQuote(s) { return '"' + String(s).replace(/([\\"])/g, '\\$1') + '"'; }
 async function imapOpen(cfg) {
   const secure = cfg.imapSecure === null || cfg.imapSecure === undefined ? cfg.imapPort !== 143 : cfg.imapSecure;
-  let sock = await connect({ host: cfg.imapHost, port: cfg.imapPort, secure, rejectUnauthorized: cfg.rejectUnauthorized });
+  let sock = await connect({ host: cfg.imapHost, port: cfg.imapPort, secure, rejectUnauthorized: cfg.rejectUnauthorized, tlsName: cfg.tlsName });
   let rd = reader(sock);
   await rd.line(); // saudação
   let n = 0;
@@ -122,7 +130,7 @@ async function imapOpen(cfg) {
       throw new Error('IMAP: ' + rest);
     }
   };
-  if (!secure) { await cmd('STARTTLS'); sock = await upgrade(sock, cfg.imapHost, cfg.rejectUnauthorized); rd = reader(sock); }
+  if (!secure) { await cmd('STARTTLS'); sock = await upgrade(sock, cfg.imapHost, cfg.rejectUnauthorized, cfg.tlsName); rd = reader(sock); }
   await cmd('LOGIN ' + imapQuote(cfg.user) + ' ' + imapQuote(cfg.pass));
   return { cmd, cmdLiteral, close: () => { try { sock.write('a999 LOGOUT\r\n'); } catch (e) { /* já caiu */ } sock.destroy(); } };
 }
@@ -198,7 +206,7 @@ async function saveToSent(cfg, raw) {
 // ---------- SMTP ----------
 async function smtpOpen(cfg) {
   const secure = cfg.smtpSecure === null || cfg.smtpSecure === undefined ? cfg.smtpPort === 465 : cfg.smtpSecure;
-  let sock = await connect({ host: cfg.smtpHost, port: cfg.smtpPort, secure, rejectUnauthorized: cfg.rejectUnauthorized });
+  let sock = await connect({ host: cfg.smtpHost, port: cfg.smtpPort, secure, rejectUnauthorized: cfg.rejectUnauthorized, tlsName: cfg.tlsName });
   let rd = reader(sock);
   const read = async () => {
     const lines = [];
@@ -221,7 +229,7 @@ async function smtpOpen(cfg) {
   let ehlo = await say('EHLO ' + me, [250]);
   if (!secure && /STARTTLS/i.test(ehlo.text)) {
     await say('STARTTLS', [220]);
-    sock = await upgrade(sock, cfg.smtpHost, cfg.rejectUnauthorized);
+    sock = await upgrade(sock, cfg.smtpHost, cfg.rejectUnauthorized, cfg.tlsName);
     rd = reader(sock);
     ehlo = await say('EHLO ' + me, [250]);
   }
