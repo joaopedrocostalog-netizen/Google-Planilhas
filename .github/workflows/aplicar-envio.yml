@@ -1,5 +1,9 @@
-# Aplica envios do Claude: quando chega um .envio/envio.diff na tempo-real, aplica o diff, confere cada pasta pelos
-# hashes de .envio/conferir.txt (a versão testada), roda o npm test e só então grava. Se algo não bater, nada é gravado.
+# Envios do Claude, do começo ao fim, sem cliques:
+# 1) quando chega um .envio/envio.diff na tempo-real: aplica o diff, confere cada pasta pelos hashes de
+#    .envio/conferir.txt (a versão testada), roda o npm test e só então grava na tempo-real (o Render publica o servidor);
+# 2) leva a tempo-real para a main e dispara a publicação do site (GitHub Pages).
+# Se os hashes não baterem ou algum teste falhar, nada é gravado nem publicado.
+# Para um envio só na tempo-real (sem publicar o site), o Claude inclui o arquivo .envio/so-tempo-real.
 name: Aplicar envio do Claude
 on:
   push:
@@ -7,6 +11,10 @@ on:
     paths: ['.envio/**', '.github/workflows/aplicar-envio.yml']
 permissions:
   contents: write
+  actions: write
+concurrency:
+  group: aplicar-envio
+  cancel-in-progress: false
 jobs:
   aplicar:
     runs-on: ubuntu-latest
@@ -18,12 +26,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Aplicar, conferir e gravar
+      - name: Aplicar, conferir e gravar na tempo-real
         run: |
           set -e
-          test -f .envio/envio.diff || { echo "Nada para aplicar."; exit 0; }
           git config user.name "joaopedrocostalog-netizen"
           git config user.email "joaopedrosilveirasantos53@gmail.com"
+          if [ ! -f .envio/envio.diff ]; then echo "Nada para aplicar."; exit 0; fi
+          if [ -f .envio/so-tempo-real ]; then echo "PUBLICAR=nao" >> "$GITHUB_ENV"; fi
           git apply --3way .envio/envio.diff
           git add -A -- . ':!.envio'
           while read -r p h; do
@@ -38,3 +47,22 @@ jobs:
           git rm -r -q .envio
           git commit -q -m "$msg"
           git push origin HEAD:tempo-real
+      - name: Publicar na main e no site
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          if [ "$PUBLICAR" = "nao" ]; then echo "Envio marcado para ficar só na tempo-real."; exit 0; fi
+          git config user.name "joaopedrocostalog-netizen"
+          git config user.email "joaopedrosilveirasantos53@gmail.com"
+          git fetch -q origin main tempo-real
+          if git merge-base --is-ancestor origin/tempo-real origin/main; then echo "A main já está em dia."; exit 0; fi
+          git checkout -q -B main origin/main
+          if ! git merge --ff-only -q origin/tempo-real; then
+            git merge --no-ff -q -m "Publica a tempo-real na main (envio do Claude)" origin/tempo-real
+            npm install --no-audit --no-fund
+            npm test
+          fi
+          git push origin HEAD:main
+          gh workflow run pages.yml --ref main
+          echo "Main atualizada e publicação do site iniciada."
