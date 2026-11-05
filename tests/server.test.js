@@ -339,6 +339,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     check('diagnóstico', [dg.http, dg.registros, dg.campoContainer, dg.campoData, dg.variavel, /dataInicio e dataFim \(iso\)/.test(dg.periodo)], [200, 3, 'nro_container', 'data_hora_entrada', 'Carga_OF_Container', true]);
     const nd = await api('GET', '/api/carga/data-baixa?container=ABCD0000000', null, ana.token);
     check('container fora da API', nd.achou, false);
+    const lote = await api('POST', '/api/carga/datas-baixa', { containers: ['TRHU 861.819-1', 'MSCU1234567', 'ABCD0000000'] }, ana.token);
+    check('várias DATA BAIXA de uma vez', lote.resultados, { TRHU8618191: '05/11/2026', MSCU1234567: '30/10/2026', ABCD0000000: null });
     check('DATA BAIXA exige login', (await api('GET', '/api/carga/data-baixa?container=TRHU8618191'))._status, 401);
   } catch (e) {
     fail++;

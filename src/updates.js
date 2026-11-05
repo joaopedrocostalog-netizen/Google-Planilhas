@@ -4,6 +4,13 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '06/11/2026', title: 'MAPA ↔ PRÉ STACKING com confirmação, DATA BAIXA em todas as linhas, linhas de grade e crítico', items: [
+      ['MAPA ↔ PRÉ STACKING', 'Com a unidade já no PRÉ STACKING, mudar um campo no MAPA (ex.: TERMINAL VAZIO / depot) ou no PRÉ STACKING pergunta "Unidade em Pré-Stacking deseja atualizar informação?"; com Sim, o outro lado é atualizado.'],
+      ['DATA BAIXA', 'Sempre que um container entra no PRÉ STACKING VAZIO (pelo P.S. VZ, digitado ou colado), todas as DATA BAIXA vazias da aba são buscadas na API de uma vez. Trocar o container busca a data de novo.'],
+      ['Motoristas do DSS', 'A lista de motoristas é buscada no DSS uma vez por dia e guardada no banco; o servidor usa a do banco ao reiniciar.'],
+      ['Linhas de grade', 'Linhas de grade e bordas ficam com a mesma espessura em todas as células, também com zoom ou escala do Windows (125%, 150%).'],
+      ['Crítico', 'Célula vazia não pisca mais o alerta de crítico.'],
+    ] },
     { date: '05/11/2026', title: 'Containers da Carga OF (API carga_of_container)', items: [
       ['Administrador', 'Novo item "Containers da Carga OF (DATA BAIXA)", no mesmo jeito dos Motoristas do DSS: escolha a coluna do CONTAINER e a da data. Ao digitar ou colar um container nessa coluna, a data de entrada vem da API em dd/mm/aaaa.'],
       ['Consulta', 'Na mesma tela: se a API está respondendo, consulta de um container (com ou sem espaço, ponto e traço), últimas entradas e "Preencher vazios" para buscar de uma vez os containers sem data.'],

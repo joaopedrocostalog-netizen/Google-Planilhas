@@ -5,9 +5,10 @@
 // - Marcar P.S. VZ: muda o STATUS (AG. DEVOLUÇÃO na IMPO, AG. RETIRADA na EXPO) e cria a linha na aba PRÉ STACKING VAZIO.
 //   Clientes da regra (Administrador › "PRÉ STACKING VAZIO: clientes com 1 - / 2 - CONTAINER") usam 1 - CONTAINER,
 //   1 - ARMADOR e 1 - TIPO; com 2 - CONTAINER, 2 - ARMADOR ou 2 - TIPO preenchido, cria 2 linhas.
-// - O que for mudado depois no PRÉ STACKING (nas colunas que vieram do MAPA) volta para a linha do MAPA. A DATA do
-//   PRÉ STACKING VAZIO preenche a DATA ENTREGA VAZIO do MAPA IMPO.
-// - DATA BAIXA (PRÉ STACKING VAZIO): o servidor procura o container na API carga_of_container e grava dd/mm/aaaa.
+// - Depois de levada, mudar um campo de um lado (MAPA ou PRÉ STACKING) pergunta "Unidade em Pré-Stacking deseja
+//   atualizar informação?" e, com Sim, atualiza o outro lado. A DATA do PRÉ STACKING VAZIO ↔ DATA ENTREGA VAZIO do MAPA IMPO.
+// - DATA BAIXA (PRÉ STACKING VAZIO): sempre que entra um container, todas as DATA BAIXA vazias da aba são buscadas
+//   na API carga_of_container (pelo servidor) e gravadas em dd/mm/aaaa.
 // - Pré stacking concluído (STATUS FINALIZADO na aba do PRÉ STACKING): o STATUS do MAPA muda (CHEIO: EM ABERTO na IMPO, PROC. - FINALIZADO na EXPO;
 //   VAZIO: AG. INTERCAMBIO na IMPO, EM ABERTO na EXPO).
 // O vínculo fica marcado nas células (psl): na caixa P.S. do MAPA, o código do vínculo; no PRÉ STACKING, nas células
@@ -245,7 +246,7 @@
         (ps.cells[a] || (ps.cells[a] = { v: '' })).psl = link;
       }
       made.push(row);
-      if (k === 'vz' && containers.length) pendBaixa.push({ psId: ps.id, link, container: containers[containers.length - 1] });
+      if (k === 'vz' && containers.length) baixaPend = true;
       row++;
     }
     cell.psl = id;
@@ -268,35 +269,107 @@
   }
 
   // ---------- DATA BAIXA (API carga_of_container, pelo servidor) ----------
-  // depois de criar a linha (ou trocar o CONTAINER) no PRÉ STACKING VAZIO, procura o container e grava dd/mm/aaaa
-  const pendBaixa = [];
-  function buscaBaixa() {
-    const list = pendBaixa.splice(0);
-    if (!list.length || !App.cloudMode || !App.collab || !App.collab.api) return;
-    list.forEach(async (it) => {
-      let res;
-      try { res = await App.collab.api('GET', '/api/carga/data-baixa?container=' + encodeURIComponent(it.container)); }
-      catch (e) { App.emit('notify', `DATA BAIXA de ${it.container}: ${e.message}`); return; }
-      if (!res || !res.achou) { App.emit('notify', `DATA BAIXA: o container ${it.container} não foi encontrado na API.`); return; }
-      const ps = doc.sheets.find((x) => x.id === it.psId);
-      if (!ps) return;
-      App.withReal(() => {
-        const pm = colMap(ps), dc = findCol(pm, A.DATABAIXA);
-        if (!dc) return;
-        // a linha pode ter mudado de lugar: acha pelo vínculo
-        const l = linkOf(it.link);
-        const r = l && psRowsOf(ps, l.id).find((x) => { const rl = rowLink(ps, pm, x); return rl && rl.n === l.n; });
-        if (!r || !canEdit(ps, r, dc)) return;
-        if (sameRaw(rawAt(ps, r, dc), res.data)) return;
-        App.change('DATA BAIXA (API)', () => { App.setRaw(ps, r, dc, res.data); App.setStyle(ps, r, dc, (s) => { s.nf = 'dd/mm/yyyy'; }); });
-      });
+  // Sempre que um container entra no PRÉ STACKING VAZIO (linha criada pelo P.S. VZ, digitado ou colado), a planilha
+  // procura na API todos os containers da aba com a DATA BAIXA vazia (uma consulta para todos) e preenche dd/mm/aaaa.
+  // Trocar o CONTAINER de uma linha busca de novo a DATA BAIXA dela. Também roda ao abrir a aba (no máximo a cada 10 min).
+  let baixaPend = false, baixaRodando = false, baixaUltima = 0;
+  const baixaForcar = new Map(); // "idDaAba:linha" -> container (linha cujo CONTAINER mudou: sobrescreve a DATA BAIXA)
+  const naoAchou = new Map(); // container -> quando a API disse que não tem (não pergunta de novo por 10 min)
+  const pedirBaixa = () => { baixaPend = true; setTimeout(buscaBaixa, 200); };
+  async function buscaBaixa() {
+    if (!baixaPend || baixaRodando) return;
+    baixaPend = false;
+    if (!App.cloudMode || !App.collab || !App.collab.api) return;
+    const ps = psSheet('vz');
+    if (!ps) return;
+    const alvo = [];
+    App.withReal(() => {
+      const pm = colMap(ps), cc = findCol(pm, A.CONTAINER), dc = findCol(pm, A.DATABAIXA);
+      if (!cc || !dc) return;
+      for (const a in ps.cells) {
+        const p = E.parseAddr(a);
+        if (!p || p.col !== cc || p.row <= headerRow(ps)) continue;
+        const cont = String(rawAt(ps, p.row, cc) || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (cont.length < 6) continue;
+        const forc = baixaForcar.get(ps.id + ':' + p.row);
+        if (!forc && hasText(rawAt(ps, p.row, dc))) continue;
+        if (!forc && naoAchou.has(cont) && Date.now() - naoAchou.get(cont) < 10 * 60e3) continue;
+        if (!canEdit(ps, p.row, dc)) continue;
+        alvo.push({ row: p.row, cont, forc: !!forc });
+      }
     });
+    baixaForcar.clear();
+    if (!alvo.length) return;
+    baixaRodando = true;
+    baixaUltima = Date.now();
+    let res;
+    try { res = await App.collab.api('POST', '/api/carga/datas-baixa', { containers: [...new Set(alvo.map((x) => x.cont))] }); }
+    catch (e) { App.emit('notify', `DATA BAIXA: ${e.message}`); baixaRodando = false; return; }
+    baixaRodando = false;
+    const r = (res && res.resultados) || {};
+    const faltam = [];
+    App.withReal(() => {
+      const pm = colMap(ps), cc = findCol(pm, A.CONTAINER), dc = findCol(pm, A.DATABAIXA);
+      if (!cc || !dc) return;
+      const muda = [];
+      for (const x of alvo) {
+        const data = r[x.cont];
+        if (!data) { naoAchou.set(x.cont, Date.now()); if (!faltam.includes(x.cont)) faltam.push(x.cont); continue; }
+        // a linha ainda tem o mesmo container (e, se não era troca, a DATA BAIXA continua vazia)
+        if (String(rawAt(ps, x.row, cc) || '').toUpperCase().replace(/[^A-Z0-9]/g, '') !== x.cont) continue;
+        if (!x.forc && hasText(rawAt(ps, x.row, dc))) continue;
+        if (sameRaw(rawAt(ps, x.row, dc), data)) continue;
+        muda.push([x.row, data]);
+      }
+      if (muda.length) App.change('DATA BAIXA (API)', () => { for (const [row, data] of muda) { App.setRaw(ps, row, dc, data); App.setStyle(ps, row, dc, (st) => { st.nf = 'dd/mm/yyyy'; }); } });
+      if (muda.length) App.emit('notify', `DATA BAIXA preenchida em ${muda.length} ${muda.length === 1 ? 'linha' : 'linhas'} do PRÉ STACKING VAZIO.`);
+    });
+    if (faltam.length) App.emit('notify', `DATA BAIXA: ${faltam.length === 1 ? 'o container ' + faltam[0] + ' não foi encontrado' : faltam.length + ' containers não foram encontrados'} na API.`);
+    if (baixaPend) setTimeout(buscaBaixa, 200);
+  }
+  // abrir a aba PRÉ STACKING VAZIO também confere as DATA BAIXA vazias (no máximo a cada 10 min)
+  App.on('sheet', () => { const sh = doc.sheets[doc.active]; if (sh && kindOfPS(sh) === 'vz' && Date.now() - baixaUltima > 10 * 60e3) pedirBaixa(); });
+
+  // ---------- Confirmação dos dois sentidos (MAPA ↔ PRÉ STACKING) ----------
+  // Com a unidade já no PRÉ STACKING, mudar no MAPA um campo que foi levado (ou mudar no PRÉ STACKING um campo que veio
+  // do MAPA) pergunta "Unidade em Pré-Stacking deseja atualizar informação?" antes de copiar para o outro lado.
+  let pergunta = [];
+  function perguntar() {
+    const lista = pergunta.splice(0);
+    if (!lista.length) return;
+    const linhas = lista.slice(0, 8).map((x) => `<li>${App.esc(x.desc)}</li>`).join('') + (lista.length > 8 ? `<li>… e mais ${lista.length - 8}</li>` : '');
+    App.ui.modal({
+      title: 'Unidade em Pré-Stacking deseja atualizar informação?', width: '520px',
+      body: `<p class="modal-text">A unidade já está no PRÉ STACKING. Atualizar também do outro lado?</p><ul class="modal-text" style="margin:8px 0 0 18px">${linhas}</ul>`,
+      buttons: [{ label: 'Não' }, { label: 'Sim, atualizar', primary: true, action: () => aplicar(lista) }],
+    });
+  }
+  let aplicando = false;
+  function aplicar(lista) {
+    const sem = new Set();
+    let feitos = 0;
+    aplicando = true; // a cópia confirmada não gera uma nova pergunta no sentido contrário
+    try { App.withReal(() => {
+      App.change('Atualizar MAPA / PRÉ STACKING', () => {
+        for (const x of lista) {
+          const alvo = x.alvo();
+          if (!alvo) continue;
+          if (!canEdit(alvo.sh, alvo.r, alvo.c)) { sem.add(`${alvo.sh.name} ${E.numToCol ? E.numToCol(alvo.c) : alvo.c}`); continue; }
+          if (sameRaw(rawAt(alvo.sh, alvo.r, alvo.c), x.val ? x.val.v : '')) continue;
+          writeCell(alvo.sh, alvo.r, alvo.c, x.val);
+          feitos++;
+          if (alvo.baixa) baixaForcar.set(alvo.sh.id + ':' + alvo.r, true);
+        }
+      });
+    }); } finally { aplicando = false; }
+    if (baixaForcar.size) pedirBaixa();
+    App.emit('notify', (feitos ? `${feitos} ${feitos === 1 ? 'campo atualizado' : 'campos atualizados'}.` : 'Nada a atualizar.') + (sem.size ? ` Sem permissão: ${[...sem].join(', ')}.` : ''));
   }
 
   // ---------- Gancho chamado por App.change ----------
   // fwd/inv: o que a pessoa mudou. Devolve true se mexeu em mais alguma coisa.
   function hook(fwd, inv) {
-    if (!fwd || !fwd.sheets || fwd.order) return false;
+    if (!fwd || !fwd.sheets || fwd.order || aplicando) return false;
     if (Object.values(fwd.sheets).some((e) => e.created || e.removed || (e.props && 'rows' in e.props))) return false;
     App.invalidate();
     const msgs = [];
@@ -314,7 +387,8 @@
       }
     });
     if (msgs.length) notify(msgs.slice(0, 4).join(' ') + (msgs.length > 4 ? ` (+${msgs.length - 4})` : ''));
-    if (pendBaixa.length) setTimeout(buscaBaixa, 150);
+    if (baixaPend) setTimeout(buscaBaixa, 200);
+    if (pergunta.length) setTimeout(perguntar, 120);
     return changed;
   }
 
@@ -322,6 +396,7 @@
     const map = colMap(sh);
     const contCol = findCol(map, A.CONTAINER);
     let changed = false;
+    const levadas = new Set();
     for (const k of ['ch', 'vz']) {
       const cbCol = findCol(map, k === 'ch' ? A.PSCH : A.PSVZ);
       if (!cbCol) continue;
@@ -336,7 +411,50 @@
         if (ic[a] && ic[a].psl !== after.psl) continue;
         rows.push(p.row);
       }
-      for (const r of rows.sort((x, y) => x - y)) if (levar(sh, kind, map, r, k, cbCol, msgs)) changed = true;
+      for (const r of rows.sort((x, y) => x - y)) { levadas.add(k + r); if (levar(sh, kind, map, r, k, cbCol, msgs)) changed = true; }
+    }
+    // campos levados mudados no MAPA (linha já no PRÉ STACKING): pergunta antes de atualizar o PRÉ STACKING
+    const porLinha = new Map();
+    for (const a in fc) {
+      const p = E.parseAddr(a);
+      if (!p || p.row <= headerRow(sh) || sameRaw(fc[a] && fc[a].v, ic[a] && ic[a].v)) continue;
+      if (!porLinha.has(p.row)) porLinha.set(p.row, []);
+      porLinha.get(p.row).push(p.col);
+    }
+    for (const [r, cs] of porLinha) {
+      for (const k of ['ch', 'vz']) {
+        if (levadas.has(k + r)) continue;
+        const cbCol = findCol(map, k === 'ch' ? A.PSCH : A.PSVZ);
+        if (!cbCol) continue;
+        const ca = E.addrToStr(r, cbCol), cb = sh.cells[ca];
+        if (!cb || !cb.psl) continue;
+        if (ca in fc && (!ic[ca] || ic[ca].psl !== cb.psl)) continue; // a linha só mudou de lugar
+        const ps = psSheet(k);
+        if (!ps) continue;
+        const id = cb.psl, pm = colMap(ps);
+        for (const pr of psRowsOf(ps, id)) {
+          const l = rowLink(ps, pm, pr);
+          if (!l) continue;
+          for (const c of cs) {
+            let f = FIELDS[k].find((ff) => srcCol(map, kind, ff, l.n) === c);
+            let tf = f ? f[0] : null;
+            if (!tf && k === 'vz' && kind === 'impo' && c === findCol(map, A.DTENTVZ)) tf = 'DATA';
+            if (!tf || !findCol(pm, A[tf])) continue;
+            const val = readCell(sh, r, c), n = l.n, psId = ps.id;
+            if (sameRaw(rawAt(ps, pr, findCol(pm, A[tf])), val ? val.v : '')) continue; // o outro lado já está igual
+            pergunta.push({
+              desc: `${PS_NAME[k]}: ${A[tf][0]} → ${val ? val.v : '(vazio)'}`, val,
+              alvo: () => {
+                const p2 = doc.sheets.find((x) => x.id === psId);
+                if (!p2) return null;
+                const m2 = colMap(p2);
+                const row = psRowsOf(p2, id).find((x) => { const rl = rowLink(p2, m2, x); return rl && rl.n === n; });
+                return row ? { sh: p2, r: row, c: findCol(m2, A[tf]), baixa: k === 'vz' && tf === 'CONTAINER' } : null;
+              },
+            });
+          }
+        }
+      }
     }
     return changed;
   }
@@ -358,6 +476,17 @@
     let changed = false;
     const semPerm = new Set();
     const concl = concluidoCols(pm).map((o) => o.c);
+    if (k === 'vz') {
+      const cc = findCol(pm, A.CONTAINER);
+      for (const [r, cs] of rows) {
+        if (!cc || !cs.includes(cc)) continue;
+        const a = E.addrToStr(r, cc);
+        if (!hasText(rawAt(ps, r, cc)) || sameRaw(fc[a] && fc[a].v, ic[a] && ic[a].v)) continue;
+        // container trocado (não só incluído): a DATA BAIXA antiga era do container anterior
+        if (ic[a] && hasText(ic[a].v)) baixaForcar.set(ps.id + ':' + r, true);
+        baixaPend = true;
+      }
+    }
     for (const [r, cs] of rows) {
       const link = rowLink(ps, pm, r);
       if (!link || link.k !== k) continue;
@@ -370,20 +499,29 @@
       const map = colMap(sh);
       const mr = mapaRowOf(sh, map, k, link.id);
       if (!mr) continue;
-      const contPS = findCol(pm, A.CONTAINER);
       for (const c of cs) {
         const a = E.addrToStr(r, c);
         if (sameRaw(fc[a] && fc[a].v, ic[a] && ic[a].v)) continue;
-        if (k === 'vz' && c === contPS && hasText(rawAt(ps, r, c))) pendBaixa.push({ psId: ps.id, link: `${link.sheetId}~${link.id}~${link.k}~${link.n}`, container: String(rawAt(ps, r, c)) });
-        let target = null;
-        if (back.has(c)) target = srcCol(map, kind, back.get(c), link.n);
-        else if (c === dataCol && kind === 'impo') target = findCol(map, A.DTENTVZ);
+        let target = null, nome = '';
+        if (back.has(c)) { target = srcCol(map, kind, back.get(c), link.n); nome = A[back.get(c)[0]][0]; }
+        else if (c === dataCol && kind === 'impo') { target = findCol(map, A.DTENTVZ); nome = 'DATA ENTREGA VAZIO'; }
         if (!target) continue;
-        if (!canEdit(sh, mr, target)) { semPerm.add(E.numToCol ? E.numToCol(target) : target); continue; }
         const val = readCell(ps, r, c);
         if (sameRaw(rawAt(sh, mr, target), val ? val.v : '')) continue;
-        writeCell(sh, mr, target, val);
-        changed = true;
+        // pergunta antes de mudar o MAPA (a unidade já está no PRÉ STACKING)
+        const shId = sh.id, lk = link;
+        pergunta.push({
+          desc: `${sh.name}: ${nome} → ${val ? val.v : '(vazio)'}`, val,
+          alvo: () => {
+            const s2 = doc.sheets.find((x) => x.id === shId);
+            const kd = kindOfMapa(s2);
+            if (!kd) return null;
+            const m2 = colMap(s2), row = mapaRowOf(s2, m2, lk.k, lk.id);
+            if (!row) return null;
+            const col = nome === 'DATA ENTREGA VAZIO' ? findCol(m2, A.DTENTVZ) : srcCol(m2, kd, back.get(c), lk.n);
+            return col ? { sh: s2, r: row, c: col } : null;
+          },
+        });
       }
       // concluído: muda o STATUS do MAPA (com 2 linhas no vazio, quando as duas estiverem concluídas)
       if (cs.some((c) => concl.includes(c))) {

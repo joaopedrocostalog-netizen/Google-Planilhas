@@ -1003,7 +1003,28 @@ const DSS_TOKEN = process.env.DSS_TOKEN || '';
 const DSS_DRIVERS_PATH = process.env.DSS_MOTORISTAS_PATH || '/listarMotoristas';
 let drivers = { items: [], expires: 0, error: null, loading: null };
 const pick = (o, keys) => { for (const k of keys) { const v = o && o[k]; if (v !== undefined && v !== null && String(v).trim() !== '' && String(v).toLowerCase() !== 'null') return String(v).trim(); } return ''; };
+// Motoristas: o DSS é consultado uma vez por dia (horário de Brasília) e a lista fica guardada no banco
+// (settings › dss_motoristas). Ao reiniciar, o servidor usa a lista do banco; se ela for de outro dia, busca de novo.
+// "Atualizar agora" (?atualizar=1) continua forçando a consulta.
+const DRIVERS_KEY = 'dss_motoristas';
+const diaBR = (d) => new Date(d || Date.now()).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+let driversDoBanco = false;
+async function driversFromStore() {
+  if (driversDoBanco) return;
+  driversDoBanco = true;
+  try {
+    const sv = await store.getSetting(DRIVERS_KEY);
+    if (sv && Array.isArray(sv.items) && sv.items.length && !drivers.items.length) {
+      drivers = Object.assign({}, drivers, { items: sv.items, at: sv.at, day: diaBR(sv.at), expires: 0, error: null });
+      console.log(`[DSS] motoristas do banco: ${sv.items.length} (de ${sv.at})`);
+    }
+  } catch (e) { console.error('[DSS] não consegui ler os motoristas do banco:', e.message); }
+}
 async function loadDrivers(force) {
+  await driversFromStore();
+  // já tem a lista de hoje: não consulta o DSS de novo
+  if (!force && drivers.items.length && drivers.day === diaBR()) return drivers;
+  // erro recente: espera a próxima tentativa (1 h) usando a lista que já tem
   if (!force && Date.now() < drivers.expires) return drivers;
   if (drivers.loading) return drivers.loading;
   drivers.loading = (async () => {
@@ -1026,16 +1047,20 @@ async function loadDrivers(force) {
         const key = nome.toUpperCase() + '|' + doc;
         if (!seen.has(key)) seen.set(key, { nome, cpf: doc, id: pick(it, ['id', 'motorista_id']) });
       }
-      drivers = { items: [...seen.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')), expires: Date.now() + 15 * 60e3, error: null, loading: null, at: new Date().toISOString() };
+      const at = new Date().toISOString();
+      drivers = { items: [...seen.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')), expires: 0, error: null, loading: null, at, day: diaBR(at) };
       console.log(`[DSS] motoristas carregados: ${drivers.items.length}`);
+      try { await store.setSetting(DRIVERS_KEY, { items: drivers.items, at }); } catch (e) { console.error('[DSS] não consegui guardar os motoristas no banco:', e.message); }
     } catch (e) {
-      drivers = Object.assign({}, drivers, { expires: Date.now() + 60e3, error: e.message || String(e), status: e.status || 502, loading: null });
+      drivers = Object.assign({}, drivers, { expires: Date.now() + 60 * 60e3, error: e.message || String(e), status: e.status || 502, loading: null });
       console.error('[DSS] motoristas:', drivers.error);
     }
     return drivers;
   })();
   return drivers.loading;
 }
+// confere de hora em hora: virou o dia, busca a lista nova (uma vez por dia)
+if (!process.env.DSS_DIARIO_OFF) setInterval(() => { loadDrivers().catch(() => {}); }, 60 * 60e3).unref();
 route('GET', '/api/dss/motoristas', async (req) => {
   await requireUser(req);
   const d = await loadDrivers(new URL(req.url, 'http://x').searchParams.get('atualizar') === '1');
@@ -1260,6 +1285,34 @@ route('GET', '/api/carga/data-baixa', async (req) => {
   const b = await dataBaixa(c);
   return b ? { achou: true, container: nroContainer(c), data: b.data, dataHora: b.dataHora } : { achou: false, container: nroContainer(c) };
 });
+// vários containers de uma vez (PRÉ STACKING VAZIO: preencher todas as DATA BAIXA vazias).
+// Busca a lista da API uma vez; os que não estiverem nela são consultados um a um (até 10 por vez).
+route('POST', '/api/carga/datas-baixa', async (req) => {
+  await requireUser(req);
+  const b = await readBody(req, 200000);
+  const lista = [...new Set((Array.isArray(b.containers) ? b.containers : []).map(nroContainer).filter((n) => n.length >= 6))].slice(0, 300);
+  const out = {};
+  if (!lista.length) return { resultados: out };
+  const melhor = (regs, n) => {
+    let best = null;
+    for (const it of regs) {
+      if (nroContainer(regContainer(it)) !== n) continue;
+      const d = cargaData(regDataHora(it));
+      if (d && (!best || d.ts > best.ts)) best = d;
+    }
+    return best;
+  };
+  let todos = [], erro = null;
+  try { todos = await cargaTodos(); } catch (e) { erro = e; }
+  let avulsas = 0;
+  for (const n of lista) {
+    let d = melhor(todos, n);
+    if (!d && avulsas < 10) { avulsas++; try { d = melhor(await cargaDoContainer(n), n); } catch (e) { erro = erro || e; } }
+    out[n] = d ? d.data : null;
+  }
+  if (erro && !Object.values(out).some(Boolean)) throw erro;
+  return { resultados: out };
+});
 // consulta para a tela (Administrador › Containers da Carga OF): registros de um container, ou os mais recentes
 route('GET', '/api/carga/consulta', async (req) => {
   await requireUser(req);
@@ -1438,7 +1491,7 @@ function describeDbError(e) {
 
 (async function start() {
   for (let attempt = 1; ; attempt++) {
-    try { await store.init(); await loadColors(); break; }
+    try { await store.init(); await loadColors(); setTimeout(() => { loadDrivers().catch(() => {}); }, 3000); break; }
     catch (e) {
       console.error(`Não foi possível iniciar o banco de dados (tentativa ${attempt}/6): ${describeDbError(e)}`);
       if (attempt >= 6) process.exit(1);
