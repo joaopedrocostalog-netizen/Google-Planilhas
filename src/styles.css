@@ -1260,3 +1260,73 @@ body.executor .doc-title { pointer-events: none; }
 .pn-res h3 { font-size: 16px; }
 .pn-res > p { margin: 0 0 12px; font-size: 13px; color: var(--ink); }
 .pn-fim { margin-top: 10px; }
+
+/* ---------- Celular e app no iPhone (tela inicial) ---------- */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+html, body { overscroll-behavior: none; }
+body.touch, body.touch button, body.touch .tab, body.touch .mb { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+/* a grade rola com o dedo; o pinça é tratado pela planilha (zoom da grade, não da página) */
+body.touch .grid-scroll { touch-action: pan-x pan-y; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+/* app aberto pela tela inicial: o cabeçalho passa por baixo da barra de status (entalhe) */
+.appbar { padding-top: max(6px, env(safe-area-inset-top)); padding-left: max(10px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+.tabsbar { height: calc(40px + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom); padding-left: max(8px, env(safe-area-inset-left)); padding-right: max(8px, env(safe-area-inset-right)); }
+
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+  /* cabeçalho em 2 linhas: logo · título · ALERTA · botões / menus rolando de lado */
+  .appbar { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; grid-template-areas: "logo title alert right" "menu menu menu menu";
+    align-items: center; column-gap: 6px; row-gap: 2px; padding-bottom: 2px; padding-right: max(8px, env(safe-area-inset-right)); padding-left: max(6px, env(safe-area-inset-left)); }
+  .appbar-left, .title-block { display: contents; }
+  .app-logo { grid-area: logo; padding: 0; }
+  .app-logo svg { width: 28px; height: 28px; }
+  .title-row { grid-area: title; min-width: 0; }
+  .doc-title { font-size: 16px; min-width: 0; max-width: none; width: 100%; flex: 1 1 auto; padding: 2px 4px; }
+  .title-row .star { display: none; }
+  .menubar { grid-area: menu; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -4px; padding: 0 2px 2px; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent); }
+  .menubar::-webkit-scrollbar { display: none; }
+  .menubar .mb { flex: none; padding: 5px 9px; font-size: 14px; white-space: nowrap; }
+  .alert-btn { grid-area: alert; position: static; transform: none; padding: 4px 8px; }
+  .al-ticker { display: none !important; }
+  .appbar-right { grid-area: right; gap: 4px; }
+  .btn-share { padding: 0; width: 34px; height: 34px; justify-content: center; }
+  .chat-btn { padding: 5px; }
+  body.compact .menubar { display: none; }
+
+  /* ferramentas: uma linha que rola de lado */
+  .toolbar-wrap { padding: 4px 6px 2px; }
+  .toolbar { -webkit-overflow-scrolling: touch; padding: 2px 6px; }
+  body.touch .tb { min-width: 36px; height: 36px; }
+
+  /* barra de fórmulas: 16 px evita o zoom automático do iPhone ao tocar */
+  .formula-input, .name-box, .formula-mirror { font-size: 16px; }
+  .name-box-wrap { width: 70px; }
+
+  /* janelas: ocupam a largura da tela, rolam por dentro e respeitam o entalhe */
+  .modal { width: calc(100vw - 16px) !important; max-width: none; max-height: calc(100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
+  .modal-head { padding: 14px 10px 6px 16px; }
+  .modal-head h2 { font-size: 18px; }
+  .modal-body { padding: 6px 16px 12px; }
+  .modal-foot { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); }
+  .modal-foot .btn, .modal-foot button { min-height: 40px; }
+  .modal-tall { height: calc(100dvh - 24px); }
+  .modal input, .modal select, .modal textarea, .side-panel input, .side-panel select, .side-panel textarea { font-size: 16px; }
+  .popup, .submenu { max-width: calc(100vw - 12px); max-height: calc(100dvh - 16px); }
+  body.touch .menu-item { min-height: 40px; }
+  .side-panel { width: 100vw; }
+  .al-panel { top: calc(8px + env(safe-area-inset-top)); max-height: calc(100dvh - 24px - env(safe-area-inset-top)); width: calc(100vw - 12px); }
+
+  /* abas de baixo: maiores para o dedo */
+  .tab { font-size: 14px; padding: 0 14px; }
+  body.touch .tab-btn { padding: 9px; }
+}
+@media (max-width: 380px) {
+  .alert-btn .al-n { padding: 0 5px; }
+  #btn-chat { display: none; }
+}
+/* celular deitado: pouca altura, então menus na mesma linha do título e barras mais baixas */
+@media (pointer: coarse) and (max-height: 500px) and (min-width: 600px) {
+  .appbar { grid-template-columns: auto minmax(0, 200px) minmax(0, 1fr) auto auto; grid-template-areas: "logo title menu alert right"; padding-bottom: 4px; }
+  .menubar { padding-bottom: 0; }
+  .toolbar-wrap { padding: 2px 6px 1px; }
+  body.touch .tb { height: 32px; }
+  .tabsbar { height: calc(34px + env(safe-area-inset-bottom)); }
+}

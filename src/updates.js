@@ -4,6 +4,15 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '06/11/2026', title: 'Celular e app no iPhone', items: [
+      ['App no iPhone', 'No Safari, toque em Compartilhar › Adicionar à Tela de Início: a planilha abre como app, em tela cheia, com ícone próprio.'],
+      ['Cabeçalho', 'No celular, o cabeçalho ocupa 2 linhas: título, ALERTA e botões em cima; os menus numa linha que rola de lado.'],
+      ['Editar com toque', 'Um toque seleciona a célula; tocar de novo na mesma célula abre a edição com o teclado. O teclado não abre mais a cada toque.'],
+      ['Menu com toque longo', 'Segurar o dedo numa célula abre o mesmo menu do botão direito.'],
+      ['Zoom com pinça', 'Com dois dedos na grade, o zoom muda só a planilha (50% a 200%), sem ampliar os menus.'],
+      ['Janelas e menus', 'Janelas, menus e painéis cabem na tela do celular, respeitam o entalhe e a barra de baixo do iPhone, e os campos não dão zoom ao tocar.'],
+      ['Celular deitado', 'Com o celular deitado, os menus ficam na mesma linha do título para sobrar mais espaço para a planilha.'],
+    ] },
     { date: '05/11/2026', title: 'Métricas: gráficos interativos e teste de pico de usuários', items: [
       ['Métricas', 'Administrador › "Métricas, gráficos e teste de pico" agora tem três abas: Agora (limite e quem está conectado), Gráficos e Teste de pico.'],
       ['Gráficos', 'Pessoas conectadas ao longo do dia, sessões de cada pessoa (entrada e saída), células editadas por hora e por dia e linhas com informação em cada página. Passe o mouse sobre os gráficos para ver os detalhes.'],
