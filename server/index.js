@@ -877,12 +877,49 @@ route('POST', '/api/docs/:id/mail/find', async (req, p) => {
   catch (e) { throw httpError(502, 'Não foi possível falar com o servidor de e-mail: ' + e.message); }
   if (!th) return { achou: false, ref };
   const citada = !!th.body;
+  // a última mensagem, para mostrar na tela como ela é (com as imagens da assinatura)
+  const preview = th.body ? mail.previewHtml(th.body, 2.5e6) : '';
   delete th.body;
-  return { achou: true, ref, thread: Object.assign(th, { citada }), destinatarios: replyAllOf(th, cfg.from) };
+  return { achou: true, ref, thread: Object.assign(th, { citada, preview }), destinatarios: replyAllOf(th, cfg.from) };
 });
-const MAX_ANEXOS = Number(process.env.MAIL_MAX_ANEXOS || 20 * 1024 * 1024);
+// limite dos anexos (somados, em bytes): 15 MB
+const MAX_ANEXOS = Number(process.env.MAIL_MAX_ANEXOS || 15 * 1024 * 1024);
+const tamanhoB64 = (s) => Math.floor(String(s || '').replace(/=+$/, '').length * 3 / 4);
+// assinatura do e-mail (guardada no servidor; vem do webmail ou é enviada pela tela)
+const SIG_KEY = 'mailSignature';
+const MAX_ASSINATURA = 1.5 * 1024 * 1024;
+async function assinatura() { try { return await store.getSetting(SIG_KEY); } catch (e) { return null; } }
+const sigComImagens = (sig) => (sig ? (sig.images || []).reduce((h, im) => h.split('cid:' + im.cid).join('data:' + im.type + ';base64,' + im.data), sig.html || '') : '');
+route('GET', '/api/docs/:id/mail/signature', async (req, p) => {
+  const q = new URL(req.url, 'http://x').searchParams;
+  const { perms, sheet } = await mailRoom(req, p.id, String(q.get('sheet') || ''));
+  if (!canSendMail(perms, sheet)) throw httpError(403, 'Enviar status por e-mail não está liberado para você.');
+  const sig = await assinatura();
+  return sig ? { tem: true, html: sigComImagens(sig), origem: sig.origem || '', por: sig.by || '', em: sig.at || '' } : { tem: false };
+});
+// lê a assinatura configurada no webmail da conta (para a tela reduzir as imagens e salvar)
+route('POST', '/api/docs/:id/mail/signature/webmail', async (req, p) => {
+  const b = await readBody(req, 4000);
+  const { perms, sheet } = await mailRoom(req, p.id, String(b.sheet || ''));
+  if (!canSendMail(perms, sheet)) throw httpError(403, 'Enviar status por e-mail não está liberado para você.');
+  if (!mail.configured()) throw httpError(503, 'O e-mail ainda não está configurado no servidor.');
+  try { return await mail.webmailSignature(mail.config()); }
+  catch (e) { throw httpError(502, 'Não foi possível ler a assinatura do webmail: ' + e.message); }
+});
+route('PUT', '/api/docs/:id/mail/signature', async (req, p) => {
+  const b = await readBody(req, 4 * 1024 * 1024);
+  const { user, perms, sheet } = await mailRoom(req, p.id, String(b.sheet || ''));
+  if (!canSendMail(perms, sheet)) throw httpError(403, 'Enviar status por e-mail não está liberado para você.');
+  const html = String(b.html || '').trim();
+  if (!html) { await store.setSetting(SIG_KEY, null); return { ok: true, tem: false }; }
+  const sp = mail.splitInlineImages(mail.quotableHtml({ html: '<body>' + html + '</body>' }).replace(/<img[^>]+src\s*=\s*["']?cid:[^>]*>/gi, ''), 'assinatura');
+  const peso = sp.images.reduce((n, im) => n + tamanhoB64(im.data), 0) + sp.html.length;
+  if (peso > MAX_ASSINATURA) throw httpError(413, 'A assinatura está grande demais (limite de 1,5 MB). Use uma imagem menor.');
+  await store.setSetting(SIG_KEY, { html: sp.html, images: sp.images, origem: b.origem === 'webmail' ? 'webmail' : 'manual', by: user.name, at: new Date().toISOString() });
+  return { ok: true, tem: true };
+});
 route('POST', '/api/docs/:id/mail/send', async (req, p) => {
-  const b = await readBody(req, MAX_ANEXOS + 2 * 1024 * 1024);
+  const b = await readBody(req, Math.ceil(MAX_ANEXOS * 1.4) + 2 * 1024 * 1024);
   const { user, perms, sheet, room } = await mailRoom(req, p.id, String(b.sheet || ''));
   if (!canSendMail(perms, sheet)) throw httpError(403, 'Enviar status por e-mail não está liberado para você.');
   if (!mail.configured()) throw httpError(503, 'O e-mail ainda não está configurado no servidor.');
@@ -895,13 +932,19 @@ route('POST', '/api/docs/:id/mail/send', async (req, p) => {
     name: String(a.name || 'anexo').slice(0, 150), type: String(a.type || 'application/octet-stream').slice(0, 100),
     data: String(a.data || '').replace(/\s+/g, ''),
   }));
-  const total = anexos.reduce((n, a) => n + a.data.length, 0);
-  if (total > MAX_ANEXOS) throw httpError(413, 'Os anexos somam mais do que o limite permitido.');
+  const total = anexos.reduce((n, a) => n + tamanhoB64(a.data), 0);
+  if (total > MAX_ANEXOS) throw httpError(413, `Os anexos somam mais de ${Math.round(MAX_ANEXOS / 1048576)} MB.`);
   const cfg = mail.config();
   let html = String(b.html || ''), text = String(b.text || '');
   let inReplyTo = String(b.inReplyTo || '').trim() || null, references = String(b.references || '').trim() || null;
   // resposta na conversa: o servidor acha de novo a última mensagem com a REFERENCIA no assunto,
   // responde a ela (In-Reply-To/References) e cita o histórico embaixo, como o Outlook faz
+  const inline = [];
+  // assinatura (logo abaixo do texto e da tabela, antes do histórico, como no webmail)
+  if (b.signature !== false) {
+    const sig = await assinatura();
+    if (sig && sig.html) { html += '<div class="assinatura">' + sig.html + '</div>'; inline.push(...(sig.images || [])); }
+  }
   const ref = String(b.ref || '').trim();
   if (ref.length >= 3) {
     let th = null;
@@ -909,12 +952,13 @@ route('POST', '/api/docs/:id/mail/send', async (req, p) => {
     catch (e) { throw httpError(502, 'Não foi possível falar com o servidor de e-mail: ' + e.message); }
     if (th) {
       if (th.messageId) { inReplyTo = th.messageId; references = [th.references, th.messageId].filter(Boolean).join(' '); }
-      if (b.quote !== false && th.body) { const qb = mail.quoteBlock(th); html += qb.html; text += qb.text; }
+      // histórico citado, com as imagens (assinaturas) das mensagens anteriores
+      if (b.quote !== false && th.body) { const qb = mail.quoteBlock(th); html += qb.html; text += qb.text; for (const im of qb.images) if (!inline.some((x) => x.cid === im.cid)) inline.push(im); }
     }
   }
   let r;
   try {
-    r = await mail.send(cfg, { to, cc, subject, html, text, inReplyTo, references, attachments: anexos });
+    r = await mail.send(cfg, { to, cc, subject, html, text, inReplyTo, references, attachments: anexos, inline });
   } catch (e) { throw httpError(502, 'O servidor de e-mail recusou o envio: ' + e.message); }
   console.log(`[e-mail] ${user.email} enviou "${subject}" para ${r.rcpt.length} destinatário(s) na planilha ${room.id}`);
   return { ok: true, messageId: r.messageId, destinatarios: r.rcpt, por: user.name };

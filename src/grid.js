@@ -265,7 +265,9 @@
     let link = (cell && cell.link) || null;
     if (!link && isFormula && /^=\s*(HYPERLINK|HIPERLINK)\s*\(/i.test(raw)) { const m = /\(\s*"([^"]+)"/.exec(raw); if (m) link = m[1]; }
     if (!link && typeof v === 'string' && /^(https?:\/\/|www\.)\S+$/i.test(v)) link = v.startsWith('www.') ? 'https://' + v : v;
-    return { cell, raw, v, s, text, align, dv, link, crit, locked, swap, isErr: E.isErr(v), note: cell && cell.note, comment: cell && cell.comments && cell.comments.length };
+    // marcas da operação (coluna MODALIDADE): SC = sem custos, SPOT = frete spot
+    const tags = cell && (cell.sc || cell.spot) ? [cell.sc ? 'SC' : '', cell.spot ? 'SPOT' : ''].filter(Boolean).join(' · ') : '';
+    return { cell, raw, v, s, text, align, dv, link, crit, locked, swap, tags, isErr: E.isErr(v), note: cell && cell.note, comment: cell && cell.comments && cell.comments.length };
   }
   App.cellInfo = (r, c) => cellInfo(App.sheet(), doc.active, r, c);
 
@@ -357,7 +359,7 @@
           continue;
         }
         const info = cellInfo(sh, si, r, c);
-        if (info.text === '' && !info.s.bg && !info.s.bd && !info.dv && !info.note && !info.comment && !(info.v && typeof info.v === 'object' && !info.isErr)) continue;
+        if (info.text === '' && !info.s.bg && !info.s.bd && !info.dv && !info.note && !info.comment && !info.tags && !(info.v && typeof info.v === 'object' && !info.isErr)) continue;
         items.push({ r, c, x: X(c), y: Y(r), w: colW(c), h: rowH(r), info });
       }
     }
@@ -715,6 +717,19 @@
     if (inf.isErr || invalid) tri(C.err);
     else if (inf.comment) tri(C.comment);
     else if (inf.note) tri(C.note);
+    if (inf.tags) {
+      // SC / SPOT pequeno, em vermelho, no canto esquerdo
+      const z = st.z, fz = Math.max(6.5, 7.5 * z);
+      ctx.save();
+      ctx.font = `bold ${fz}px Arial`;
+      ctx.textBaseline = 'top'; ctx.textAlign = 'left';
+      const w = ctx.measureText(inf.tags).width, h = fz + 2 * z;
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      roundRect(it.x + 1.5 * z, it.y + 1.5 * z, w + 4 * z, h, 2 * z); ctx.fill();
+      ctx.fillStyle = '#d93025';
+      ctx.fillText(inf.tags, it.x + 3.5 * z, it.y + 2.5 * z);
+      ctx.restore();
+    }
     if (inf.dv && inf.dv.type === 'dtrange') {
       // ícone de calendário
       const z = st.z, w = 10 * z, x = it.x + it.w - w - 4 * z, y = it.y + (it.h - w) / 2;

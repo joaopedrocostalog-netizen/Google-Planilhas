@@ -7,6 +7,7 @@ function memoryStore(file) {
   if (file && fs.existsSync(file)) { try { db = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { /* começa vazio */ } }
   db.history = db.history || {};
   db.messages = db.messages || []; db.msgSeq = db.msgSeq || 0;
+  db.settings = db.settings || {};
   let timer = null;
   const persist = () => {
     if (!file) return;
@@ -38,6 +39,8 @@ function memoryStore(file) {
     async createSession(hash, userId) { db.sessions[hash] = { user_id: userId, created_at: Date.now() }; persist(); },
     async getSession(hash) { return clone(db.sessions[hash]); },
     async deleteSession(hash) { delete db.sessions[hash]; persist(); },
+    async getSetting(key) { return clone(db.settings[key] || null); },
+    async setSetting(key, value) { if (value === null) delete db.settings[key]; else db.settings[key] = clone(value); persist(); },
     async deleteUserSessions(userId) { let n = 0; for (const k of Object.keys(db.sessions)) if (db.sessions[k].user_id === userId) { delete db.sessions[k]; n++; } persist(); return n; },
     async listDocsFor(user) {
       return Object.values(db.docs)
@@ -133,6 +136,8 @@ function pgStore(url) {
         id BIGSERIAL PRIMARY KEY, doc_id TEXT NOT NULL REFERENCES docs(id) ON DELETE CASCADE,
         at TIMESTAMPTZ NOT NULL DEFAULT now(), name TEXT NOT NULL DEFAULT '', by_name TEXT NOT NULL DEFAULT '', auto BOOLEAN NOT NULL DEFAULT false, data_gz BYTEA NOT NULL)`);
       await q('CREATE INDEX IF NOT EXISTS doc_versions_doc ON doc_versions(doc_id, id DESC)');
+      // configurações gerais do servidor (ex.: assinatura do e-mail)
+      await q('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())');
       await q('CREATE INDEX IF NOT EXISTS messages_to ON messages(to_id, id DESC)');
       await q('CREATE INDEX IF NOT EXISTS messages_from ON messages(from_id, id DESC)');
     },
@@ -168,6 +173,11 @@ function pgStore(url) {
     async createSession(hash, userId) { await q('INSERT INTO sessions (token, user_id) VALUES ($1, $2)', [hash, userId]); },
     async getSession(hash) { const r = await row('SELECT user_id, extract(epoch from created_at) * 1000 AS created_at FROM sessions WHERE token = $1', [hash]); return r ? { user_id: r.user_id, created_at: Number(r.created_at) } : null; },
     async deleteSession(hash) { await q('DELETE FROM sessions WHERE token = $1', [hash]); },
+    async getSetting(key) { const r = await row('SELECT value FROM settings WHERE key = $1', [key]); return r ? r.value : null; },
+    async setSetting(key, value) {
+      if (value === null) await q('DELETE FROM settings WHERE key = $1', [key]);
+      else await q('INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()', [key, JSON.stringify(value)]);
+    },
     async deleteUserSessions(userId) { const r = await q('DELETE FROM sessions WHERE user_id = $1', [userId]); return r.rowCount || 0; },
     async listDocsFor(user) {
       const r = await q(`SELECT id, title, owner_id, acl, updated_at FROM docs

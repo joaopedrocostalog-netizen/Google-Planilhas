@@ -170,14 +170,23 @@ function decodeBody(body, cte) {
   return Buffer.from(body, 'latin1');
 }
 // raw: mensagem inteira em latin1 (um caractere por byte) → { html, text } da parte de texto
+const MAX_IMAGENS = 6 * 1024 * 1024;
 function parseMime(raw, out, depth) {
-  out = out || { html: '', text: '' };
+  out = out || { html: '', text: '', images: [] };
   if ((depth || 0) > 8) return out;
   const sep = /\r?\n\r?\n/.exec(raw);
   const head = sep ? raw.slice(0, sep.index) : raw, body = sep ? raw.slice(sep.index + sep[0].length) : '';
   const h = parseHeaders(head);
   const ct = h['content-type'] || 'text/plain';
   const type = ct.split(';')[0].trim().toLowerCase();
+  // imagens embutidas (assinaturas, logos): guardadas para a citação continuar mostrando
+  const cid = (h['content-id'] || '').trim().replace(/^<|>$/g, '');
+  if (type.startsWith('image/') && cid) {
+    const data = decodeBody(body, h['content-transfer-encoding']);
+    const total = out.images.reduce((n, x) => n + x.size, 0);
+    if (data.length && total + data.length <= MAX_IMAGENS) out.images.push({ cid, type, name: paramOf(ct, 'name') || paramOf(h['content-disposition'] || '', 'filename') || cid.split('@')[0], data: data.toString('base64'), size: data.length });
+    return out;
+  }
   if (/attachment/i.test(h['content-disposition'] || '')) return out;
   if (type.startsWith('multipart/')) {
     const b = paramOf(ct, 'boundary');
@@ -206,7 +215,7 @@ function quotableHtml(parts) {
   const bm = /<body[^>]*>([\s\S]*?)(<\/body>|$)/i.exec(html);
   html = bm ? bm[1] : html.replace(/<head[\s\S]*?<\/head>/i, '');
   html = html.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<(iframe|object|embed|form)[\s\S]*?<\/\1>/gi, '')
-    .replace(/<img[^>]+src\s*=\s*["']?cid:[^>]*>/gi, '')
+    .replace(/<img[^>]+src\s*=\s*["']?cid:([^"'\s>]+)[^>]*>/gi, (tag, id) => ((parts.images || []).some((x) => x.cid === id) ? tag : ''))
     .replace(/\s+on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
     .replace(/(href|src)\s*=\s*(["'])\s*javascript:[^"']*\2/gi, '$1="#"');
   return styles + html;
@@ -227,8 +236,72 @@ function quoteBlock(th) {
     linha('De:', th.from) + linha('Enviada em:', dataPt(th.when || th.date)) + linha('Para:', th.to) + linha('Cc:', th.cc) + linha('Assunto:', th.subject) +
     '</p></div>' + quotableHtml(th.body);
   const t = th.body.text || String(th.body.html || '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<br\s*\/?>|<\/p>|<\/div>|<\/tr>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+  const usadas = (th.body.images || []).filter((x) => html.includes('cid:' + x.cid));
   const text = '\n\n-----Mensagem original-----\n' + [['De', th.from], ['Enviada em', dataPt(th.when || th.date)], ['Para', th.to], ['Cc', th.cc], ['Assunto', th.subject]].filter((x) => x[1]).map((x) => x[0] + ': ' + x[1]).join('\n') + '\n\n' + t.trim();
-  return { html, text };
+  return { html, text, images: usadas };
+}
+// HTML para mostrar na tela (as imagens embutidas viram data:), com limite de tamanho
+function previewHtml(body, limite) {
+  let html = quotableHtml(body || {});
+  for (const im of (body && body.images) || []) {
+    if (html.length + im.data.length > (limite || 2.5e6)) continue;
+    html = html.split('cid:' + im.cid).join('data:' + im.type + ';base64,' + im.data);
+  }
+  return html.replace(/<img[^>]+src\s*=\s*["']?cid:[^>]*>/gi, '');
+}
+// ---------- Assinatura configurada no webmail (Roundcube) ----------
+// Entra no webmail com a mesma conta, lê a identidade (nome e assinatura em HTML) e sai.
+function webmailUrl(cfg) {
+  const u = env('MAIL_WEBMAIL_URL', 'MAIL_WEBMAIL');
+  if (u) return u.replace(/\/+$/, '');
+  const dom = (cfg.from || cfg.user || '').split('@')[1];
+  return dom ? 'https://webmail.' + dom : '';
+}
+async function webmailSignature(cfg) {
+  const base = webmailUrl(cfg);
+  if (!base) throw new Error('Endereço do webmail não configurado (MAIL_WEBMAIL_URL).');
+  const jar = new Map();
+  const guarda = (r) => {
+    const list = typeof r.headers.getSetCookie === 'function' ? r.headers.getSetCookie() : String(r.headers.get('set-cookie') || '').split(/,(?=\s*[A-Za-z0-9_]+=)/);
+    for (const c of list) { const m = /^\s*([^=;\s]+)=([^;]*)/.exec(c || ''); if (m) { if (m[2] === '' || /deleted/i.test(m[2])) jar.delete(m[1]); else jar.set(m[1], m[2]); } }
+  };
+  const cookie = () => [...jar].map(([k, v]) => k + '=' + v).join('; ');
+  const pede = async (path, opts) => {
+    const r = await fetch(base + path, Object.assign({ redirect: 'manual', signal: AbortSignal.timeout(30000) }, opts || {}, { headers: Object.assign({ Cookie: cookie(), 'User-Agent': 'Mozilla/5.0 (Planilhas)' }, (opts && opts.headers) || {}) }));
+    guarda(r);
+    return r;
+  };
+  const tokenDe = (html) => { const m = /name="_token"\s+value="([^"]+)"/.exec(html) || /"request_token"\s*:\s*"([^"]+)"/.exec(html); return m ? m[1] : ''; };
+  const ini = await pede('/?_task=login');
+  const tk = tokenDe(await ini.text());
+  const form = new URLSearchParams({ _token: tk, _task: 'login', _action: 'login', _timezone: 'America/Sao_Paulo', _url: '', _user: cfg.user, _pass: cfg.pass });
+  const lg = await pede('/?_task=login', { method: 'POST', body: form.toString(), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+  await lg.text().catch(() => '');
+  if (lg.status >= 400) throw new Error('o webmail recusou o login (' + lg.status + ')');
+  const lista = await (await pede('/?_task=settings&_action=identities')).text();
+  const iid = (/id="rcmrow(\d+)"/.exec(lista) || [])[1];
+  if (!iid) throw new Error('não foi possível entrar no webmail para ler a assinatura');
+  const pag = await (await pede('/?_task=settings&_action=edit-identity&_iid=' + iid + '&_framed=1')).text();
+  const unesc = (t) => String(t || '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&amp;/g, '&');
+  const sig = (/<textarea[^>]*name="_signature"[^>]*>([\s\S]*?)<\/textarea>/.exec(pag) || [])[1];
+  const nome = (/name="_name"[^>]*value="([^"]*)"/.exec(pag) || [])[1];
+  const htmlMode = /name="_html_signature"[^>]*checked/.test(pag);
+  pede('/?_task=logout&_token=' + encodeURIComponent(tokenDe(pag) || tk)).catch(() => {});
+  if (sig === undefined) throw new Error('assinatura não encontrada no webmail');
+  let html = unesc(sig);
+  if (!htmlMode) html = '<div>' + escHtml(html).replace(/\r?\n/g, '<br>') + '</div>';
+  return { html, name: unesc(nome || '') };
+}
+// HTML da assinatura com imagens data: → HTML com cid: e a lista de imagens embutidas
+function splitInlineImages(html, prefix) {
+  const images = [];
+  let n = 0;
+  const out = String(html || '').replace(/src\s*=\s*(["'])data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)\1/gi, (m, q, type, data) => {
+    const cid = (prefix || 'assinatura') + '-' + (++n) + '@costalog';
+    images.push({ cid, type: type.toLowerCase(), name: (prefix || 'assinatura') + '-' + n + '.' + (type.split('/')[1] || 'png').replace('jpeg', 'jpg'), data: data.replace(/\s+/g, '') });
+    return 'src=' + q + 'cid:' + cid + q;
+  });
+  return { html: out, images };
 }
 // INTERNALDATE do IMAP ("04-Nov-2026 16:15:00 -0300") → milissegundos
 function imapDate(s) { const t = Date.parse(String(s || '').replace(/^(\d{1,2})-(\w{3})-(\d{4})/, '$1 $2 $3')); return isNaN(t) ? 0 : t; }
@@ -383,12 +456,26 @@ function buildMessage(cfg, msg) {
     '--' + alt, 'Content-Type: text/html; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', chunk76(b64(msg.html || '')),
     '--' + alt + '--',
   ].join('\r\n');
+  // imagens embutidas (assinatura, imagens da conversa citada): multipart/related com Content-ID
+  const inline = msg.inline || [];
+  let corpo = bodyParts, corpoTipo = 'multipart/alternative; boundary="' + alt + '"';
+  if (inline.length) {
+    const rel = '=_r' + Math.random().toString(36).slice(2);
+    const rp = ['--' + rel, 'Content-Type: ' + corpoTipo, '', bodyParts];
+    for (const im of inline) {
+      rp.push('--' + rel, 'Content-Type: ' + (im.type || 'image/png') + '; name="' + encWord(im.name || im.cid) + '"', 'Content-ID: <' + im.cid + '>',
+        'Content-Disposition: inline; filename="' + encWord(im.name || im.cid) + '"', 'Content-Transfer-Encoding: base64', '', chunk76(String(im.data).replace(/\s+/g, '')));
+    }
+    rp.push('--' + rel + '--');
+    corpo = rp.join('\r\n');
+    corpoTipo = 'multipart/related; boundary="' + rel + '"';
+  }
   if (!atts.length) {
-    head.push('Content-Type: multipart/alternative; boundary="' + alt + '"');
-    return { id, raw: head.join('\r\n') + '\r\n\r\n' + bodyParts + '\r\n' };
+    head.push('Content-Type: ' + corpoTipo);
+    return { id, raw: head.join('\r\n') + '\r\n\r\n' + corpo + '\r\n' };
   }
   head.push('Content-Type: multipart/mixed; boundary="' + bound + '"');
-  const parts = ['--' + bound, 'Content-Type: multipart/alternative; boundary="' + alt + '"', '', bodyParts];
+  const parts = ['--' + bound, 'Content-Type: ' + corpoTipo, '', corpo];
   for (const a of atts) {
     parts.push('--' + bound,
       'Content-Type: ' + (a.type || 'application/octet-stream') + '; name="' + encWord(a.name) + '"',
@@ -411,7 +498,9 @@ async function sendApi(cfg, msg) {
   if (msg.inReplyTo) headers['In-Reply-To'] = msg.inReplyTo;
   if (msg.references) headers.References = msg.references;
   if (Object.keys(headers).length) corpo.headers = headers;
-  if ((msg.attachments || []).length) corpo.attachments = msg.attachments.map((a) => ({ filename: a.name, content: a.data, content_type: a.type }));
+  const anexos = (msg.attachments || []).map((a) => ({ filename: a.name, content: a.data, content_type: a.type }))
+    .concat((msg.inline || []).map((im) => ({ filename: im.name || im.cid, content: im.data, content_type: im.type, content_id: im.cid })));
+  if (anexos.length) corpo.attachments = anexos;
   let r, txt;
   try {
     r = await fetch(cfg.apiUrl, {
@@ -488,4 +577,4 @@ async function diag(cfg, candidates) {
   return out;
 }
 
-module.exports = { config, configured, findThread, parseMime, quoteBlock, quotableHtml, send, sendApi, sendSmtp, saveToSent, sentMailbox, diag, buildMessage, parseHeaders, decodeHeader, encAddress, addressesOf, imapQuote };
+module.exports = { config, configured, findThread, parseMime, quoteBlock, quotableHtml, previewHtml, webmailSignature, splitInlineImages, webmailUrl, send, sendApi, sendSmtp, saveToSent, sentMailbox, diag, buildMessage, parseHeaders, decodeHeader, encAddress, addressesOf, imapQuote };

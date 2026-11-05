@@ -148,7 +148,7 @@
             <small>${g.n} ${g.n === 1 ? 'linha' : 'linhas'}${!selOnly && g.n !== g.selN ? ` desta referência (${g.selN} ${g.selN === 1 ? 'selecionada' : 'selecionadas'})` : ''}</small>
             ${g.ref ? `<button class="btn btn-sm" data-cs="${i}">Copiar assunto</button>` : ''}
             <button class="btn btn-sm" data-ct="${i}">Copiar tabela</button>
-            ${podeMail && g.ref ? `<button class="btn btn-primary btn-sm" data-cm="${i}">✉ Enviar por e-mail</button>` : ''}</div>` : ''}
+            ${podeMail ? `<button class="btn btn-primary btn-sm" data-cm="${i}">✉ Enviar por e-mail</button>` : ''}</div>` : podeMail ? `<div class="st-gh"><span class="st-sub">Sem a coluna REFERENCIA: na tela do e-mail, procure a conversa pelo assunto.</span><button class="btn btn-primary btn-sm" data-cm="${i}">✉ Enviar por e-mail</button></div>` : ''}
           <div class="st-box">${g.html}</div></section>`).join('')}`;
       const sel = wrap.querySelector('#st-sel');
       if (sel) sel.onchange = () => { selOnly = sel.checked; t = build({ selOnly }) || t; draw(); };
