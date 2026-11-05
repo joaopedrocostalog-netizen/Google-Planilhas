@@ -4,6 +4,12 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '05/11/2026', title: 'Métricas: gráficos interativos e teste de pico de usuários', items: [
+      ['Métricas', 'Administrador › "Métricas, gráficos e teste de pico" agora tem três abas: Agora (limite e quem está conectado), Gráficos e Teste de pico.'],
+      ['Gráficos', 'Pessoas conectadas ao longo do dia, sessões de cada pessoa (entrada e saída), células editadas por hora e por dia e linhas com informação em cada página. Passe o mouse sobre os gráficos para ver os detalhes.'],
+      ['Teste de pico', 'Simula até 60 pessoas editando ao mesmo tempo numa cópia temporária da planilha, só na memória do servidor: nada é gravado. Mostra ao vivo o tempo de resposta, as edições por segundo e o uso do servidor, e no fim diz se aguentou.'],
+      ['Servidor', 'Na subida, o servidor tenta se conectar ao banco até 12 vezes (antes eram 6), porque o banco gratuito às vezes demora a responder.'],
+    ] },
     { date: '05/11/2026', title: 'Métricas da planilha e limite de usuários', items: [
       ['Administrador', 'Novo item "Métricas da planilha e limite de usuários": quem está conectado agora (página, abas e desde quando), pico do dia, quem entrou, células editadas hoje e nos últimos 7 dias, tamanho da planilha e situação do servidor. A tela se atualiza sozinha a cada 15 segundos.'],
       ['Limite de usuários', 'O administrador escolhe quantas pessoas podem estar com a planilha aberta ao mesmo tempo (0 = sem limite). Administradores não ocupam vaga e sempre entram; a mesma pessoa em várias abas conta uma vez; baixar o limite não desconecta ninguém.'],
