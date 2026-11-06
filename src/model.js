@@ -114,7 +114,7 @@
     const x = sh.cells[a];
     if (!x) return;
     if (x.s && !Object.keys(x.s).length) delete x.s;
-    if ((x.v === '' || x.v === undefined || x.v === null) && !x.s && !x.note && !x.link && !x.crit && !x.esc && !x.lock && !x.swap && !x.rodo && !x.sc && !x.spot && !x.psl && !(x.comments && x.comments.length)) delete sh.cells[a];
+    if ((x.v === '' || x.v === undefined || x.v === null) && !x.s && !x.note && !x.link && !x.crit && !x.esc && !x.lock && !x.swap && !x.rodo && !x.sc && !x.spot && !x.psl && !x.psf && !(x.comments && x.comments.length)) delete sh.cells[a];
   }
   App.cleanup = cleanup;
   App.setRaw = (sh, r, c, text) => {

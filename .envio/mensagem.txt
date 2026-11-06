@@ -1,1 +1,0 @@
-Notificações no celular, Painel do dia, tema escuro e Indicadores do mês (ligação na página, tema na grade e service worker)

@@ -528,6 +528,10 @@
       }
       // concluído: muda o STATUS do MAPA (com 2 linhas no vazio, quando as duas estiverem concluídas)
       if (cs.some((c) => concl.includes(c))) {
+        // quando a linha ficou FINALIZADO: guarda a hora (psf) para os indicadores e o aviso no celular
+        if (rowConcluida(ps, pm, r) && !rowConcluidaAntes(ps, pm, r, ic)) {
+          for (const lc of [findCol(pm, A.CONTAINER), findCol(pm, A.OPERACAO)]) { const x = lc && ps.cells[E.addrToStr(r, lc)]; if (x && x.psl && !x.psf) { x.psf = Date.now(); changed = true; } }
+        }
         const linhas = psRowsOf(ps, link.id);
         const agora = linhas.every((x) => rowConcluida(ps, pm, x));
         const antes = rowConcluidaAntes(ps, pm, r, ic) && linhas.filter((x) => x !== r).every((x) => rowConcluida(ps, pm, x));
@@ -571,5 +575,5 @@
   });
 
   App.preStackingHook = (fwd, inv) => { try { return hook(fwd, inv); } catch (e) { console.error(e); App.emit('notify', 'PRÉ STACKING: não foi possível concluir a atualização automática.'); return false; } };
-  App.preStacking = { isRuleClient, colMap, headerRow, lastInfoRow };
+  App.preStacking = { isRuleClient, colMap, headerRow, lastInfoRow, findCol, A, linkOf, kindOfMapa, kindOfPS, psSheet, norm, rowConcluida };
 })(window.App);

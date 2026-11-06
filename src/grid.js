@@ -12,6 +12,19 @@
     note: '#1a1a1a', comment: '#f29900', err: '#e30613', chipBg: '#ececec', check: '#e30613',
     found: 'rgba(255, 214, 0, 0.45)', foundCur: 'rgba(255, 170, 0, 0.75)',
   };
+  // Tema escuro: fundo e texto padrão das células, cabeçalhos e linhas de grade. Células com cor de fundo própria
+  // (STATUS, alertas, formatação condicional) mantêm as cores; texto escuro sem fundo próprio vira claro.
+  const CLARO = Object.assign({}, C, { bg: '#ffffff', text: '#000000' });
+  const ESCURO = Object.assign({}, C, {
+    bg: '#161616', text: '#e8eaed', grid: '#2f2f2f', hdrBg: '#1f1f1f', hdrText: '#a8a8a8', hdrLine: '#3a3a3a',
+    hdrSelBg: '#4a1418', hdrSelText: '#ff9aa1', freeze: '#4a4a4a', chipBg: '#3a3a3a', link: '#ff8a92', note: '#e8eaed',
+  });
+  const escuro = () => document.documentElement.classList.contains('dark');
+  const temaCores = () => Object.assign(C, escuro() ? ESCURO : CLARO);
+  temaCores();
+  // texto escuro sobre o fundo escuro da célula: troca pelo claro (luminância baixa)
+  const escuroDemais = (hex) => { const m = /^#?([0-9a-f]{6})$/i.exec(hex || ''); if (!m) return false; const n = parseInt(m[1], 16); return ((n >> 16) * 299 + ((n >> 8) & 255) * 587 + (n & 255) * 114) / 1000 < 110; };
+  App.on && App.on('tema', () => { temaCores(); st.escFor = null; schedule(); });
   const REF_COLORS = ['#e30613', '#1a73e8', '#188038', '#9334e6', '#e37400', '#d01884', '#12b5cb', '#5f6368'];
   App.REF_COLORS = REF_COLORS;
 
@@ -279,7 +292,7 @@
     const dpr = window.devicePixelRatio || 1;
     st.dpr = dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = C.bg;
     ctx.fillRect(0, 0, canvas.width / dpr, canvas.height / dpr);
     const W = st.vw, H = st.vh, hw = st.hdrW, hh = st.hdrH;
     const regions = [
@@ -368,7 +381,7 @@
     }
     // 2) preenchimentos (e fundo branco de mesclagens para esconder a grade interna)
     for (const it of items) {
-      const bg = it.info.s.bg || (it.merge ? '#ffffff' : null);
+      const bg = it.info.s.bg || (it.merge ? C.bg : null);
       if (!bg) continue;
       ctx.fillStyle = bg;
       // preenchimento nos pixels inteiros da tela (sem meia linha de grade aparecendo em uma célula e não na outra)
@@ -401,7 +414,7 @@
       if (goLeft) { let c = it.c - 1; while (it.x - x0 < extra && c >= Math.max(1, rg.cols[0]) && (colW(c) === 0 || emptyAt(it.r, c))) { if (colW(c)) { occupied.add(it.r + ':' + c); x0 -= colW(c); } c--; } }
       it.tx = x0; it.tw = x1 - x0;
       if (showGrid && (x0 < it.x || x1 > it.x + it.w)) {
-        ctx.fillStyle = inf.s.bg || '#ffffff';
+        ctx.fillStyle = inf.s.bg || C.bg;
         ctx.fillRect(x0, it.y, x1 - x0 - 1, it.h - 1);
       }
     }
@@ -443,7 +456,7 @@
     if (!st.gut) return;
     const g = st.gut, s = Math.round(12 * z);
     ctx.save();
-    ctx.fillStyle = '#ffffff'; ctx.fillRect(hw, 0, W - hw, g);
+    ctx.fillStyle = C.bg; ctx.fillRect(hw, 0, W - hw, g);
     ctx.fillStyle = C.hdrLine; ctx.fillRect(hw, g - 1, W - hw, 1);
     ctx.font = `${(10.5 * z).toFixed(1)}px Arial, sans-serif`; ctx.textBaseline = 'middle';
     const regions = [{ clipX: hw, clipW: st.FW, frozen: true }, { clipX: hw + st.FW, clipW: W - hw - st.FW, frozen: false }];
@@ -659,7 +672,8 @@
     ctx.rect(it.tx + 1, it.y + 1, it.tw - 2, it.h - 2);
     ctx.clip();
     ctx.font = fontFor(s);
-    let color = s.color || '#000000';
+    let color = s.color || C.text;
+    if (C.bg !== '#ffffff' && !s.bg && escuroDemais(color)) color = C.text;
     if (inf.link && !s.color) color = C.link;
     ctx.fillStyle = color;
     // lista suspensa em formato de chip

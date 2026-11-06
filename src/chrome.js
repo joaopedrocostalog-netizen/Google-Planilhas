@@ -279,7 +279,10 @@
       { label: 'Visualização com filtro', icon: 'filterViews', cmd: 'createFilterView' },
       { label: 'Zoom', sub: () => [50, 75, 90, 100, 125, 150, 200].map((z) => ({ label: z + '%', cmd: 'zoom', arg: z, check: () => doc.zoom === z })) },
       { label: 'Ocultar menus', cmd: 'toggleMenus' },
-      { label: 'Tela cheia', cmd: 'fullscreen' },
+      { label: 'Tela cheia', cmd: 'fullscreen' }, '-',
+      { label: 'Painel do dia', cmd: 'painelDia' },
+      { label: 'Indicadores do mês', cmd: 'indicadores' },
+      { label: 'Tema', sub: () => [['claro', 'Claro'], ['escuro', 'Escuro'], ['auto', 'Automático (segue o aparelho)']].map(([t, l]) => ({ label: l, cmd: 'tema', arg: t, check: () => (App.temaAtual ? App.temaAtual() : 'claro') === t })) },
     ] },
     { label: 'Inserir', items: () => (App.adminOnly && App.adminOnly() ? [{ label: 'Incluir processo', icon: 'plus', cmd: 'insertProcess' }, ...(App.canMarkCritical && App.canMarkCritical(App.sheet()) ? [{ label: 'Informar críticos', icon: 'star', cmd: 'informCriticals' }] : []), { label: 'Enviar status (linhas selecionadas)', icon: 'comment', cmd: 'sendStatus' }] : [
       { label: 'Incluir processo', icon: 'plus', cmd: 'insertProcess' }, { label: 'Informar críticos', icon: 'star', cmd: 'informCriticals' }, { label: 'Enviar status (linhas selecionadas)', icon: 'comment', cmd: 'sendStatus' }, '-',
@@ -328,7 +331,8 @@
       { label: 'Localizar e substituir', icon: 'search', cmd: 'findReplace', sc: 'Ctrl+H' },
       { label: 'Estatísticas da coluna', cmd: 'columnStats' },
       { label: 'Intervalos nomeados', cmd: 'namedRanges' },
-      { label: 'Histórico de versões', icon: 'history', cmd: 'versionHistory' },
+      { label: 'Histórico de versões', icon: 'history', cmd: 'versionHistory' }, '-',
+      { label: 'Notificações no celular', cmd: 'notificacoes' },
     ] },
     // tudo o que define quem pode ver, editar ou usar cada função fica aqui (e não no botão direito)
     { label: 'Administrador', items: () => [
