@@ -1,0 +1,54 @@
+# Monitor do servidor (Render). PARA ATIVAR: no GitHub, crie o arquivo .github/workflows/monitor.yml com este conteúdo
+# (Add file › Create new file). O conector do Claude não tem permissão para criar workflows.
+# - A cada 10 minutos confere /api/health e mantém o servidor acordado (o plano gratuito "dorme" sem acesso; os
+#   avisos de demurrage e o status automático dependem dele acordado).
+# - Se não responder em 3 tentativas (~3 min), abre a issue "Servidor fora do ar" (o GitHub manda e-mail para quem
+#   acompanha o repositório). Quando volta, comenta e fecha a issue.
+# Obs.: o GitHub pode atrasar alguns minutos as execuções agendadas e desliga agendamentos de repositórios sem
+# atividade por 60 dias.
+name: Monitor do servidor
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+permissions:
+  issues: write
+concurrency:
+  group: monitor-servidor
+  cancel-in-progress: false
+jobs:
+  conferir:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Conferir o servidor
+        id: saude
+        run: |
+          URL="https://planilhas-servidor.onrender.com/api/health"
+          ok=0
+          for i in 1 2 3; do
+            if curl -fsS --max-time 60 "$URL" -o saude.json; then ok=1; break; fi
+            echo "Tentativa $i sem resposta; esperando..."
+            sleep 30
+          done
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+          [ "$ok" = 1 ] && cat saude.json || true
+      - name: Avisar (abrir ou fechar a issue)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          OK: ${{ steps.saude.outputs.ok }}
+        run: |
+          aberta=$(gh issue list -R "$REPO" --state open --search "Servidor fora do ar in:title" --json number --jq '.[0].number' || true)
+          agora=$(TZ=America/Sao_Paulo date '+%d/%m/%Y %H:%M')
+          if [ "$OK" != "1" ]; then
+            if [ -z "$aberta" ]; then
+              gh issue create -R "$REPO" --title "Servidor fora do ar" --body "O servidor das planilhas não respondeu em $agora (3 tentativas em ~3 min). Confira o painel do Render. Esta issue fecha sozinha quando ele voltar."
+            else
+              gh issue comment "$aberta" -R "$REPO" --body "Ainda sem resposta em $agora."
+            fi
+            exit 1
+          elif [ -n "$aberta" ]; then
+            gh issue comment "$aberta" -R "$REPO" --body "Servidor voltou a responder em $agora."
+            gh issue close "$aberta" -R "$REPO"
+          fi

@@ -1,5 +1,0 @@
-src/demurrage.js 0ccd7cb16520b16c7c81608b179d4f29200d9b2d
-src/historico.js a2da582643843b7245d67248438e7655153c114b
-src/statusauto.js 280e5af8c7cfbcc7fd9afe8086d23e78c64f65fe
-src/automacoes.js 80b4527f4919d8c43d84d056c5680f356221f50f
-ferramentas 25c4df5c8d487d6824758fdb34c85d4d3197caf3
