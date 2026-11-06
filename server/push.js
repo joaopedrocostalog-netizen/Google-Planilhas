@@ -7,8 +7,8 @@ const crypto = require('crypto');
 
 const b64u = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const unb64u = (s) => Buffer.from(String(s).replace(/-/g, '+').replace(/_/g, '/'), 'base64');
-const TIPOS = ['critico', 'troca', 'chat', 'prestacking'];
-const PREFS_PADRAO = { critico: true, troca: true, chat: true, prestacking: false };
+const TIPOS = ['critico', 'troca', 'chat', 'prestacking', 'alerta', 'demurrage', 'status'];
+const PREFS_PADRAO = { critico: true, troca: true, chat: true, prestacking: false, alerta: true, demurrage: true, status: true };
 
 function createPush(store, opts) {
   const log = (opts && opts.log) || console;

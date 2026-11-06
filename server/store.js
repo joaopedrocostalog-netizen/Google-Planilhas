@@ -78,6 +78,15 @@ function memoryStore(file) {
     async getHistory(docId, sheetId, addr, limit) {
       return (db.history[docId] || []).filter((h) => h.sheet_id === sheetId && h.addr === addr).slice(-limit).reverse().map(clone);
     },
+    // histórico do container: células das linhas dele e mudanças em que o número aparece
+    async getHistoryCells(docId, sheetId, addrs, limit) {
+      const set = new Set(addrs);
+      return (db.history[docId] || []).filter((h) => h.sheet_id === sheetId && set.has(h.addr)).slice(-limit).reverse().map(clone);
+    },
+    async getHistoryByText(docId, text, limit) {
+      const t = String(text).toUpperCase();
+      return (db.history[docId] || []).filter((h) => String(h.before || '').toUpperCase().replace(/[^A-Z0-9]/g, '').includes(t) || String(h.after || '').toUpperCase().replace(/[^A-Z0-9]/g, '').includes(t)).slice(-limit).reverse().map(clone);
+    },
     // métricas: edições de células desde "since" (ISO), quantas pessoas e quem mais editou
     async historyStats(docId, since) {
       const by = new Map();
@@ -232,6 +241,16 @@ function pgStore(url) {
     async renameVersion(docId, id, name) { await q('UPDATE doc_versions SET name = $3 WHERE doc_id = $1 AND id = $2', [docId, Number(id), name]); },
     async getHistory(docId, sheetId, addr, limit) {
       const r = await q('SELECT user_id, user_name, ip, at, before, after FROM cell_history WHERE doc_id = $1 AND sheet_id = $2 AND addr = $3 ORDER BY id DESC LIMIT $4', [docId, sheetId, addr, limit]);
+      return r.rows;
+    },
+    async getHistoryCells(docId, sheetId, addrs, limit) {
+      const r = await q('SELECT sheet_id, addr, user_id, user_name, at, before, after FROM cell_history WHERE doc_id = $1 AND sheet_id = $2 AND addr = ANY($3::text[]) ORDER BY id DESC LIMIT $4', [docId, sheetId, addrs, limit]);
+      return r.rows;
+    },
+    async getHistoryByText(docId, text, limit) {
+      const r = await q(`SELECT sheet_id, addr, user_id, user_name, at, before, after FROM cell_history WHERE doc_id = $1
+        AND (regexp_replace(upper(coalesce(before, '')), '[^A-Z0-9]', '', 'g') LIKE $2 OR regexp_replace(upper(coalesce(after, '')), '[^A-Z0-9]', '', 'g') LIKE $2)
+        ORDER BY id DESC LIMIT $3`, [docId, '%' + String(text).toUpperCase() + '%', limit]);
       return r.rows;
     },
     // métricas: edições de células desde "since" (ISO), quantas pessoas e quem mais editou

@@ -64,7 +64,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   // servidor de push falso (como o da Apple/Google): guarda o que chegar
   const PUSH_PORT = PORT + 1001, pushRecebidos = [];
   const pushSrv = require('http').createServer((req, res) => { const ch = []; req.on('data', (d) => ch.push(d)); req.on('end', () => { pushRecebidos.push({ headers: req.headers, body: Buffer.concat(ch) }); res.writeHead(201); res.end(); }); }).listen(PUSH_PORT);
-  const proc = spawn(process.execPath, [path.join(__dirname, '..', 'server', 'index.js')], { env: Object.assign({}, process.env, { PORT: String(PORT), DATABASE_URL: '', ADMIN_EMAILS: 'ana@empresa.com', Carga_OF_Container: `http://127.0.0.1:${CARGA_PORT}/listarCargaContainerTerminal`, DSS_USUARIO: 'dss', DSS_SENHA: 'segredo', DSS_BASE_URL: `http://127.0.0.1:${CARGA_PORT}`, PUSH_PERMITE_HTTP: '1', PUSH_JUNTAR_MS: '150', DSS_DIARIO_OFF: '1' }), stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = spawn(process.execPath, [path.join(__dirname, '..', 'server', 'index.js')], { env: Object.assign({}, process.env, { PORT: String(PORT), DATABASE_URL: '', ADMIN_EMAILS: 'ana@empresa.com', Carga_OF_Container: `http://127.0.0.1:${CARGA_PORT}/listarCargaContainerTerminal`, DSS_USUARIO: 'dss', DSS_SENHA: 'segredo', DSS_BASE_URL: `http://127.0.0.1:${CARGA_PORT}`, PUSH_PERMITE_HTTP: '1', PUSH_JUNTAR_MS: '150', DSS_DIARIO_OFF: '1', ROTINAS_OFF: '1', ROTINAS_TESTE: '1' }), stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';
   proc.stdout.on('data', (d) => { log += d; });
   proc.stderr.on('data', (d) => { log += d; });
@@ -441,6 +441,49 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const can = await api('POST', '/api/push/cancelar', { endpoint: sub.endpoint }, ana.token);
       check('desligar notificações', [can.ok, (await api('POST', '/api/push/estado', { endpoint: sub.endpoint }, ana.token)).inscrito], [true, false]);
       check('notificações exigem login', (await api('GET', '/api/push/chave'))._status, 401);
+      // um exemplo de cada aviso
+      await api('POST', '/api/push/inscrever', { subscription: sub, prefs: {}, appUrl: 'https://exemplo.github.io/Google-Planilhas/' }, ana.token);
+      const antes = pushRecebidos.length;
+      const ex = await api('POST', '/api/push/teste', { exemplos: true }, ana.token);
+      check('exemplo de cada aviso', [ex.exemplos, ex.enviadas, pushRecebidos.length - antes], [7, 7, 7]);
+
+      // ---------- rotinas: automações, alertas, demurrage, status automático, histórico ----------
+      const dr = await api('POST', '/api/docs', { title: 'Rotinas', data: { sheets: [
+        { id: 'vz', name: 'PRÉ STACKING VAZIO', rows: 50, cols: 12, cells: { A1: { v: 'CLIENTE' }, B1: { v: 'CONTAINER' }, C1: { v: 'DATA BAIXA' }, D1: { v: 'DEMMURAGE' }, E1: { v: 'DATA' }, F1: { v: 'STATUS' },
+          A2: { v: 'ACME' }, B2: { v: 'CSQU3054383' }, C2: { v: '01/01/2020' }, D2: { v: '5' }, A3: { v: 'BETA' }, B3: { v: 'MSKU9070323' }, C3: { v: '01/01/2020' }, D3: { v: '5' }, E3: { v: '02/01/2020' } } },
+        { id: 'mi', name: 'MAPA IMPO', rows: 50, cols: 12, cells: { A1: { v: 'CLIENTE' }, B1: { v: 'CONTAINER' }, C1: { v: 'STATUS' }, A2: { v: 'ACME' }, B2: { v: 'CSQU3054383' }, C2: { v: 'EM ABERTO' } } },
+      ] } }, ana.token);
+      const did = dr.id;
+      check('automações: registrar', (await api('POST', `/api/docs/${did}/automacoes`, { itens: [{ tipo: 'PRÉ STACKING', desc: 'CSQU3054383 → PRÉ STACKING VAZIO (linha 2)' }] }, ana.token)).ok, true);
+      const reg = await api('GET', `/api/docs/${did}/automacoes`, null, ana.token);
+      check('automações: listar', [reg.length >= 1, reg[0].tipo, reg[0].por], [true, 'PRÉ STACKING', 'Ana']);
+      // alertas: a 1ª vez só guarda (sem enxurrada); depois avisa o novo
+      const a1 = await api('POST', `/api/docs/${did}/alertas/novos`, { itens: [{ k: 'mi|r1|X', sheetId: 'mi', regra: 'r1', title: 'Agendamento vencido', body: 'MAPA IMPO: X' }] }, ana.token);
+      check('alertas: primeira vez só guarda', [a1.novos, a1.base], [0, true]);
+      const n0 = pushRecebidos.length;
+      const a2 = await api('POST', `/api/docs/${did}/alertas/novos`, { itens: [{ k: 'mi|r1|X', sheetId: 'mi', title: 'Agendamento vencido' }, { k: 'mi|r1|Y', sheetId: 'mi', regra: 'r1', title: 'Agendamento vencido', body: 'MAPA IMPO: Y' }] }, ana.token);
+      await sleep(600);
+      check('alertas: só o novo vira aviso', [a2.novos, pushRecebidos.length - n0], [1, 1]);
+      // demurrage vencida (DATA vazia) avisa uma vez; a devolvida (com DATA) não
+      const n1 = pushRecebidos.length;
+      await api('POST', '/api/_rotinas', {}, ana.token); await sleep(600);
+      const n2 = pushRecebidos.length;
+      await api('POST', '/api/_rotinas', {}, ana.token); await sleep(600);
+      check('demurrage: avisa uma vez só', [n2 - n1, pushRecebidos.length - n2], [1, 0]);
+      // status automático: agenda para agora, o servidor cria a pendência e avisa; conferir marca como feito
+      const br = new Date(Date.now() - 3 * 3600e3), hm = `${String(br.getUTCHours()).padStart(2, '0')}:${String(br.getUTCMinutes()).padStart(2, '0')}`;
+      const cfg = await api('PUT', `/api/docs/${did}/status-auto`, { agendamentos: [{ nome: 'Status ACME', sheetId: 'mi', filtroCol: 'CLIENTE', valores: ['ACME'], horarios: [hm], dias: [0, 1, 2, 3, 4, 5, 6] }] }, ana.token);
+      check('status automático salvo', [cfg.length, cfg[0].horarios[0], cfg[0].ativo], [1, hm, true]);
+      const n3 = pushRecebidos.length;
+      await api('POST', '/api/_rotinas', {}, ana.token); await sleep(600);
+      const pend = await api('GET', `/api/docs/${did}/status-auto/pendentes`, null, ana.token);
+      check('status automático: pendência e aviso', [pend.length, pend[0] && pend[0].nome, pushRecebidos.length - n3], [1, 'Status ACME', 1]);
+      await api('POST', '/api/_rotinas', {}, ana.token);
+      check('status automático: uma vez por horário', (await api('GET', `/api/docs/${did}/status-auto/pendentes`, null, ana.token)).length, 1);
+      await api('POST', `/api/docs/${did}/status-auto/pendentes/${pend[0].id}/feito`, {}, ana.token);
+      check('status automático: conferido', (await api('GET', `/api/docs/${did}/status-auto/pendentes`, null, ana.token)).length, 0);
+      check('histórico do container responde', Array.isArray(await api('POST', `/api/docs/${did}/historico-container`, { container: 'CSQU 305438-3', linhas: [{ sheetId: 'mi', rows: [2] }] }, ana.token)), true);
+      await api('POST', '/api/push/cancelar', { endpoint: sub.endpoint }, ana.token);
     }
   } catch (e) {
     fail++;

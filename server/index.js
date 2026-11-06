@@ -163,8 +163,10 @@ async function getRoom(id) {
   data.title = row.title;
   const room = { id, ownerId: row.owner_id, acl: Object.assign(Perms.defaultAcl(), row.acl || {}), data, version: row.version || 0, clients: new Set(), dirty: false, timer: null };
   rooms.set(id, room);
+  if (rotinasSrv) rotinasSrv.marcaAtivo(id).catch(() => {});
   return room;
 }
+let rotinasSrv = null;
 const permDoc = (room) => ({ ownerId: room.ownerId, acl: room.acl, data: room.data });
 // Gravação no banco: no máximo a cada ~10 s por planilha (planilhas grandes pesam no banco gratuito),
 // uma gravação por vez e sempre a versão mais nova. Ao sair o último usuário ou ao desligar, grava na hora.
@@ -739,12 +741,29 @@ route('GET', '/api/push/chave', async (req) => { await requireUser(req); return 
 route('POST', '/api/push/estado', async (req) => { const user = await requireUser(req); const b = await readBody(req, 4000); return push.estado(user.id, String(b.endpoint || '')); });
 route('POST', '/api/push/inscrever', async (req) => { const user = await requireUser(req); const b = await readBody(req, 8000); return push.inscreve(user.id, b); });
 route('POST', '/api/push/cancelar', async (req) => { const user = await requireUser(req); const b = await readBody(req, 4000); return push.cancela(user.id, String(b.endpoint || '')); });
+// teste: uma notificação simples ou um exemplo de cada tipo de aviso (exemplos: true)
+const EXEMPLOS_PUSH = [
+  ['critico', 'Container crítico', 'Exemplo: MAPA IMPO linha 12: MSCU1234565 (Ana)'],
+  ['troca', 'Pedido de troca de veículo', 'Exemplo: MAPA IMPO linha 8 (Bruno)'],
+  ['chat', 'Mensagem de Ana', 'Exemplo: O container da linha 12 já saiu do terminal?'],
+  ['prestacking', 'PRÉ STACKING finalizado', 'Exemplo: PRÉ STACKING VAZIO linha 5: TGHU3000005 (Carla)'],
+  ['alerta', 'ALERTA: Agendamento vencido', 'Exemplo: MAPA EXPO: CSQU3054383 · ACME LTDA'],
+  ['demurrage', 'Demurrage do vazio', 'Exemplo: TRHU 861.819-1 (GLOVIS): vence em 2 dias · prazo 08/11/2026'],
+  ['status', 'Status automático para conferir', 'Exemplo: Status ACME (08:00) — toque para conferir e enviar'],
+];
 route('POST', '/api/push/teste', async (req) => {
   const user = await requireUser(req);
   if (rateLimited('push:' + user.id)) throw httpError(429, 'Aguarde um pouco antes de testar de novo.');
+  const b = await readBody(req, 2000).catch(() => ({}));
+  if (b && b.exemplos) {
+    let n = 0;
+    for (const [tipo, title, body] of EXEMPLOS_PUSH) n += await push.paraPessoa(user.id, 'teste', { title, body, tag: 'exemplo-' + tipo });
+    return { enviadas: n, exemplos: EXEMPLOS_PUSH.length };
+  }
   const n = await push.paraPessoa(user.id, 'teste', { title: 'Planilhas Costalog', body: 'As notificações estão funcionando neste aparelho.', tag: 'teste' });
   return { enviadas: n };
 });
+rotinasSrv = require('./rotinas.js')({ store, push, Perms, getRoom, permDoc, route, readBody, requireUser, httpError });
 
 // ---------- Rotas das versões ----------
 route('GET', '/api/docs/:id/versions', async (req, p) => {
