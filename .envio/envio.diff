@@ -1,0 +1,401 @@
+diff --git a/src/diario.js b/src/diario.js
+new file mode 100644
+index 0000000..9b2fd00
+--- /dev/null
++++ b/src/diario.js
+@@ -0,0 +1,165 @@
++// Ver › Painel do dia (e o botão de calendário no cabeçalho): o resumo da operação de hoje, pensado para o celular.
++// - STATUS do MAPA IMPO e do MAPA EXPO (quantos em cada um);
++// - PRÉ STACKING em aberto (sem FINALIZADO);
++// - agendamentos de hoje (coleta, depot, entrega e retirada), pela hora;
++// - atrasados no PRÉ STACKING (agendamento já passou e não está FINALIZADO);
++// - demurrage do vazio: vencida ou vencendo em até 2 dias (DATA BAIXA + DEMMURAGE).
++// Tocar num item leva até a linha. Tudo é calculado na hora, a partir da planilha aberta.
++(function (App) {
++  'use strict';
++  const E = App.E, doc = App.doc, esc = App.esc;
++  const PS = () => App.preStacking;
++
++  // ---------- datas ----------
++  // valor da célula → número de série (dias desde 30/12/1899, com fração da hora) ou null
++  function serial(v) {
++    if (typeof v === 'number' && v > 20000 && v < 80000) return v;
++    const t = String(v === null || v === undefined ? '' : v).trim();
++    let m = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:\s+(\d{1,2}):(\d{2}))?/.exec(t);
++    if (m) { const y = +m[3] < 100 ? 2000 + +m[3] : +m[3]; return E.dateToSerial(new Date(Date.UTC(y, +m[2] - 1, +m[1], +(m[4] || 0), +(m[5] || 0)))); }
++    m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/.exec(t);
++    if (m) return E.dateToSerial(new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0))));
++    return null;
++  }
++  const agora = () => { const d = new Date(); return E.dateToSerial(new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes()))); };
++  const hoje = () => Math.floor(agora());
++  const tsSerial = (ms) => { const d = new Date(ms); return E.dateToSerial(new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes()))); };
++  const p2 = (n) => String(n).padStart(2, '0');
++  const fmtData = (s) => { const d = E.serialToDate(s); return `${p2(d.getUTCDate())}/${p2(d.getUTCMonth() + 1)}/${d.getUTCFullYear()}`; };
++  const fmtHora = (s) => { const d = E.serialToDate(s); return s % 1 ? `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}` : '—'; };
++
++  // ---------- leitura das abas (mesmas regras de nomes de coluna do PRÉ STACKING) ----------
++  // linhas com container (ou cliente) depois do cabeçalho: [{ sh, si, r, get(alias) }]
++  function linhas(sh) {
++    const P = PS(), si = doc.sheets.indexOf(sh), map = P.colMap(sh), hr = P.headerRow(sh);
++    const cc = P.findCol(map, P.A.CONTAINER), cl = P.findCol(map, P.A.CLIENTE);
++    const rows = new Set();
++    for (const a in sh.cells) {
++      const p = E.parseAddr(a);
++      if (!p || p.row <= hr || (p.col !== cc && p.col !== cl)) continue;
++      const v = sh.cells[a].v;
++      if (v !== '' && v !== null && v !== undefined) rows.add(p.row);
++    }
++    const cols = {};
++    const col = (k) => (k in cols ? cols[k] : (cols[k] = P.findCol(map, P.A[k] || [k])));
++    return [...rows].sort((x, y) => x - y).map((r) => ({
++      sh, si, r, map,
++      get: (k) => { const c = col(k); return c ? App.value(si, r, c) : null; },
++      cell: (k) => { const c = col(k); return c ? sh.cells[E.addrToStr(r, c)] : null; },
++      col,
++    }));
++  }
++  const txt = (v) => (v === null || v === undefined ? '' : String(v)).trim();
++  const fin = (st) => PS().norm(st).includes('FINALIZ');
++  const abas = () => {
++    const P = PS(), o = { impo: null, expo: null, ch: null, vz: null };
++    for (const sh of doc.sheets) { const k = P.kindOfMapa(sh) || P.kindOfPS(sh); if (k && !o[k]) o[k] = sh; }
++    return o;
++  };
++  const linkDe = (L) => { for (const k of ['CONTAINER', 'OPERACAO']) { const x = L.cell(k); const l = x && PS().linkOf(x.psl); if (l) return Object.assign(l, { psf: x.psf || null }); } return null; };
++
++  function goTo(sh, r, c) {
++    const i = doc.sheets.indexOf(sh);
++    if (i < 0) return;
++    if (i !== doc.active) App.run('switchSheet', i);
++    let rr = r, cc = c || 1;
++    if (App.vm && App.dispCell) { const d = App.dispCell(r, cc); if (!d) return App.emit('notify', 'A linha está escondida pela sua visualização com filtro.'); rr = d.r; cc = d.c; }
++    App.grid.select(rr, cc);
++    App.grid.focus();
++  }
++
++  // ---------- cálculo ----------
++  function calcula() {
++    const ab = abas(), out = { status: [], abertos: { ch: 0, vz: 0 }, hoje: [], atrasados: [], demurrage: [], semAbas: [] };
++    const H = hoje(), N = agora();
++    const AGENDA = { impo: [['DHCOLETA', 'Coleta'], ['DHDEPOT', 'Depot']], expo: [['AGENDAMENTO', 'Entrega'], ['DHRETIRADA', 'Retirada']] };
++    for (const k of ['impo', 'expo']) {
++      const sh = ab[k];
++      if (!sh) { out.semAbas.push(k === 'impo' ? 'MAPA IMPO' : 'MAPA EXPO'); continue; }
++      const cont = {};
++      let total = 0;
++      for (const L of linhas(sh)) {
++        total++;
++        const st = txt(L.get('STATUS')) || '(sem STATUS)';
++        cont[st] = (cont[st] || 0) + 1;
++        for (const [campo, tipo] of AGENDA[k]) {
++          const s = serial(L.get(campo));
++          if (s !== null && Math.floor(s) === H) out.hoje.push({ s, tipo, sh, r: L.r, c: L.col(campo), cont: txt(L.get('CONTAINER')), cli: txt(L.get('CLIENTE')), st });
++        }
++      }
++      out.status.push({ nome: sh.name, total, itens: Object.entries(cont).sort((a, b) => b[1] - a[1]) });
++    }
++    for (const k of ['ch', 'vz']) {
++      const sh = ab[k];
++      if (!sh) continue;
++      for (const L of linhas(sh)) {
++        const st = txt(L.get('STATUS'));
++        if (fin(st)) continue;
++        out.abertos[k]++;
++        const ag = serial(L.get('AGENDAMENTO'));
++        const base = { sh, r: L.r, cont: txt(L.get('CONTAINER')), cli: txt(L.get('CLIENTE')), op: txt(L.get('OPERACAO')) };
++        if (ag !== null && ag < (ag % 1 ? N : H)) out.atrasados.push(Object.assign({ s: ag, c: L.col('AGENDAMENTO') }, base));
++        if (k === 'vz') {
++          const baixa = serial(L.get('DATABAIXA')), dem = Number(String(L.get('DEMPS') || '').replace(',', '.'));
++          if (baixa !== null && dem > 0 && !serial(L.get('DATA'))) {
++            const prazo = Math.floor(baixa) + dem, falta = prazo - H;
++            if (falta <= 2) out.demurrage.push(Object.assign({ prazo, falta, c: L.col('DATABAIXA') }, base));
++          }
++        }
++      }
++    }
++    out.hoje.sort((a, b) => a.s - b.s);
++    out.atrasados.sort((a, b) => a.s - b.s);
++    out.demurrage.sort((a, b) => a.falta - b.falta);
++    return out;
++  }
++
++  // ---------- tela ----------
++  const item = (x, i, meta) => `<button class="dia-it" data-i="${i}"><b>${esc(x.cont || '(sem container)')}</b><span>${esc(x.cli)}</span><small>${meta}</small></button>`;
++  function render(box) {
++    const d = App.withReal(calcula), H = hoje();
++    const alertas = (document.querySelector('#btn-alert .al-n:not([hidden])') || {}).textContent || '0';
++    const lista = [];
++    const pega = (arr) => arr.map((x) => (lista.push(x), lista.length - 1));
++    const secHoje = pega(d.hoje), secAtr = pega(d.atrasados), secDem = pega(d.demurrage);
++    box.innerHTML = `
++      <div class="dia-top"><span>${esc(fmtData(H))}</span>
++        <button class="dia-chip ${+alertas ? 'on' : ''}" data-act="alertas">ALERTA <b>${esc(alertas)}</b></button>
++        <span class="dia-chip">P.S. CHEIO em aberto <b>${d.abertos.ch}</b></span>
++        <span class="dia-chip">P.S. VAZIO em aberto <b>${d.abertos.vz}</b></span></div>
++      <div class="dia-cards">${d.status.map((m) => `<div class="dia-card"><h3>${esc(m.nome)} <small>${m.total} ${m.total === 1 ? 'linha' : 'linhas'}</small></h3>
++        ${m.itens.slice(0, 8).map(([st, n]) => `<div class="dia-st"><span>${esc(st)}</span><b>${n}</b><i style="width:${Math.max(4, Math.round(100 * n / Math.max(1, m.total)))}%"></i></div>`).join('') || '<p class="sp-hint">Sem linhas.</p>'}</div>`).join('')}</div>
++      <h3 class="dia-h">Agendamentos de hoje <small>${d.hoje.length}</small></h3>
++      <div class="dia-list">${secHoje.map((i) => item(lista[i], i, `${esc(fmtHora(lista[i].s))} · ${esc(lista[i].tipo)} · ${esc(lista[i].sh.name)} · ${esc(lista[i].st)}`)).join('') || '<p class="sp-hint">Nenhum agendamento para hoje.</p>'}</div>
++      <h3 class="dia-h bad">Atrasados no PRÉ STACKING <small>${d.atrasados.length}</small></h3>
++      <div class="dia-list">${secAtr.map((i) => item(lista[i], i, `${esc(fmtData(lista[i].s))} ${esc(fmtHora(lista[i].s))} · ${esc(lista[i].op || lista[i].sh.name)}`)).join('') || '<p class="sp-hint">Nada atrasado.</p>'}</div>
++      <h3 class="dia-h warn">Demurrage do vazio (vencida ou em até 2 dias) <small>${d.demurrage.length}</small></h3>
++      <div class="dia-list">${secDem.map((i) => item(lista[i], i, lista[i].falta < 0 ? `<em class="bad">vencida há ${-lista[i].falta} ${lista[i].falta === -1 ? 'dia' : 'dias'}</em> · prazo ${esc(fmtData(lista[i].prazo))}` : `<em class="warn">${lista[i].falta === 0 ? 'vence hoje' : 'vence em ' + lista[i].falta + (lista[i].falta === 1 ? ' dia' : ' dias')}</em> · prazo ${esc(fmtData(lista[i].prazo))}`)).join('') || '<p class="sp-hint">Nenhuma demurrage vencendo.</p>'}</div>
++      ${d.semAbas.length ? `<p class="sp-hint">Abas não encontradas: ${esc(d.semAbas.join(', '))}.</p>` : ''}`;
++    box.onclick = (e) => {
++      const b = e.target.closest('[data-i]');
++      if (b) { const x = lista[+b.dataset.i]; const m = box.closest('dialog'); if (m) m.querySelector('.modal-x').click(); goTo(x.sh, x.r, x.c); return; }
++      if (e.target.closest('[data-act="alertas"]')) { const m = box.closest('dialog'); if (m) m.querySelector('.modal-x').click(); App.run('alerts'); }
++    };
++  }
++  function abrir() {
++    if (!PS()) return;
++    const box = document.createElement('div');
++    box.className = 'dia';
++    render(box);
++    App.ui.modal({ title: 'Painel do dia', width: '760px', cls: 'modal-tall', body: box, buttons: [{ label: 'Atualizar', action: () => { render(box); return false; } }, { label: 'Fechar', primary: true }] });
++  }
++  App.commands.def('painelDia', 'Painel do dia', abrir);
++  // botão no cabeçalho (calendário), bom para o celular
++  function botao() {
++    const right = document.querySelector('.appbar-right');
++    if (!right || document.getElementById('btn-dia')) return;
++    const b = document.createElement('button');
++    b.id = 'btn-dia'; b.className = 'icon-btn'; b.title = 'Painel do dia'; b.setAttribute('aria-label', 'Painel do dia');
++    b.innerHTML = '<svg width="22" height="22" viewBox="0 0 24 24"><path d="M5 6.5h14v13H5zM5 10.5h14M9 4v4M15 4v4M8.5 14h3v3h-3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>';
++    b.onclick = () => App.run('painelDia');
++    right.insertBefore(b, right.firstChild);
++  }
++  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', botao); else botao();
++  App.opData = { serial, hoje, agora, tsSerial, fmtData, linhas, abas, txt, fin, linkDe, goTo };
++})(window.App);
+diff --git a/src/indicadores.js b/src/indicadores.js
+new file mode 100644
+index 0000000..c8fba66
+--- /dev/null
++++ b/src/indicadores.js
+@@ -0,0 +1,119 @@
++// Ver › Indicadores do mês: o que o PRÉ STACKING registrou no mês escolhido.
++// - Movimentações: REMOÇÃO e EMBARQUE (PRÉ STACKING CHEIO, pela data do AGENDAMENTO) e DEVOLUÇÃO e RETIRADA
++//   (PRÉ STACKING VAZIO, pela DATA; sem ela, pelo AGENDAMENTO); por cliente e nos últimos 6 meses;
++// - Demurrage: devoluções/retiradas do mês dentro e fora do prazo (DATA BAIXA + DEMMURAGE dias);
++// - Tempo médio do P.S. até o FINALIZADO (a hora do FINALIZADO passou a ser guardada em 06/11/2026).
++// Exporta CSV (Excel) com a tabela por cliente e a lista de demurrage fora do prazo.
++(function (App) {
++  'use strict';
++  const E = App.E, esc = App.esc;
++  const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
++  const OPS = ['REMOÇÃO', 'EMBARQUE', 'DEVOLUÇÃO', 'RETIRADA'];
++  const mesDe = (s) => { const d = E.serialToDate(s); return d.getUTCFullYear() * 100 + d.getUTCMonth() + 1; };
++  const nomeMes = (ym) => `${MESES[ym % 100 - 1]} de ${Math.floor(ym / 100)}`;
++  const curto = (ym) => MESES[ym % 100 - 1].slice(0, 3) + '/' + String(Math.floor(ym / 100)).slice(2);
++  const voltaMes = (ym, n) => { let y = Math.floor(ym / 100), m = ym % 100 - n; while (m < 1) { m += 12; y--; } return y * 100 + m; };
++
++  // todas as movimentações registradas no PRÉ STACKING (cada linha com data, cliente, operação…)
++  function movimentos() {
++    const O = App.opData, ab = O.abas(), out = [];
++    for (const k of ['ch', 'vz']) {
++      const sh = ab[k];
++      if (!sh) continue;
++      for (const L of O.linhas(sh)) {
++        const link = O.linkDe(L);
++        const opTxt = App.preStacking.norm(O.txt(L.get('OPERACAO')));
++        const op = OPS.find((o) => App.preStacking.norm(o) === opTxt) || (k === 'ch' ? 'REMOÇÃO/EMBARQUE' : 'DEVOLUÇÃO/RETIRADA');
++        const data = k === 'ch' ? O.serial(L.get('AGENDAMENTO')) : (O.serial(L.get('DATA')) ?? O.serial(L.get('AGENDAMENTO')));
++        const criado = link ? parseInt(link.id.slice(0, -6), 36) : null;
++        const quando = data ?? (link && link.psf ? O.tsSerial(link.psf) : criado ? O.tsSerial(criado) : null);
++        if (quando === null) continue;
++        const m = { k, sh, r: L.r, op, quando, cli: O.txt(L.get('CLIENTE')) || '(sem cliente)', cont: O.txt(L.get('CONTAINER')), fin: O.fin(O.txt(L.get('STATUS'))) };
++        if (link && link.psf && criado && link.psf > criado) m.horas = (link.psf - criado) / 36e5, m.finEm = O.tsSerial(link.psf);
++        if (k === 'vz') {
++          const baixa = O.serial(L.get('DATABAIXA')), dem = Number(String(L.get('DEMPS') || '').replace(',', '.')), dt = O.serial(L.get('DATA'));
++          if (baixa !== null && dem > 0 && dt !== null) { m.prazo = Math.floor(baixa) + dem; m.sobra = m.prazo - Math.floor(dt); }
++        }
++        out.push(m);
++      }
++    }
++    return out;
++  }
++
++  function calcula(ym) {
++    const todos = App.withReal(movimentos);
++    const doMes = todos.filter((m) => mesDe(m.quando) === ym);
++    const porOp = Object.fromEntries(OPS.map((o) => [o, 0]));
++    const porCli = new Map();
++    for (const m of doMes) {
++      if (m.op in porOp) porOp[m.op]++;
++      const c = porCli.get(m.cli) || { cli: m.cli, total: 0 };
++      c[m.op] = (c[m.op] || 0) + 1; c.total++;
++      porCli.set(m.cli, c);
++    }
++    const dem = doMes.filter((m) => m.k === 'vz' && m.sobra !== undefined);
++    const fora = dem.filter((m) => m.sobra < 0).sort((a, b) => a.sobra - b.sobra);
++    const tempos = todos.filter((m) => m.horas !== undefined && mesDe(m.finEm) === ym).map((m) => m.horas);
++    const meses = [];
++    for (let i = 5; i >= 0; i--) { const x = voltaMes(ym, i); meses.push({ ym: x, n: todos.filter((m) => mesDe(m.quando) === x).length }); }
++    return {
++      total: doMes.length, porOp, clientes: [...porCli.values()].sort((a, b) => b.total - a.total),
++      dem: { total: dem.length, dentro: dem.length - fora.length, fora, sobraMedia: dem.length ? dem.reduce((s, m) => s + m.sobra, 0) / dem.length : null },
++      tempo: tempos.length ? { n: tempos.length, media: tempos.reduce((a, b) => a + b, 0) / tempos.length } : null,
++      meses,
++    };
++  }
++
++  const nf = (n, d) => Number(n).toLocaleString('pt-BR', { minimumFractionDigits: d || 0, maximumFractionDigits: d || 0 });
++  const tempoTxt = (h) => (h < 48 ? nf(h, 1) + ' h' : nf(h / 24, 1) + ' dias');
++  function render(box, ym) {
++    const d = calcula(ym), O = App.opData;
++    const maxM = Math.max(1, ...d.meses.map((m) => m.n));
++    const pct = d.dem.total ? Math.round(100 * d.dem.dentro / d.dem.total) : null;
++    box.innerHTML = `
++      <div class="ind-kpis">
++        <div class="ind-k"><b>${nf(d.total)}</b><span>movimentações</span></div>
++        ${OPS.map((o) => `<div class="ind-k"><b>${nf(d.porOp[o])}</b><span>${esc(o.toLowerCase())}</span></div>`).join('')}
++        <div class="ind-k ${pct === null ? '' : pct >= 90 ? 'ok' : pct >= 70 ? 'warn' : 'bad'}"><b>${pct === null ? '—' : pct + '%'}</b><span>vazio no prazo da demurrage</span></div>
++        <div class="ind-k"><b>${d.tempo ? tempoTxt(d.tempo.media) : '—'}</b><span>do P.S. ao FINALIZADO${d.tempo ? ` (${d.tempo.n})` : ''}</span></div>
++      </div>
++      <h3 class="dia-h">Últimos 6 meses</h3>
++      <div class="ind-bars">${d.meses.map((m) => `<div class="ind-bar${m.ym === ym ? ' sel' : ''}" title="${esc(nomeMes(m.ym))}: ${m.n}"><b>${m.n}</b><i style="height:${Math.round(100 * m.n / maxM)}%"></i><span>${esc(curto(m.ym))}</span></div>`).join('')}</div>
++      <h3 class="dia-h">Por cliente <small>${d.clientes.length}</small></h3>
++      <div class="ind-tbl"><table><thead><tr><th>Cliente</th>${OPS.map((o) => `<th class="n">${esc(o)}</th>`).join('')}<th class="n">Total</th></tr></thead><tbody>
++        ${d.clientes.map((c) => `<tr><td>${esc(c.cli)}</td>${OPS.map((o) => `<td class="n">${c[o] || ''}</td>`).join('')}<td class="n"><b>${c.total}</b></td></tr>`).join('') || `<tr><td colspan="6" class="sp-hint">Nenhuma movimentação em ${esc(nomeMes(ym))}.</td></tr>`}
++      </tbody></table></div>
++      <h3 class="dia-h ${d.dem.fora.length ? 'bad' : ''}">Demurrage fora do prazo <small>${d.dem.fora.length} de ${d.dem.total}</small></h3>
++      <div class="dia-list">${d.dem.fora.map((m, i) => `<button class="dia-it" data-f="${i}"><b>${esc(m.cont || '(sem container)')}</b><span>${esc(m.cli)}</span><small><em class="bad">${-m.sobra} ${m.sobra === -1 ? 'dia' : 'dias'} depois do prazo</em> · prazo ${esc(O.fmtData(m.prazo))}</small></button>`).join('') || '<p class="sp-hint">Nenhuma devolução ou retirada fora do prazo neste mês.</p>'}</div>
++      ${d.dem.sobraMedia !== null ? `<p class="sp-hint">Em média, o vazio voltou ${nf(Math.abs(d.dem.sobraMedia), 1)} ${d.dem.sobraMedia >= 0 ? 'dias antes' : 'dias depois'} do fim da demurrage.</p>` : ''}
++      ${d.tempo ? '' : '<p class="sp-hint">O tempo do P.S. até o FINALIZADO começa a ser medido a partir de agora (linhas finalizadas depois desta atualização).</p>'}`;
++    box.onclick = (e) => {
++      const b = e.target.closest('[data-f]');
++      if (!b) return;
++      const m = d.dem.fora[+b.dataset.f]; const dl = box.closest('dialog'); if (dl) dl.querySelector('.modal-x').click(); O.goTo(m.sh, m.r, 1);
++    };
++    box._dados = d;
++  }
++
++  function csv(d, ym) {
++    const q = (v) => { const s = String(v === null || v === undefined ? '' : v); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
++    const L = [[`Indicadores de ${nomeMes(ym)}`], [], ['Cliente', ...OPS, 'Total'], ...d.clientes.map((c) => [c.cli, ...OPS.map((o) => c[o] || 0), c.total]), [],
++      ['Demurrage fora do prazo'], ['Container', 'Cliente', 'Prazo', 'Dias depois do prazo'], ...d.dem.fora.map((m) => [m.cont, m.cli, App.opData.fmtData(m.prazo), -m.sobra])];
++    const blob = new Blob(['\uFEFF' + L.map((r) => r.map(q).join(';')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
++    const a = document.createElement('a');
++    a.href = URL.createObjectURL(blob); a.download = `indicadores-${Math.floor(ym / 100)}-${String(ym % 100).padStart(2, '0')}.csv`;
++    document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
++  }
++
++  function abrir() {
++    if (!App.opData || !App.preStacking) return;
++    const atual = mesDe(App.opData.hoje());
++    const wrap = document.createElement('div');
++    wrap.innerHTML = `<label class="ind-mes">Mês <select class="input">${Array.from({ length: 12 }, (_, i) => voltaMes(atual, i)).map((ym) => `<option value="${ym}">${esc(nomeMes(ym))}</option>`).join('')}</select></label><div class="dia"></div>`;
++    const sel = wrap.querySelector('select'), box = wrap.querySelector('.dia');
++    sel.onchange = () => render(box, +sel.value);
++    render(box, atual);
++    App.ui.modal({ title: 'Indicadores do mês', width: '820px', cls: 'modal-tall', body: wrap, buttons: [{ label: 'Exportar CSV', action: () => { csv(box._dados, +sel.value); return false; } }, { label: 'Fechar', primary: true }] });
++  }
++  App.commands.def('indicadores', 'Indicadores do mês', abrir);
++})(window.App);
+diff --git a/src/styles.css b/src/styles.css
+index 2d0e28a..dd39f21 100644
+--- a/src/styles.css
++++ b/src/styles.css
+@@ -1330,3 +1330,83 @@ body.touch .grid-scroll { touch-action: pan-x pan-y; -webkit-overflow-scrolling:
+   body.touch .tb { height: 32px; }
+   .tabsbar { height: calc(34px + env(safe-area-inset-bottom)); }
+ }
++
++/* ---------- Tema escuro (Ver › Tema) ---------- */
++html.dark { color-scheme: dark;
++  --ink: #e8eaed; --text-2: #b4b4b4; --text-3: #8a8a8a; --line: #333333; --line-2: #454545;
++  --surface: #1e1e1e; --surface-2: #2a2a2a; --white: #141414; --red-soft: #3a1418; --red-softer: #2a1012;
++  --shadow: 0 2px 6px rgba(0, 0, 0, .6), 0 8px 24px rgba(0, 0, 0, .5); }
++/* cabeçalho continua preto com texto branco */
++html.dark .appbar, html.dark .doc-title, html.dark .btn-share, html.dark .account-btn, html.dark .peer { color: #ffffff; }
++html.dark .doc-title:focus { background: #191919; }
++html.dark body { background: #141414; color: var(--ink); }
++html.dark .modal { background: #1b1b1b; color: var(--ink); }
++html.dark .modal::backdrop { background: rgba(0, 0, 0, .65); }
++html.dark .input, html.dark input:not([type=checkbox]):not([type=radio]), html.dark select, html.dark textarea { background: #222; color: var(--ink); border-color: var(--line-2); }
++html.dark .btn { background: #262626; color: var(--ink); border-color: var(--line-2); }
++html.dark .btn:hover { background: #303030; }
++html.dark .btn-primary { background: var(--red); color: #fff; border-color: var(--red); }
++html.dark .tb, html.dark .formula-input, html.dark .name-box, html.dark .formula-mirror { color: var(--ink); }
++html.dark .tb:hover { background: #2c2c2c; }
++html.dark .tb.on, html.dark .tb.active { background: #3a1418; color: #ff9aa1; }
++html.dark .icon-btn:hover { background: rgba(255, 255, 255, .08); }
++html.dark .tab.active { background: #161616; color: #ff8a92; }
++/* fundos brancos fixos de painéis e listas */
++html.dark .al-panel, html.dark .al-row, html.dark .peers-pop, html.dark .emo-pop, html.dark .pf-sug, html.dark .st-box,
++html.dark .ms-last, html.dark .ms-anexo, html.dark .ms-last-frame, html.dark .vh-tab, html.dark .esc-tipo, html.dark .pf-rep,
++html.dark .mv-bar .input, html.dark .chat-msg:not(.mine) .chat-ref, html.dark .al-head .al-q { background: #1e1e1e; color: var(--ink); border-color: var(--line-2); }
++html.dark .al-row:hover, html.dark .pp-row:hover, html.dark .emo-tab:hover, html.dark .emo-i:hover, html.dark .tb-search-btn:hover { background: #2a2a2a; }
++html.dark .al-v, html.dark .upd-tag, html.dark .cg-status, html.dark .mx-sel.lv-view, html.dark .ms-anexos, html.dark .cg-tab th, html.dark .mt-table th { background: #262626; color: var(--ink); }
++html.dark .al-group { background: color-mix(in srgb, var(--al) 12%, #1b1b1b); }
++html.dark .al-msg, html.dark .al-gh small { color: #b4b4b4; }
++html.dark .vb-sel option { background: #1e1e1e; color: var(--ink); }
++html.dark a { color: #ff8a92; }
++
++/* ---------- Painel do dia e Indicadores do mês ---------- */
++.dia { display: flex; flex-direction: column; gap: 10px; }
++.dia-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-weight: 500; }
++.dia-top > span:first-child { margin-right: auto; font-size: 15px; }
++.dia-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-2); background: var(--surface); color: var(--ink); border-radius: 14px; padding: 3px 10px; font-size: 12.5px; }
++.dia-chip b { color: var(--red-dark); }
++.dia-chip.on { background: #b3000c; border-color: #b3000c; color: #fff; }
++.dia-chip.on b { color: #fff; }
++.dia-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
++.dia-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--white); }
++.dia-card h3 { margin: 0 0 6px; font-size: 14px; font-weight: 600; display: flex; justify-content: space-between; align-items: baseline; }
++.dia-card h3 small, .dia-h small { color: var(--text-3); font-weight: 400; }
++.dia-st { position: relative; display: flex; justify-content: space-between; gap: 8px; font-size: 13px; padding: 3px 6px; border-radius: 4px; overflow: hidden; }
++.dia-st i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--red-soft); z-index: 0; }
++.dia-st span, .dia-st b { position: relative; z-index: 1; }
++.dia-h { margin: 6px 0 0; font-size: 14px; font-weight: 600; display: flex; gap: 6px; align-items: baseline; }
++.dia-h.bad { color: #c5221f; } .dia-h.warn { color: #b45309; }
++.dia-list { display: flex; flex-direction: column; gap: 4px; }
++.dia-it { display: grid; grid-template-columns: minmax(110px, auto) 1fr; column-gap: 10px; text-align: left; border: 1px solid var(--line); background: var(--white); color: var(--ink); border-radius: 8px; padding: 7px 10px; }
++.dia-it:hover { border-color: var(--red); }
++.dia-it span { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
++.dia-it small { grid-column: 1 / -1; color: var(--text-2); font-size: 12px; }
++em.bad { color: #c5221f; font-style: normal; font-weight: 600; } em.warn { color: #b45309; font-style: normal; font-weight: 600; }
++.ind-mes { display: flex; align-items: center; gap: 8px; font-weight: 500; margin-bottom: 8px; }
++.ind-mes select { max-width: 240px; }
++.ind-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; }
++.ind-k { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--white); display: flex; flex-direction: column; }
++.ind-k b { font-size: 20px; } .ind-k span { font-size: 12px; color: var(--text-2); }
++.ind-k.ok b { color: #188038; } .ind-k.warn b { color: #b45309; } .ind-k.bad b { color: #c5221f; }
++.ind-bars { display: flex; align-items: flex-end; gap: 8px; height: 130px; padding: 4px 2px; }
++.ind-bar { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 2px; font-size: 11.5px; color: var(--text-2); }
++.ind-bar i { width: 100%; max-width: 46px; background: #9aa0a6; border-radius: 4px 4px 0 0; min-height: 2px; }
++.ind-bar.sel i { background: var(--red); } .ind-bar b { color: var(--ink); font-size: 12px; }
++.ind-tbl { overflow: auto; max-height: 300px; border: 1px solid var(--line); border-radius: 8px; }
++.ind-tbl table { width: 100%; border-collapse: collapse; font-size: 13px; }
++.ind-tbl th { position: sticky; top: 0; background: var(--surface); text-align: left; font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
++.ind-tbl td { padding: 5px 8px; border-bottom: 1px solid var(--line); }
++.ind-tbl .n { text-align: right; font-variant-numeric: tabular-nums; }
++.nt-list { display: flex; flex-direction: column; gap: 8px; margin: 4px 0; }
++.nt-aviso { margin: 4px 0 0; padding: 8px 10px; border-radius: 8px; background: #fef3c7; color: #7c4a03; font-size: 13px; }
++html.dark .nt-aviso { background: #2b2108; color: #fbbf24; }
++html.dark .dia-h.bad, html.dark em.bad, html.dark .ind-k.bad b { color: #f87171; }
++html.dark .dia-h.warn, html.dark em.warn, html.dark .ind-k.warn b { color: #fbbf24; }
++html.dark .ind-k.ok b { color: #4ade80; }
++html.dark .dia-chip b { color: #ff8a92; }
++@media (max-width: 760px) { #btn-dia { padding: 5px; } .ind-bars { height: 110px; } }
++html.dark .doc-title { background: transparent; border-color: transparent; color: #fff; }
++html.dark .doc-title:focus { background: #191919; border-color: var(--red); }
+diff --git a/src/updates.js b/src/updates.js
+index 85497fb..124fbb3 100644
+--- a/src/updates.js
++++ b/src/updates.js
+@@ -4,6 +4,12 @@
+   const esc = App.esc;
+   // a mais nova primeiro; cada item: [área, o que mudou]
+   const UPDATES = [
++    { date: '06/11/2026', title: 'Notificações no celular, Painel do dia, tema escuro e Indicadores do mês', items: [
++      ['Notificações', 'Ferramentas › Notificações no celular: avisa neste aparelho quando um container é marcado como crítico, quando pedem troca de veículo, quando chega mensagem no chat e (se quiser) quando um PRÉ STACKING é finalizado. No iPhone, funciona com o app da Tela de Início (iOS 16.4 ou mais novo).'],
++      ['Painel do dia', 'Ver › Painel do dia (ou o calendário no cabeçalho): STATUS do MAPA IMPO e EXPO, PRÉ STACKING em aberto, agendamentos de hoje, atrasados no PRÉ STACKING e demurrage do vazio vencida ou vencendo em até 2 dias. Tocar num item leva até a linha.'],
++      ['Tema escuro', 'Ver › Tema: Claro, Escuro ou Automático (segue o aparelho). As cores de STATUS e alertas continuam as mesmas.'],
++      ['Indicadores do mês', 'Ver › Indicadores do mês: remoções, embarques, devoluções e retiradas por cliente, últimos 6 meses, vazio no prazo da demurrage e tempo do P.S. até o FINALIZADO. Exporta CSV.'],
++    ] },
+     { date: '06/11/2026', title: 'Celular e app no iPhone', items: [
+       ['App no iPhone', 'No Safari, toque em Compartilhar › Adicionar à Tela de Início: a planilha abre como app, em tela cheia, com ícone próprio.'],
+       ['Cabeçalho', 'No celular, o cabeçalho ocupa 2 linhas: título, ALERTA e botões em cima; os menus numa linha que rola de lado.'],
