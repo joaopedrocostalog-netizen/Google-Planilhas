@@ -1,1 +1,1 @@
-Desempenho: compressão no tempo real, envio único por grupo de permissões, planilha pronta reaproveitada, histórico em lotes; tela: comparação por célula, formatador de números único e caches da escala e do container
+Painel do dia com status para conferir, custos nos Indicadores, novos avisos no celular e estilos

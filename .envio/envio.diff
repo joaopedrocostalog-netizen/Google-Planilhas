@@ -1,536 +1,192 @@
-diff --git a/server/index.js b/server/index.js
-index 084b8c1553adf0a50d947bdd6e38ed89a83ed6f3..733e17d84d641eb977bba56826db7efdc94080c5 100644
---- a/server/index.js
-+++ b/server/index.js
-@@ -6,3 +6,3 @@ const path = require('path');
- const crypto = require('crypto');
--const { accept } = require('./ws');
-+const { accept, prepare, join } = require('./ws.js');
- const createStore = require('./store');
-@@ -267,3 +267,5 @@ function pessoasNaSala(room, soNaoAdmin) {
- // servidor gratuito dorme: pico de pessoas ao mesmo tempo, quem entrou hoje e quem esperou vaga.
--const hojeBR = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }); // aaaa-mm-dd
-+// formatador criado uma vez só (criar um a cada chamada custa caro e acontecia a cada entrada)
-+const FMT_DIA_BR = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' });
-+const hojeBR = () => FMT_DIA_BR.format(new Date()); // aaaa-mm-dd
- const inicioHojeISO = () => new Date(hojeBR() + 'T00:00:00-03:00').toISOString();
-@@ -303,6 +305,23 @@ async function registrarBloqueio(room, user) {
- }
-+// Quem tem as mesmas páginas e colunas visíveis recebe exatamente o mesmo conteúdo: a chave junta só o que os
-+// filtros de permissão leem (admin, páginas e colunas), para o texto ser convertido e compactado uma vez só.
-+const chavesPerms = new WeakMap();
-+function chavePerms(perms) {
-+  let k = chavesPerms.get(perms);
-+  if (k === undefined) { k = JSON.stringify([!!perms.admin, perms.sheets, perms.cols]); chavesPerms.set(perms, k); }
-+  return k;
-+}
-+// A planilha filtrada, já convertida em texto (e compactada na primeira entrada que pedir), fica guardada enquanto
-+// ninguém editar: quem entra em seguida (ex.: todos reconectando depois de um deploy) reaproveita.
-+function docPreparado(room, perms) {
-+  if (!room.initCache || room.initCache.version !== room.version) room.initCache = { version: room.version, map: new Map() };
-+  const k = chavePerms(perms);
-+  let d = room.initCache.map.get(k);
-+  if (!d) { d = prepare(Perms.filterDoc(room.data, perms)); room.initCache.map.set(k, d); }
-+  return d;
-+}
- function sendInit(c) {
-   const room = c.room;
--  c.ws.send({
--    type: 'init', doc: Perms.filterDoc(room.data, c.perms), version: room.version, perms: c.perms,
-+  const resto = JSON.stringify({
-+    version: room.version, perms: c.perms,
-     me: Object.assign(publicUser(c.user), { cid: c.cid }),
-@@ -310,4 +329,18 @@ function sendInit(c) {
-   });
-+  // {"type":"init","doc":<planilha guardada>,"version":…} — o mesmo conteúdo de antes, montado em pedaços
-+  c.ws.sendPrepared(join([prepare('{"type":"init","doc":'), docPreparado(room, c.perms), prepare(',' + resto.slice(1))]));
-+}
-+function broadcast(room, except, msg) { const p = prepare(msg); for (const c of room.clients) if (c !== except) c.ws.sendPrepared(p); }
-+// manda uma alteração a todos (menos "except"), filtrada pelas permissões de cada um: o filtro e a conversão em
-+// texto acontecem uma vez por grupo de permissões, não uma vez por pessoa
-+function enviarPatch(room, except, patch, by, pular) {
-+  const porChave = new Map();
-+  for (const o of room.clients) {
-+    if (o === except || (pular && pular.has(o))) continue;
-+    const k = chavePerms(o.perms);
-+    let pp = porChave.get(k);
-+    if (pp === undefined) { const fp = Perms.filterPatch(patch, o.perms, room.data); pp = fp ? prepare({ type: 'patch', patch: fp, version: room.version, by }) : null; porChave.set(k, pp); }
-+    if (pp) o.ws.sendPrepared(pp);
-+  }
- }
--function broadcast(room, except, msg) { for (const c of room.clients) if (c !== except) c.ws.send(msg); }
- 
-@@ -396,8 +429,4 @@ function onPatch(c, msg) {
-   c.ws.send({ type: 'ack', id: msg.id, version: room.version });
--  for (const o of room.clients) {
--    if (o === c) continue;
--    if (reinit.has(o)) { sendInit(o); continue; }
--    const fp = Perms.filterPatch(p, o.perms, room.data);
--    if (fp) o.ws.send({ type: 'patch', patch: fp, version: room.version, by: { cid: c.cid, name: c.user.name } });
--  }
-+  for (const o of reinit) if (o !== c) sendInit(o);
-+  enviarPatch(room, c, p, { cid: c.cid, name: c.user.name }, reinit);
-   if (accessChanged && !c.perms.admin) sendInit(c);
-@@ -408,3 +437,3 @@ function onPatch(c, msg) {
-     room.version++;
--    for (const o of room.clients) { const fp = Perms.filterPatch(fill, o.perms, room.data); if (fp) o.ws.send({ type: 'patch', patch: fp, version: room.version, by: { cid: 'dss', name: 'DSS' } }); }
-+    enviarPatch(room, null, fill, { cid: 'dss', name: 'DSS' });
-   }
-@@ -1687,2 +1716,3 @@ async function shutdown() {
-   for (const room of rooms.values()) { try { if (room.saving) await room.saving; room.saving = null; await saveRoom(room); } catch (e) { /* tenta as outras */ } }
-+  if (store.flushHistory) await store.flushHistory().catch((e) => console.error('Falha ao gravar histórico', e.message));
-   clearTimeout(t);
-diff --git a/server/painel.js b/server/painel.js
-index 8b21cae4068db755d54e2831877f2e105a51311e..85c64cef0fa08b1ddb4bd7c8314b37cc814e360e 100644
---- a/server/painel.js
-+++ b/server/painel.js
-@@ -10,4 +10,7 @@ module.exports = function painel(ctx) {
-   const { store, rooms, route, requireUser, getRoom, httpError, readBody, Perms, permDoc, uid } = ctx;
--  const hojeBR = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
--  const horaBR = (t) => Number(new Date(t || Date.now()).toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false })) % 24;
-+  // formatadores criados uma vez só: criar um a cada edição custava ~0,5 ms por edição
-+  const FMT_DIA = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' });
-+  const FMT_HORA = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false });
-+  const hojeBR = () => FMT_DIA.format(new Date());
-+  const horaBR = (t) => Number(FMT_HORA.format(new Date(t || Date.now()))) % 24;
-   const ehTeste = (room) => !!(room && room.temp);
-@@ -90,3 +93,3 @@ module.exports = function painel(ctx) {
-     if (c && Date.now() - c.t < 5 * 60e3) return c.v;
--    const inicio = (k) => { const d = new Date(Date.now() - k * 86400e3).toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }); return { d, iso: new Date(d + 'T00:00:00-03:00').toISOString() }; };
-+    const inicio = (k) => { const d = FMT_DIA.format(new Date(Date.now() - k * 86400e3)); return { d, iso: new Date(d + 'T00:00:00-03:00').toISOString() }; };
-     const out = [];
-diff --git a/server/store.js b/server/store.js
-index e6ed15414d0e95d1b6804d05f8b3811512e902bf..daba245def3762e80b2368d0f3c2af701fb05c11 100644
---- a/server/store.js
-+++ b/server/store.js
-@@ -123,2 +123,21 @@ function pgStore(url) {
-   const q = (text, params) => pool.query(text, params);
-+  // fila do histórico (ver addHistory): uma gravação por vez; se o banco falhar, as linhas voltam para a fila
-+  // (até 20 mil, para não ocupar memória sem limite enquanto o banco estiver fora)
-+  let histFila = [], histTimer = null, histGravando = Promise.resolve();
-+  function flushHistory() {
-+    clearTimeout(histTimer); histTimer = null;
-+    histGravando = histGravando.catch(() => {}).then(async () => {
-+      if (!histFila.length) return;
-+      const lote = histFila; histFila = [];
-+      try {
-+        await q(`INSERT INTO cell_history (doc_id, sheet_id, addr, user_id, user_name, ip, before, after, at)
-+          SELECT x.d, x.s, x.a, x.u, x.n, x.i, x.b, x.f, x.t FROM jsonb_to_recordset($1::jsonb) AS x(d text, s text, a text, u text, n text, i text, b text, f text, t timestamptz)`, [JSON.stringify(lote)]);
-+      } catch (e) {
-+        histFila = lote.concat(histFila).slice(-20000);
-+        if (!histTimer) histTimer = setTimeout(() => { histTimer = null; flushHistory().catch(() => {}); }, 5000);
-+        throw e;
-+      }
+diff --git a/src/diario.js b/src/diario.js
+index 9b2fd00..d801629 100644
+--- a/src/diario.js
++++ b/src/diario.js
+@@ -135,7 +135,16 @@
+       <div class="dia-list">${secAtr.map((i) => item(lista[i], i, `${esc(fmtData(lista[i].s))} ${esc(fmtHora(lista[i].s))} · ${esc(lista[i].op || lista[i].sh.name)}`)).join('') || '<p class="sp-hint">Nada atrasado.</p>'}</div>
+       <h3 class="dia-h warn">Demurrage do vazio (vencida ou em até 2 dias) <small>${d.demurrage.length}</small></h3>
+       <div class="dia-list">${secDem.map((i) => item(lista[i], i, lista[i].falta < 0 ? `<em class="bad">vencida há ${-lista[i].falta} ${lista[i].falta === -1 ? 'dia' : 'dias'}</em> · prazo ${esc(fmtData(lista[i].prazo))}` : `<em class="warn">${lista[i].falta === 0 ? 'vence hoje' : 'vence em ' + lista[i].falta + (lista[i].falta === 1 ? ' dia' : ' dias')}</em> · prazo ${esc(fmtData(lista[i].prazo))}`)).join('') || '<p class="sp-hint">Nenhuma demurrage vencendo.</p>'}</div>
+-      ${d.semAbas.length ? `<p class="sp-hint">Abas não encontradas: ${esc(d.semAbas.join(', '))}.</p>` : ''}`;
++      ${d.semAbas.length ? `<p class="sp-hint">Abas não encontradas: ${esc(d.semAbas.join(', '))}.</p>` : ''}
++      <div id="dia-sa"></div>`;
++    // status automático esperando conferência (vem do servidor)
++    if (App.statusPendentes) App.statusPendentes().then((l) => {
++      const el = box.querySelector('#dia-sa');
++      if (!el || !l.length) return;
++      el.innerHTML = `<h3 class="dia-h warn">Status automático para conferir e enviar <small>${l.length}</small></h3><div class="dia-list">${l.map((x, i) => `<div class="dia-it sa-p"><b>${esc(x.nome)}</b><span>${esc(x.horario)} · ${esc(new Date(x.at).toLocaleDateString('pt-BR'))}</span><small>${esc(x.filtroCol)}: ${esc((x.valores || []).join(', ') || 'todas as linhas')}${x.obs ? ' · ' + esc(x.obs) : ''}</small><span class="sa-bt"><button class="btn btn-primary btn-sm" data-sa="${i}">Conferir e enviar</button><button class="btn btn-sm" data-sf="${i}">Marcar como feito</button></span></div>`).join('')}</div>`;
++      el.querySelectorAll('[data-sa]').forEach((b) => (b.onclick = (e) => { e.stopPropagation(); const m = box.closest('dialog'); if (m) m.querySelector('.modal-x').click(); App.statusConferir(l[+b.dataset.sa]); }));
++      el.querySelectorAll('[data-sf]').forEach((b) => (b.onclick = (e) => { e.stopPropagation(); App.statusFeito(l[+b.dataset.sf]).then(() => render(box)); }));
 +    });
-+    return histGravando;
-+  }
-   const row = async (text, params) => { const r = await q(text, params); return r.rows[0] || null; };
-@@ -218,7 +237,11 @@ function pgStore(url) {
-     async deleteDoc(id) { await q('DELETE FROM docs WHERE id = $1', [id]); },
-+    // histórico das células: acumula por até 1 s (ou 500 linhas) e grava tudo numa consulta só, em vez de uma ida ao
-+    // banco por edição; cada linha guarda a hora exata da edição. Leituras do histórico gravam a fila antes.
-     async addHistory(docId, user, entries) {
--      await q(`INSERT INTO cell_history (doc_id, sheet_id, addr, user_id, user_name, ip, before, after)
--        SELECT $1, x.s, x.a, $2, $3, $5, x.b, x.f FROM jsonb_to_recordset($4::jsonb) AS x(s text, a text, b text, f text)`,
--      [docId, user.id, user.name, JSON.stringify(entries), user.ip || null]);
-+      const at = new Date().toISOString();
-+      for (const e of entries) histFila.push({ d: docId, s: e.s, a: e.a, u: user.id, n: user.name, i: user.ip || null, b: e.b, f: e.f, t: at });
-+      if (histFila.length >= 500) return flushHistory();
-+      if (!histTimer) histTimer = setTimeout(() => { histTimer = null; flushHistory().catch((e) => console.error('Falha ao gravar histórico', e.message)); }, 1000);
-     },
-+    flushHistory: () => flushHistory(),
-     async addVersion(docId, v) {
-@@ -242,2 +265,3 @@ function pgStore(url) {
-     async getHistory(docId, sheetId, addr, limit) {
-+      await flushHistory();
-       const r = await q('SELECT user_id, user_name, ip, at, before, after FROM cell_history WHERE doc_id = $1 AND sheet_id = $2 AND addr = $3 ORDER BY id DESC LIMIT $4', [docId, sheetId, addr, limit]);
-@@ -257,2 +281,3 @@ function pgStore(url) {
-     async historyStats(docId, since) {
-+      await flushHistory();
-       const r = await q(`SELECT user_id AS id, max(user_name) AS name, count(*)::int AS n FROM cell_history
-diff --git a/server/ws.js b/server/ws.js
-index 0de1da16001d96936621db1449bc88a865bea869..81d793df57554094737ac2e39b7502d21bf38691 100644
---- a/server/ws.js
-+++ b/server/ws.js
-@@ -1,4 +1,6 @@
--// WebSocket mínimo (RFC 6455) sem dependências: texto, ping/pong, fragmentação e fechamento.
-+// WebSocket mínimo (RFC 6455) sem dependências: texto, ping/pong, fragmentação, fechamento e compressão
-+// (permessage-deflate, RFC 7692, sem contexto entre mensagens: cada mensagem é compactada sozinha).
- 'use strict';
- const crypto = require('crypto');
-+const zlib = require('zlib');
- const { EventEmitter } = require('events');
-@@ -7,2 +9,29 @@ const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
- const MAX_MESSAGE = 64 * 1024 * 1024;
-+// mensagens pequenas não compensam compactar; as grandes (a planilha inteira) compactam fora do laço principal
-+const MIN_DEFLATE = 1024, ASYNC_DEFLATE = 64 * 1024;
-+const TAIL = Buffer.from([0x00, 0x00, 0xff, 0xff]);
-+const SYNC = { finishFlush: zlib.constants.Z_SYNC_FLUSH };
+     box.onclick = (e) => {
+       const b = e.target.closest('[data-i]');
+       if (b) { const x = lista[+b.dataset.i]; const m = box.closest('dialog'); if (m) m.querySelector('.modal-x').click(); goTo(x.sh, x.r, x.c); return; }
+diff --git a/src/indicadores.js b/src/indicadores.js
+index c8fba66..ec36deb 100644
+--- a/src/indicadores.js
++++ b/src/indicadores.js
+@@ -33,6 +33,7 @@
+         if (k === 'vz') {
+           const baixa = O.serial(L.get('DATABAIXA')), dem = Number(String(L.get('DEMPS') || '').replace(',', '.')), dt = O.serial(L.get('DATA'));
+           if (baixa !== null && dem > 0 && dt !== null) { m.prazo = Math.floor(baixa) + dem; m.sobra = m.prazo - Math.floor(dt); }
++          m.diaria = App.demDiaria ? App.demDiaria(O.txt(L.get('ARMADOR')), O.txt(L.get('TIPO'))) : 0;
+         }
+         out.push(m);
+       }
+@@ -58,13 +59,18 @@
+     for (let i = 5; i >= 0; i--) { const x = voltaMes(ym, i); meses.push({ ym: x, n: todos.filter((m) => mesDe(m.quando) === x).length }); }
+     return {
+       total: doMes.length, porOp, clientes: [...porCli.values()].sort((a, b) => b.total - a.total),
+-      dem: { total: dem.length, dentro: dem.length - fora.length, fora, sobraMedia: dem.length ? dem.reduce((s, m) => s + m.sobra, 0) / dem.length : null },
++      dem: { total: dem.length, dentro: dem.length - fora.length, fora, sobraMedia: dem.length ? dem.reduce((s, m) => s + m.sobra, 0) / dem.length : null,
++        // custo estimado (dias de atraso × diária) e evitado (devoluções no prazo × dias de referência × diária)
++        custo: fora.reduce((s, m) => s + -m.sobra * (m.diaria || 0), 0),
++        evitado: dem.filter((m) => m.sobra >= 0).reduce((s, m) => s + ((App.demCfg && App.demCfg().ref) || 3) * (m.diaria || 0), 0),
++        semDiaria: dem.filter((m) => !m.diaria).length },
+       tempo: tempos.length ? { n: tempos.length, media: tempos.reduce((a, b) => a + b, 0) / tempos.length } : null,
+       meses,
+     };
+   }
+ 
+   const nf = (n, d) => Number(n).toLocaleString('pt-BR', { minimumFractionDigits: d || 0, maximumFractionDigits: d || 0 });
++  const moeda = (v) => `${(App.demCfg && App.demCfg().moeda) || 'US$'} ${nf(v || 0, 2)}`;
+   const tempoTxt = (h) => (h < 48 ? nf(h, 1) + ' h' : nf(h / 24, 1) + ' dias');
+   function render(box, ym) {
+     const d = calcula(ym), O = App.opData;
+@@ -76,7 +82,12 @@
+         ${OPS.map((o) => `<div class="ind-k"><b>${nf(d.porOp[o])}</b><span>${esc(o.toLowerCase())}</span></div>`).join('')}
+         <div class="ind-k ${pct === null ? '' : pct >= 90 ? 'ok' : pct >= 70 ? 'warn' : 'bad'}"><b>${pct === null ? '—' : pct + '%'}</b><span>vazio no prazo da demurrage</span></div>
+         <div class="ind-k"><b>${d.tempo ? tempoTxt(d.tempo.media) : '—'}</b><span>do P.S. ao FINALIZADO${d.tempo ? ` (${d.tempo.n})` : ''}</span></div>
++        <div class="ind-k ${d.dem.custo ? 'bad' : ''}"><b>${moeda(d.dem.custo)}</b><span>custo estimado de demurrage</span></div>
++        <div class="ind-k ok"><b>${moeda(d.dem.evitado)}</b><span>custo evitado (devolvido no prazo)</span></div>
+       </div>
++      ${d.dem.total && d.dem.semDiaria ? `<p class="sp-hint">${d.dem.semDiaria} ${d.dem.semDiaria === 1 ? 'devolução sem diária cadastrada' : 'devoluções sem diária cadastrada'} para o armador: ajuste em Administrador › Custos de demurrage.</p>` : ''}
++      ${d.dem.total ? `<p class="sp-hint">Evitado = devoluções no prazo × ${(App.demCfg && App.demCfg().ref) || 3} dias de referência × diária do armador (o que seria pago se cada uma atrasasse esse tanto).</p>` : ''}`;
++    box.innerHTML += `
+       <h3 class="dia-h">Últimos 6 meses</h3>
+       <div class="ind-bars">${d.meses.map((m) => `<div class="ind-bar${m.ym === ym ? ' sel' : ''}" title="${esc(nomeMes(m.ym))}: ${m.n}"><b>${m.n}</b><i style="height:${Math.round(100 * m.n / maxM)}%"></i><span>${esc(curto(m.ym))}</span></div>`).join('')}</div>
+       <h3 class="dia-h">Por cliente <small>${d.clientes.length}</small></h3>
+@@ -84,7 +95,7 @@
+         ${d.clientes.map((c) => `<tr><td>${esc(c.cli)}</td>${OPS.map((o) => `<td class="n">${c[o] || ''}</td>`).join('')}<td class="n"><b>${c.total}</b></td></tr>`).join('') || `<tr><td colspan="6" class="sp-hint">Nenhuma movimentação em ${esc(nomeMes(ym))}.</td></tr>`}
+       </tbody></table></div>
+       <h3 class="dia-h ${d.dem.fora.length ? 'bad' : ''}">Demurrage fora do prazo <small>${d.dem.fora.length} de ${d.dem.total}</small></h3>
+-      <div class="dia-list">${d.dem.fora.map((m, i) => `<button class="dia-it" data-f="${i}"><b>${esc(m.cont || '(sem container)')}</b><span>${esc(m.cli)}</span><small><em class="bad">${-m.sobra} ${m.sobra === -1 ? 'dia' : 'dias'} depois do prazo</em> · prazo ${esc(O.fmtData(m.prazo))}</small></button>`).join('') || '<p class="sp-hint">Nenhuma devolução ou retirada fora do prazo neste mês.</p>'}</div>
++      <div class="dia-list">${d.dem.fora.map((m, i) => `<button class="dia-it" data-f="${i}"><b>${esc(m.cont || '(sem container)')}</b><span>${esc(m.cli)}</span><small><em class="bad">${-m.sobra} ${m.sobra === -1 ? 'dia' : 'dias'} depois do prazo</em> · prazo ${esc(O.fmtData(m.prazo))}${m.diaria ? ' · ≈ ' + esc(moeda(-m.sobra * m.diaria)) : ''}</small></button>`).join('') || '<p class="sp-hint">Nenhuma devolução ou retirada fora do prazo neste mês.</p>'}</div>
+       ${d.dem.sobraMedia !== null ? `<p class="sp-hint">Em média, o vazio voltou ${nf(Math.abs(d.dem.sobraMedia), 1)} ${d.dem.sobraMedia >= 0 ? 'dias antes' : 'dias depois'} do fim da demurrage.</p>` : ''}
+       ${d.tempo ? '' : '<p class="sp-hint">O tempo do P.S. até o FINALIZADO começa a ser medido a partir de agora (linhas finalizadas depois desta atualização).</p>'}`;
+     box.onclick = (e) => {
+@@ -98,7 +109,8 @@
+   function csv(d, ym) {
+     const q = (v) => { const s = String(v === null || v === undefined ? '' : v); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+     const L = [[`Indicadores de ${nomeMes(ym)}`], [], ['Cliente', ...OPS, 'Total'], ...d.clientes.map((c) => [c.cli, ...OPS.map((o) => c[o] || 0), c.total]), [],
+-      ['Demurrage fora do prazo'], ['Container', 'Cliente', 'Prazo', 'Dias depois do prazo'], ...d.dem.fora.map((m) => [m.cont, m.cli, App.opData.fmtData(m.prazo), -m.sobra])];
++      ['Demurrage'], ['Custo estimado', d.dem.custo.toFixed(2)], ['Custo evitado', d.dem.evitado.toFixed(2)], [],
++      ['Demurrage fora do prazo'], ['Container', 'Cliente', 'Prazo', 'Dias depois do prazo', 'Custo estimado'], ...d.dem.fora.map((m) => [m.cont, m.cli, App.opData.fmtData(m.prazo), -m.sobra, (-m.sobra * (m.diaria || 0)).toFixed(2)])];
+     const blob = new Blob(['\uFEFF' + L.map((r) => r.map(q).join(';')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+     const a = document.createElement('a');
+     a.href = URL.createObjectURL(blob); a.download = `indicadores-${Math.floor(ym / 100)}-${String(ym % 100).padStart(2, '0')}.csv`;
+diff --git a/src/notify.js b/src/notify.js
+index d76ad62..212b7b4 100644
+--- a/src/notify.js
++++ b/src/notify.js
+@@ -8,7 +8,8 @@
+   const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+   const standalone = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+   const suporta = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+-  const TIPOS = [['critico', 'Container marcado como crítico'], ['troca', 'Pedido de troca de veículo'], ['chat', 'Mensagens no chat'], ['prestacking', 'PRÉ STACKING finalizado']];
++  const TIPOS = [['critico', 'Container marcado como crítico'], ['troca', 'Pedido de troca de veículo'], ['chat', 'Mensagens no chat'], ['prestacking', 'PRÉ STACKING finalizado'],
++    ['alerta', 'Alertas novos do botão ALERTA'], ['demurrage', 'Demurrage do vazio vencendo ou vencida'], ['status', 'Status automático para conferir']];
+   const appUrl = () => location.origin + location.pathname;
+   const aparelho = () => (iOS ? 'iPhone/iPad' : /Android/.test(navigator.userAgent) ? 'Android' : 'Computador') + (standalone ? ' (app)' : '');
+   const chaveBin = (b64) => { const s = (b64 + '='.repeat((4 - b64.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/'); return Uint8Array.from(atob(s), (c) => c.charCodeAt(0)); };
+@@ -38,18 +39,19 @@
+       ? 'No iPhone, as notificações funcionam com a planilha instalada: no Safari, toque em <b>Compartilhar › Adicionar à Tela de Início</b> e abra pelo ícone. Depois volte aqui.'
+       : 'Este navegador não aceita notificações. No iPhone, use o app da Tela de Início (iOS 16.4 ou mais novo).';
+     else if (Notification.permission === 'denied') aviso = 'As notificações estão bloqueadas para a planilha neste aparelho. Libere em Ajustes › Notificações › Planilhas (iPhone) ou nas configurações do navegador.';
+-    let st = { inscrito: false, prefs: { critico: true, troca: true, chat: true, prestacking: false } };
++    let st = { inscrito: false, prefs: { critico: true, troca: true, chat: true, prestacking: false, alerta: true, demurrage: true, status: true } };
+     const sub = suporta && !aviso ? await assinaturaAtual() : null;
+     if (sub) { try { st = await api('POST', '/api/push/estado', { endpoint: sub.endpoint }); } catch (e) { /* segue com o padrão */ } }
+     const ligado = !!(sub && st.inscrito);
+     const body = `<p class="modal-text">${ligado ? '<b>Ligadas neste aparelho.</b> ' : ''}Avise neste aparelho quando:</p>
+       <div class="nt-list">${TIPOS.map(([k, t]) => `<label class="check"><input type="checkbox" data-k="${k}"${st.prefs[k] ? ' checked' : ''}${aviso ? ' disabled' : ''}> ${esc(t)}</label>`).join('')}</div>
+-      ${aviso ? `<p class="nt-aviso">${aviso}</p>` : '<p class="sp-hint">Você não recebe aviso das mudanças feitas por você. Avisos seguidos do mesmo tipo chegam juntos.</p>'}`;
++      ${aviso ? `<p class="nt-aviso">${aviso}</p>` : `<p class="sp-hint">Os avisos chegam com o app fechado e o celular bloqueado. Na hora: crítico, troca, chat e PRÉ STACKING finalizado (assim que alguém muda a planilha). Alertas do botão ALERTA: quando alguém estiver com a planilha aberta (as regras são calculadas na tela). Demurrage (a cada 30 min) e status automático (no horário): pelo servidor. Você não recebe aviso das mudanças feitas por você; avisos seguidos do mesmo tipo chegam juntos.</p>`}`;
+     const prefs = (d) => { const o = {}; d.querySelectorAll('[data-k]').forEach((x) => { o[x.dataset.k] = x.checked; }); return o; };
+     const botoes = [{ label: 'Fechar' }];
+     if (!aviso && ligado) {
+       botoes.unshift({ label: 'Desligar', action: () => { desligar(sub); } });
+       botoes.push({ label: 'Enviar teste', action: () => { testar(); return false; } });
++      botoes.push({ label: 'Exemplo de cada aviso', action: () => { testar(true); return false; } });
+       botoes.push({ label: 'Salvar', primary: true, action: (d) => { salvar(sub, prefs(d)); } });
+     } else if (!aviso) botoes.push({ label: 'Ligar notificações', primary: true, action: (d) => { ligar(prefs(d)); } });
+     App.ui.modal({ title: 'Notificações no celular', width: '460px', body, buttons: botoes });
+@@ -76,8 +78,11 @@
+     try { await api('POST', '/api/push/cancelar', { endpoint: sub.endpoint }); await sub.unsubscribe(); App.emit('notify', 'Notificações desligadas neste aparelho.'); }
+     catch (e) { App.emit('notify', e.message); }
+   }
+-  async function testar() {
+-    try { const r = await api('POST', '/api/push/teste', {}); App.emit('notify', r.enviadas ? 'Notificação de teste enviada.' : 'Nenhum aparelho recebeu o teste.'); }
++  async function testar(exemplos) {
++    try {
++      const r = await api('POST', '/api/push/teste', exemplos ? { exemplos: true } : {});
++      App.emit('notify', !r.enviadas ? 'Nenhum aparelho recebeu o teste.' : exemplos ? `${r.exemplos} exemplos enviados (um de cada aviso). Bloqueie o celular para ver chegando.` : 'Notificação de teste enviada.');
++    }
+     catch (e) { App.emit('notify', e.message); }
+   }
+   App.commands.def('notificacoes', 'Notificações no celular', abrir);
+diff --git a/src/styles.css b/src/styles.css
+index 0706fcc..1171baf 100644
+--- a/src/styles.css
++++ b/src/styles.css
+@@ -1411,3 +1411,31 @@ html.dark .dia-chip b { color: #ff8a92; }
+ html.dark .doc-title { background: transparent; border-color: transparent; color: #fff; }
+ html.dark .doc-title:focus { background: #191919; border-color: var(--red); }
+ html.dark .toast { background: #2b2b2b; color: #f1f1f1; border: 1px solid #3a3a3a; }
 +
-+// Mensagem pronta para várias conexões: o texto é convertido uma vez só e a versão compactada também é
-+// calculada uma vez (na primeira conexão que aceita compressão) e reaproveitada pelas outras.
-+// partes: uma mensagem pode ser montada com pedaços já preparados (ex.: a planilha inteira, guardada entre
-+// várias entradas), e os pedaços compactados são emendados (cada um termina num bloco de sincronização).
-+function prepare(m) {
-+  return { raw: Buffer.from(typeof m === 'string' ? m : JSON.stringify(m), 'utf8'), z: null };
-+}
-+function deflate(raw) {
-+  if (raw.length < ASYNC_DEFLATE) return zlib.deflateRawSync(raw, Object.assign({ level: 6 }, SYNC));
-+  return new Promise((res) => zlib.deflateRaw(raw, Object.assign({ level: 1 }, SYNC), (e, b) => res(e ? null : b)));
-+}
-+// compactado de uma parte (com o bloco de sincronização no fim, para poder emendar)
-+function partZ(p) { if (!p.z) p.z = deflate(p.raw); return p.z; }
-+// junta partes: [prepare(...), ...] -> { raw, partes } (o compactado emenda os pedaços já compactados)
-+function join(parts) { return { raw: Buffer.concat(parts.map((x) => x.raw)), parts, z: null }; }
-+function messageZ(p) {
-+  if (p.z) return p.z;
-+  if (!p.parts) { p.z = partZ(p); return p.z; }
-+  const zs = p.parts.map(partZ);
-+  p.z = zs.some((z) => z && typeof z.then === 'function') ? Promise.all(zs).then((a) => (a.every(Boolean) ? Buffer.concat(a) : null)) : Buffer.concat(zs);
-+  return p.z;
-+}
- 
-@@ -17,2 +46,5 @@ class WSConn extends EventEmitter {
-     this.alive = true;
-+    this.deflate = false; // ligado no aceite, se o navegador oferecer permessage-deflate
-+    this.busy = 0; // envios esperando a compressão: os seguintes entram na fila, para manter a ordem
-+    this.chain = Promise.resolve();
-     socket.setNoDelay(true);
-@@ -27,3 +59,3 @@ class WSConn extends EventEmitter {
-       const b0 = this.buf[0], b1 = this.buf[1];
--      const fin = (b0 & 0x80) !== 0, op = b0 & 0x0f, masked = (b1 & 0x80) !== 0;
-+      const fin = (b0 & 0x80) !== 0, rsv1 = (b0 & 0x40) !== 0, op = b0 & 0x0f, masked = (b1 & 0x80) !== 0;
-       let len = b1 & 0x7f, off = 2;
-@@ -38,3 +70,3 @@ class WSConn extends EventEmitter {
-       this.buf = this.buf.subarray(off + len);
--      this._frame(fin, op, payload);
-+      this._frame(fin, op, payload, rsv1);
-       if (!this.open) return;
-@@ -42,3 +74,3 @@ class WSConn extends EventEmitter {
-   }
--  _frame(fin, op, payload) {
-+  _frame(fin, op, payload, rsv1) {
-     if (op === 0x8) { this.close(1000); return; }
-@@ -46,3 +78,3 @@ class WSConn extends EventEmitter {
-     if (op === 0xA) { this.alive = true; return; }
--    if (op === 0x1 || op === 0x2) { this.frags = [payload]; this.fragOp = op; }
-+    if (op === 0x1 || op === 0x2) { this.frags = [payload]; this.fragOp = op; this.fragZ = rsv1; }
-     else if (op === 0x0) this.frags.push(payload);
-@@ -50,4 +82,8 @@ class WSConn extends EventEmitter {
-     if (fin) {
--      const data = Buffer.concat(this.frags);
-+      let data = Buffer.concat(this.frags);
-       this.frags = [];
-+      if (this.fragZ) {
-+        if (!this.deflate) { this.close(1002, 'Compressão não combinada'); return; }
-+        try { data = zlib.inflateRawSync(Buffer.concat([data, TAIL]), Object.assign({ maxOutputLength: MAX_MESSAGE }, SYNC)); } catch (e) { this.close(1007, 'Mensagem compactada inválida'); return; }
-+      }
-       if (this.fragOp === 0x1) this.emit('message', data.toString('utf8'));
-@@ -55,3 +91,3 @@ class WSConn extends EventEmitter {
-   }
--  _send(op, payload) {
-+  _send(op, payload, rsv1) {
-     if (!this.open || this.socket.destroyed) return;
-@@ -62,6 +98,20 @@ class WSConn extends EventEmitter {
-     else { h = Buffer.alloc(10); h[1] = 127; h.writeUInt32BE(Math.floor(len / 4294967296), 2); h.writeUInt32BE(len % 4294967296, 6); }
--    h[0] = 0x80 | op;
-+    h[0] = 0x80 | (rsv1 ? 0x40 : 0) | op;
-     this.socket.write(Buffer.concat([h, payload]));
-   }
--  send(obj) { this._send(0x1, Buffer.from(typeof obj === 'string' ? obj : JSON.stringify(obj), 'utf8')); }
-+  send(obj) { this.sendPrepared(prepare(obj)); }
-+  // envia uma mensagem preparada (ver prepare/join): compactada se a conexão aceita e se compensa
-+  sendPrepared(p) {
-+    if (!this.open) return;
-+    if (!this.deflate || p.raw.length < MIN_DEFLATE) return this._out(null, p.raw);
-+    return this._out(messageZ(p), p.raw);
-+  }
-+  // mantém a ordem: enquanto uma compressão demorada não termina, os envios seguintes esperam na fila
-+  _out(z, raw) {
-+    const frame = (b) => { if (b) this._send(0x1, b.subarray(0, b.length - 4), true); else this._send(0x1, raw); };
-+    const lento = z && typeof z.then === 'function';
-+    if (!this.busy && !lento) return frame(z);
-+    this.busy++;
-+    this.chain = this.chain.then(() => z).then(frame, () => frame(null)).then(() => { this.busy--; });
-+  }
-   ping() { this.alive = false; this._send(0x9, Buffer.alloc(0)); }
-@@ -69,2 +119,4 @@ class WSConn extends EventEmitter {
-     if (!this.open) return;
-+    // se há mensagens esperando a compressão, fecha depois delas (ex.: aviso de erro seguido do fechamento)
-+    if (this.busy) { this.chain = this.chain.then(() => this.close(code, reason)); return; }
-     const r = Buffer.from(reason || '', 'utf8');
-@@ -85,4 +137,8 @@ function accept(req, socket, head) {
-   const acceptKey = crypto.createHash('sha1').update(key + GUID).digest('base64');
--  socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + acceptKey + '\r\n\r\n');
-+  // compressão: aceita se o navegador oferece; cada mensagem é compactada sozinha (sem contexto) nos dois sentidos
-+  const z = !process.env.WS_SEM_COMPRESSAO && /permessage-deflate/i.test(String(req.headers['sec-websocket-extensions'] || ''));
-+  socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + acceptKey + '\r\n' +
-+    (z ? 'Sec-WebSocket-Extensions: permessage-deflate; server_no_context_takeover; client_no_context_takeover\r\n' : '') + '\r\n');
-   const ws = new WSConn(socket);
-+  ws.deflate = z;
-   if (head && head.length) ws._onData(head);
-@@ -91,2 +147,2 @@ function accept(req, socket, head) {
- 
--module.exports = { accept, WSConn };
-+module.exports = { accept, WSConn, prepare, join };
-diff --git a/src/conteiner.js b/src/conteiner.js
-index a0a89bbb7403ee9e59d6b9c14bd286e3084a9ba3..4a3f1ca6c1b2f67d0620a04c010a8804e23faf69 100644
---- a/src/conteiner.js
-+++ b/src/conteiner.js
-@@ -54,3 +54,16 @@
-   }
--  App.on('change', () => cache.clear());
-+  // o cabeçalho só muda se a alteração mexe nas 15 primeiras linhas ou nos nomes das colunas: edições comuns
-+  // (inclusive as recebidas de outras pessoas) não precisam varrer a página de novo
-+  const tocaCabecalho = (p) => {
-+    if (!p || !p.sheets) return true;
-+    for (const id in p.sheets) {
-+      const e = p.sheets[id];
-+      if (e.created || e.removed || (e.props && ('colNames' in e.props || 'cols' in e.props))) return true;
-+      for (const a in e.cells || {}) { const m = /\d+$/.exec(a); if (!m || +m[0] <= 15) return true; }
-+    }
-+    return false;
-+  };
-+  App.on('localPatch', (p) => { if (tocaCabecalho(p)) cache.clear(); });
-+  App.on('remotePatch', (p) => { if (tocaCabecalho(p)) cache.clear(); });
-+  App.on('change', (e) => { if (!e || (!e.label && !e.remote)) cache.clear(); });
-   App.on('sheet', () => cache.clear());
-diff --git a/src/model.js b/src/model.js
-index 42215d6c0c9630ac344942356e0d47157fa2aa08..b6490fe7f2adc57a272603f524261d9df9038f5b 100644
---- a/src/model.js
-+++ b/src/model.js
-@@ -168,2 +168,3 @@
-     App._cfCache = new Map();
-+    if (window.Perms && window.Perms.planilhaMudou) window.Perms.planilhaMudou();
-   }
-@@ -182,10 +183,97 @@
-   App.applyPatch = applyPatch;
-+
-+  // ---------- Comparação antes/depois de uma alteração ----------
-+  // Dá exatamente o mesmo resultado de Patch.diffPair sobre uma "foto" do documento (JSON sem os campos que começam
-+  // com _), mas sem converter o documento inteiro em texto e ler tudo de volta a cada edição (numa planilha de
-+  // alguns MB isso custava ~300 ms por Enter): guarda o texto de cada célula e de cada propriedade das páginas,
-+  // compara texto com texto e só lê de volta o que mudou.
-+  // texto sem os campos _: converte direto (rápido) e só refaz com o filtro se aparecer "_ (um campo _ só pode
-+  // aparecer assim; se for outra coisa, o filtro apenas confirma o mesmo texto)
-+  const jsR = (x) => { let t = JSON.stringify(x); if (t !== undefined && t.indexOf('"_') >= 0) t = JSON.stringify(x, replacer); return t === undefined ? null : t; };
-+  const NUL = (j) => (j === null || j === undefined ? 'null' : j);
-+  function marcaPagina(sh) {
-+    const cells = new Map(), props = new Map(), keys = [];
-+    for (const k of Object.keys(sh)) {
-+      if (k[0] === '_') continue;
-+      if (k === 'cells') {
-+        if (sh.cells === undefined) continue;
-+        keys.push(k);
-+        const cs = sh.cells || {};
-+        for (const a in cs) { const j = jsR(cs[a]); if (j !== null) cells.set(a, j); }
-+        continue;
-+      }
-+      const j = jsR(sh[k]);
-+      if (j === null) continue;
-+      keys.push(k); props.set(k, j);
-+    }
-+    return { cells, props, keys };
-+  }
-+  function marca() {
-+    return { title: doc.title, names: jsR(doc.names || {}), order: doc.sheets.map((x) => x.id), sheets: new Map(doc.sheets.map((x) => [x.id, marcaPagina(x)])) };
-+  }
-+  // a página como estava antes (para recriar uma página excluída ao desfazer)
-+  function paginaDaMarca(m) {
-+    const o = {};
-+    for (const k of m.keys) {
-+      if (k === 'cells') { const c = {}; for (const [a, j] of m.cells) c[a] = JSON.parse(j); o.cells = c; }
-+      else o[k] = JSON.parse(m.props.get(k));
-+    }
-+    return o;
-+  }
-+  // [alteração, inversa] entre a marca B (antes) e o documento agora; [null, null] quando nada mudou
-+  function diffMarca(B) {
-+    const f = { sheets: {} }, r = { sheets: {} };
-+    let changed = false;
-+    if ((B.title || '') !== (doc.title || '')) { f.title = doc.title; r.title = B.title; changed = true; }
-+    const an = jsR(doc.names || {});
-+    if (NUL(B.names) !== NUL(an)) { f.names = JSON.parse(NUL(an)); r.names = JSON.parse(NUL(B.names)); changed = true; }
-+    const ao = doc.sheets.map((x) => x.id);
-+    if (JSON.stringify(B.order) !== JSON.stringify(ao)) { f.order = ao; r.order = B.order.slice(); changed = true; }
-+    const am = new Map(doc.sheets.map((x) => [x.id, x]));
-+    for (const [id, sh] of am) {
-+      const o = B.sheets.get(id);
-+      if (!o) { f.sheets[id] = { created: JSON.parse(JSON.stringify(sh, replacer)) }; r.sheets[id] = { removed: true }; changed = true; continue; }
-+      const fc = {}, rc = {}, fp = {}, rp = {};
-+      let nc = 0, np = 0;
-+      const ac = sh.cells || {};
-+      for (const a in ac) {
-+        const ja = jsR(ac[a]);
-+        if (ja === null) continue;
-+        const jb = o.cells.get(a);
-+        if (ja !== NUL(jb)) { fc[a] = JSON.parse(ja); rc[a] = jb === undefined ? null : JSON.parse(jb); nc++; }
-+      }
-+      for (const [a, jb] of o.cells) { const x = ac[a]; if (x === undefined || typeof x === 'function') { fc[a] = null; rc[a] = JSON.parse(jb); nc++; } }
-+      const keys = new Set(o.keys.filter((k) => k !== 'cells').concat(Object.keys(sh).filter((k) => k !== 'cells' && k[0] !== '_')));
-+      for (const k of keys) {
-+        const ja = jsR(sh[k]), jb = o.props.get(k);
-+        if (NUL(ja) !== NUL(jb)) { fp[k] = ja === null ? null : JSON.parse(ja); rp[k] = jb === undefined ? null : JSON.parse(jb); np++; }
-+      }
-+      if (nc || np) {
-+        f.sheets[id] = {}; r.sheets[id] = {};
-+        if (nc) { f.sheets[id].cells = fc; r.sheets[id].cells = rc; }
-+        if (np) { f.sheets[id].props = fp; r.sheets[id].props = rp; }
-+        changed = true;
-+      }
-+    }
-+    for (const [id, o] of B.sheets) if (!am.has(id)) { f.sheets[id] = { removed: true }; r.sheets[id] = { created: paginaDaMarca(o) }; changed = true; }
-+    return changed ? [f, r] : [null, null];
-+  }
-+  App._diffMarca = diffMarca; App._marca = marca; // usados pelos testes de equivalência
-+
-   // Executa uma alteração com registro no histórico. fn pode retornar false para cancelar.
-   App.change = (label, fn) => {
--    const snap = snapshot();
-+    const before = marca(), ativoAntes = doc.active;
-     let res;
--    try { res = fn(); } catch (e) { console.error(e); restore(snap); App.emit('notify', 'Não foi possível concluir a operação.'); return false; }
-+    try { res = fn(); } catch (e) {
-+      console.error(e);
-+      // volta ao estado de antes (o mesmo que restaurar a foto completa)
-+      const inv = diffMarca(before)[1];
-+      if (inv) applyPatch(inv);
-+      doc.active = Math.max(0, Math.min(ativoAntes, doc.sheets.length - 1));
-+      invalidate(); App.emit('sheet'); App.emit('change', { undo: true }); scheduleSave();
-+      App.emit('notify', 'Não foi possível concluir a operação.');
-+      return false;
-+    }
-     if (res === false) return false;
--    const before = JSON.parse(snap);
--    let [fwd, inv] = window.Patch.diffPair(before, JSON.parse(JSON.stringify(docView(), replacer)));
-+    let [fwd, inv] = diffMarca(before);
-     // quem só preenche valores (planilhas compartilhadas): mantém apenas os valores das células,
-@@ -209,3 +297,3 @@
-       if (dropped) {
--        [fwd, inv] = window.Patch.diffPair(before, JSON.parse(JSON.stringify(docView(), replacer)));
-+        [fwd, inv] = diffMarca(before);
-         invalidate();
-@@ -216,3 +304,3 @@
-     if (fwd && App.autoPendingEscala && !App._escalando && App.autoPendingEscala(fwd, inv)) {
--      [fwd, inv] = window.Patch.diffPair(before, JSON.parse(JSON.stringify(docView(), replacer)));
-+      [fwd, inv] = diffMarca(before);
-     }
-@@ -220,3 +308,3 @@
-     if (fwd && App.preStackingHook && App.preStackingHook(fwd, inv)) {
--      [fwd, inv] = window.Patch.diffPair(before, JSON.parse(JSON.stringify(docView(), replacer)));
-+      [fwd, inv] = diffMarca(before);
-     }
-@@ -273,2 +361,3 @@
-     applyPatch(p);
-+    App.emit('remotePatch', p);
-     if (isStructural(p)) App.emit('sheet');
-@@ -452,3 +541,4 @@
- 
--  // Texto de exibição de um valor
-+  // Texto de exibição de um valor (formatador criado uma vez só: criar um a cada número custava ~20 µs por número)
-+  const FMT_NUM = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 10, useGrouping: false });
-   function fmtAuto(v) {
-@@ -457,3 +547,3 @@
-     if (a !== 0 && (a >= 1e15 || a < 1e-9)) return v.toExponential(4).replace('.', ',').replace('e+', 'E+').replace('e-', 'E-');
--    return Number(v.toPrecision(11)).toLocaleString('pt-BR', { maximumFractionDigits: 10, useGrouping: false });
-+    return FMT_NUM.format(Number(v.toPrecision(11)));
-   }
-diff --git a/src/perms.js b/src/perms.js
-index 9a77ed9f78f261f06d8f6fb1c072aaa8e622507d..09b5b5b722237a203ec04e7649bc1e4c58fd32d9 100644
---- a/src/perms.js
-+++ b/src/perms.js
-@@ -35,4 +35,10 @@
-   const escCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
-+  // na tela, a planilha avisa quando muda (planilhaMudou); enquanto não mudar, o resultado guardado vale e não é
-+  // preciso remontar o nome de até 400 colunas a cada chamada (isso acontecia para cada célula desenhada).
-+  // No servidor ninguém avisa, então lá a conferência completa continua a cada chamada.
-+  let geracao = 0, avisa = false;
-+  function planilhaMudou() { geracao++; avisa = true; }
-   function escalaCols(sheet) {
-     if (!sheet) return {};
-+    if (avisa) { const h = escCache && escCache.get(sheet); if (h && h.gen === geracao) return h.cols; }
-     const names = sheet.colNames || {}, cells = sheet.cells || {};
-@@ -43,6 +49,6 @@
-     const hit = escCache && escCache.get(sheet);
--    if (hit && hit.key === key) return hit.cols;
-+    if (hit && hit.key === key) { hit.gen = geracao; return hit.cols; }
-     const cols = {};
-     labels.forEach((l, i) => { const k = nrm(l); if (ESC_FIELDS.includes(k) && !cols[k]) cols[k] = i + 1; });
--    if (escCache) escCache.set(sheet, { key, cols });
-+    if (escCache) escCache.set(sheet, { key, cols, gen: geracao });
-     return cols;
-@@ -406,3 +412,3 @@
- 
--  const api = { inList, LOCK_MSG, lockedCol, escalaCols, escalaCheck, ESC_FIELDS, normName: nrm, COLS_MSG, FORMAT_MSG, nonValue, execMerge, execAllowed, stable, normCell, EXEC_STYLE, compute, validate, filterDoc, filterPatch, levelOf, colLevel, sheetVisible, bestLevel, hasHiddenCols, hasColRules, blockingProtection, defaultAcl, canSee, colOf, colName, RANK, LEVELS };
-+  const api = { inList, LOCK_MSG, lockedCol, escalaCols, planilhaMudou, escalaCheck, ESC_FIELDS, normName: nrm, COLS_MSG, FORMAT_MSG, nonValue, execMerge, execAllowed, stable, normCell, EXEC_STYLE, compute, validate, filterDoc, filterPatch, levelOf, colLevel, sheetVisible, bestLevel, hasHiddenCols, hasColRules, blockingProtection, defaultAcl, canSee, colOf, colName, RANK, LEVELS };
-   if (typeof module !== 'undefined' && module.exports) module.exports = api;
++/* ---------- Histórico do container, status automático, automações, custos e servidor fora do ar ---------- */
++.hc-bar, .au-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
++.hc-bar .input, .au-bar .input { flex: 1 1 200px; }
++.hc-card { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; margin: 8px 0; background: var(--white); }
++.hc-card h3 { margin: 0 0 6px; font-size: 14px; display: flex; gap: 8px; align-items: center; }
++.hc-card h3 small { color: var(--text-3); font-weight: 400; margin-right: auto; }
++.hc-card dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; margin: 0; font-size: 13px; }
++.hc-card dt { color: var(--text-2); } .hc-card dd { margin: 0; word-break: break-word; }
++.hc-tempo { list-style: none; padding: 0; margin: 4px 0; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
++.hc-tempo li { border-left: 3px solid var(--line-2); padding: 3px 8px; }
++.hc-tempo time { color: var(--text-3); }
++.hc-de { color: #b3261e; text-decoration: line-through; } .hc-para { color: #188038; font-weight: 500; }
++.hc-x { border: 0; background: none; color: var(--text-3); font-size: 11.5px; text-decoration: underline; cursor: pointer; padding: 0 4px; }
++.hc-boxes { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 2px 0 8px; max-height: 160px; overflow: auto; }
++.sa-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
++.sa-it { display: flex; gap: 8px; align-items: center; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
++.sa-it > div { flex: 1; display: flex; flex-direction: column; } .sa-it small { color: var(--text-2); }
++.sa-it.off { opacity: .55; }
++.sa-p .sa-bt { grid-column: 1 / -1; display: flex; gap: 6px; margin-top: 4px; }
++.dc-top { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 6px 0; }
++.au-tbl { max-height: calc(100dvh - 260px); }
++.au-tbl td small { color: var(--text-3); }
++.srv-faixa { position: fixed; left: 50%; transform: translateX(-50%); top: calc(8px + env(safe-area-inset-top)); z-index: 3000; max-width: min(640px, calc(100vw - 16px)); padding: 8px 14px; border-radius: 10px; font-size: 13.5px; box-shadow: 0 4px 16px rgba(0, 0, 0, .25); }
++.srv-faixa.warn { background: #fef3c7; color: #7c4a03; border: 1px solid #f59e0b; }
++.srv-faixa.bad { background: #fce8e6; color: #8c1d18; border: 1px solid #d93025; }
++.srv-faixa.ok { background: #e6f4ea; color: #0d652d; border: 1px solid #34a853; }
++html.dark .hc-de { color: #f87171; } html.dark .hc-para { color: #4ade80; }
 diff --git a/src/updates.js b/src/updates.js
-index 585098dc62b6145f72c94a6795916e8cf28f094c..d1a9a2b9140a7c285b14052d362a95f306981132 100644
+index 585098d..feaa997 100644
 --- a/src/updates.js
 +++ b/src/updates.js
-@@ -6,2 +6,7 @@
+@@ -4,6 +4,15 @@
+   const esc = App.esc;
+   // a mais nova primeiro; cada item: [área, o que mudou]
    const UPDATES = [
-+    { date: '06/11/2026', title: 'Planilha mais rápida (servidor e tela)', items: [
-+      ['Entrar na planilha', 'A planilha agora viaja compactada entre o servidor e o navegador (cerca de 25 vezes menor), o que ajuda principalmente no celular e quando todos reconectam depois de uma atualização.'],
-+      ['Digitar', 'Cada edição ficou cerca de duas vezes mais leve: a tela compara só o texto de cada célula, sem refazer uma cópia da planilha inteira a cada Enter. Rolar e receber edições de outras pessoas também ficaram mais leves.'],
-+      ['Servidor', 'Cada edição é convertida e enviada uma vez para todos (antes era uma vez por pessoa), a planilha já pronta é reaproveitada por quem entra em seguida e o histórico das células é gravado em lotes. O servidor gasta cerca de 40% menos por edição e 70% menos quando várias pessoas entram juntas.'],
++    { date: '06/11/2026', title: 'Demurrage, alertas no celular, status automático, histórico do container e mais', items: [
++      ['Demurrage', 'No PRÉ STACKING VAZIO, CONTAINER, DATA BAIXA e DEMMURAGE ficam amarelos quando o prazo (DATA BAIXA + DEMMURAGE) vence em até 2 dias e vermelhos quando venceu. Entra sozinho no botão ALERTA e avisa no celular.'],
++      ['Alertas no celular', 'As regras do botão ALERTA também viram notificação. Em Notificações no celular, "Exemplo de cada aviso" manda um exemplo de cada tipo.'],
++      ['Status automático', 'Administrador › Status automático por e-mail: aba, linhas (CLIENTE, REFERENCIA…), STATUS que ficam de fora, horários, dias e quem confere. Na hora, o setor recebe o aviso e confere no Painel do dia; o e-mail só sai depois de confirmar.'],
++      ['Histórico do container', 'Botão direito no container › Histórico do container (ou Ferramentas): ficha das linhas atuais e linha do tempo de tudo o que mudou. Em Personalizar, escolha campos, colunas e pessoas e oculte itens um a um. Dá para imprimir.'],
++      ['Registro de automações', 'Administrador › Registro de automações: o que a planilha e o servidor fizeram sozinhos (PRÉ STACKING, DATA BAIXA, confirmações, avisos, status automático), com quem e quando.'],
++      ['Servidor fora do ar', 'Quando o servidor não responde aparece uma faixa no topo (acordando ou fora do ar). Um monitor confere o servidor a cada 10 minutos, mantém acordado e abre um aviso no GitHub se cair.'],
++      ['Custos de demurrage', 'Administrador › Custos de demurrage: diária por armador (20\' e 40\'). Os Indicadores do mês mostram o custo estimado das devoluções fora do prazo e o custo evitado.'],
 +    ] },
      { date: '06/11/2026', title: 'Validação do número do container', items: [
-diff --git a/tests/server.test.js b/tests/server.test.js
-index 3df0b593370cdc746a663162e1264b389d9b799a..0f07a93db7c972cc6bd20d2be2ef9b2c42b6b8bc 100644
---- a/tests/server.test.js
-+++ b/tests/server.test.js
-@@ -487,2 +487,53 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-     }
-+    // compressão no tempo real (permessage-deflate): o navegador pede, o servidor aceita e a planilha viaja compactada
-+    {
-+      const net = require('net'), zlib = require('zlib');
-+      const SYNC = { finishFlush: zlib.constants.Z_SYNC_FLUSH };
-+      const cells = {};
-+      for (let r = 1; r <= 400; r++) for (let k = 0; k < 8; k++) cells[String.fromCharCode(65 + k) + r] = { v: 'CONTAINER ' + (r * 8 + k), s: { ha: 'center' } };
-+      const dz = await api('POST', '/api/docs', { title: 'Compressão', data: { sheets: [{ id: 'z1', name: 'Z', rows: 500, cols: 10, cells }] } }, ana.token);
-+      // conexão "na unha", byte a byte, como um navegador (com ou sem pedir compressão)
-+      const bruto = (ext) => new Promise((res, rej) => {
-+        const so = net.connect(PORT, '127.0.0.1');
-+        let buf = Buffer.alloc(0), hdr = null;
-+        so.on('connect', () => so.write(`GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n${ext ? 'Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n' : ''}\r\n`));
-+        so.on('data', (d) => {
-+          buf = Buffer.concat([buf, d]);
-+          if (!hdr) {
-+            const i = buf.indexOf('\r\n\r\n');
-+            if (i < 0) return;
-+            hdr = buf.subarray(0, i).toString(); buf = buf.subarray(i + 4);
-+            // o pedido de entrada também vai compactado quando a compressão foi combinada
-+            let pl = Buffer.from(JSON.stringify({ type: 'hello', token: ana.token, doc: dz.id }));
-+            let rsv = 0;
-+            if (ext) { const z = zlib.deflateRawSync(pl, SYNC); pl = z.subarray(0, z.length - 4); rsv = 0x40; }
-+            const mask = Buffer.from([1, 2, 3, 4]), m = Buffer.from(pl);
-+            for (let k = 0; k < m.length; k++) m[k] ^= mask[k & 3];
-+            const h = m.length < 126 ? Buffer.from([0x81 | rsv, 0x80 | m.length]) : Buffer.from([0x81 | rsv, 0x80 | 126, m.length >> 8, m.length & 255]);
-+            so.write(Buffer.concat([h, mask, m]));
-+          }
-+          for (;;) {
-+            if (buf.length < 2) return;
-+            let len = buf[1] & 127, off = 2;
-+            if (len === 126) { if (buf.length < 4) return; len = buf.readUInt16BE(2); off = 4; } else if (len === 127) { if (buf.length < 10) return; len = buf.readUInt32BE(6); off = 10; }
-+            if (buf.length < off + len) return;
-+            const rsv1 = (buf[0] & 0x40) !== 0;
-+            let pl = buf.subarray(off, off + len);
-+            buf = buf.subarray(off + len);
-+            const wire = pl.length;
-+            if (rsv1) pl = zlib.inflateRawSync(Buffer.concat([pl, Buffer.from([0, 0, 255, 255])]), SYNC);
-+            const msg = JSON.parse(pl.toString());
-+            if (msg.type === 'init') { so.destroy(); return res({ hdr, rsv1, wire, msg }); }
-+          }
-+        });
-+        so.on('error', rej);
-+        setTimeout(() => rej(new Error('sem resposta do tempo real')), 5000);
-+      });
-+      const comZ = await bruto(true), semZ = await bruto(false);
-+      check('compressão combinada só quando o navegador pede', [/permessage-deflate/.test(comZ.hdr), comZ.rsv1, /permessage-deflate/.test(semZ.hdr), semZ.rsv1], [true, true, false, false]);
-+      check('a planilha chega igual com e sem compressão', [comZ.msg.doc.sheets[0].cells.H400.v, JSON.stringify(comZ.msg.doc) === JSON.stringify(semZ.msg.doc), comZ.msg.me.email], ['CONTAINER 3207', true, 'ana@empresa.com']);
-+      check('a planilha viaja pelo menos 5 vezes menor', comZ.wire * 5 < semZ.wire, true);
-+      console.log(`  (compressão no tempo real: ${semZ.wire} bytes → ${comZ.wire} bytes)`);
-+      await api('DELETE', '/api/docs/' + dz.id, null, ana.token);
-+    }
-   } catch (e) {
+       ['Container', 'Nas colunas CONTAINER, 1 - CONTAINER e 2 - CONTAINER, o número é conferido pelo padrão internacional (4 letras, 6 números e o dígito verificador). Número errado ganha um sublinhado ondulado vermelho.'],
+       ['Motivo', 'Passe o mouse no número sublinhado (no celular, toque na célula) para ver o motivo, por exemplo qual deveria ser o último dígito. Ao digitar ou colar um número errado, a planilha avisa na hora. Nada é bloqueado.'],
