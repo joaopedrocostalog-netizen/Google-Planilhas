@@ -399,7 +399,7 @@
   const colCache = new Map();
   App.on('change', () => colCache.clear());
   App.on('sheet', () => colCache.clear());
-  function colValores(sh, c, linhaAtual) {
+  function colValores(sh, c) {
     const k = sh.id + ':' + c;
     let m = colCache.get(k);
     if (!m) {
@@ -424,7 +424,7 @@
     if (!sh || !txt || ta.value[0] === '=' || ed.acAll || /^[\d.,\/:\-\s]+$/.test(txt)) return false;
     const q = fold(txt);
     const starts = [], has = [];
-    for (const x of App.withReal(() => colValores(sh, real.c, real.r)).values()) {
+    for (const x of App.withReal(() => colValores(sh, real.c)).values()) {
       if (x.n === 1 && x.r === real.r) continue; // o próprio texto desta célula
       if (x.f === q) continue;
       if (x.f.startsWith(q)) starts.push(x); else if (q.length >= 3 && x.f.includes(q)) has.push(x);
