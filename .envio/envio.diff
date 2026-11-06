@@ -1,0 +1,152 @@
+diff --git a/index.html b/index.html
+index 6d35e89..44eca41 100644
+--- a/index.html
++++ b/index.html
+@@ -125,6 +125,7 @@
+   <script src="src/optags.js"></script>
+   <script src="src/prestacking.js"></script>
+   <script src="src/conteiner.js"></script>
++  <script src="src/demurrage.js"></script>
+   <script src="src/carga.js"></script>
+   <script src="src/dtrange.js"></script>
+   <script src="src/status.js"></script>
+@@ -139,6 +140,9 @@
+   <script src="src/notify.js"></script>
+   <script src="src/diario.js"></script>
+   <script src="src/indicadores.js"></script>
++  <script src="src/automacoes.js"></script>
++  <script src="src/historico.js"></script>
++  <script src="src/statusauto.js"></script>
+   <script src="src/mobile.js"></script>
+   <script src="src/app.js"></script>
+ </body>
+diff --git a/src/alerts.js b/src/alerts.js
+index f26937a..98451c1 100644
+--- a/src/alerts.js
++++ b/src/alerts.js
+@@ -17,6 +17,7 @@
+     prog: { label: 'PROG. duplicado', msg: 'PROG. duplicado' },
+     frete: { label: 'FRETE faltando (cavalo de terceiro)', msg: 'Preencher o FRETE' },
+     vehicle: { label: 'Veículo incompleto (falta CARRETA, MOTORISTA, CPF ou CONTATO)', msg: 'Veículo incompleto' },
++    demurrage: { label: 'Demurrage do vazio vencida ou vencendo (até 2 dias)', msg: 'Devolver o vazio: DATA BAIXA + DEMMURAGE' },
+   };
+   // condições da regra personalizada
+   const OPS = [
+@@ -88,6 +89,7 @@
+         else if (k === 'prog') { const c = colOf(sh, 'PROG'); test = (r) => c && App.progDuplicates && !!App.progDuplicates(sh, si, r, c); }
+         else if (k === 'frete') { const c = colOf(sh, 'FRETE'); test = (r) => c && App.freteAlert && App.freteAlert(sh, si, r, c); }
+         else if (k === 'vehicle') test = (r) => App.vehicleMissingFields && App.vehicleMissingFields(sh, si, r).length > 0;
++        else if (k === 'demurrage') test = (r) => !!(App.demurrageInfo && App.demurrageInfo(sh, si, r));
+         else return;
+       } else {
+         const conds = (rule.conds || []).filter((x) => x.col >= 1 && x.op);
+@@ -134,13 +136,17 @@
+     const list = [];
+     doc.sheets.forEach((sh, si) => {
+       if (sh.shadow) return;
+-      for (const rule of sh.alertRules || []) {
++      // demurrage do vazio entra sozinha no ALERTA (sem precisar criar a regra)
++      const auto = App.demurrageCols && App.demurrageCols(sh) && !(sh.alertRules || []).some((x) => x.kind === 'demurrage')
++        ? [{ id: 'auto-demurrage', name: 'Demurrage do vazio', kind: 'demurrage', color: '#e8710a', msg: 'Vencida ou vencendo em até 2 dias (DATA BAIXA + DEMMURAGE). Devolver o vazio.', who: [], show: [] }] : [];
++      for (const rule of (sh.alertRules || []).concat(auto)) {
+         if (rule.off || !canSee(rule)) continue;
+         const rows = evalRule(sh, si, rule);
+         if (rows.length) list.push({ sh, si, rule, rows });
+       }
+     });
+     last = { list, total: list.reduce((s, x) => s + x.rows.length, 0) };
++    if (App.reportaAlertas) App.reportaAlertas(list);
+     renderButton();
+     renderTicker();
+     if (panel && !panel.hidden) renderPanel();
+diff --git a/src/chrome.js b/src/chrome.js
+index df46d48..6bb9302 100644
+--- a/src/chrome.js
++++ b/src/chrome.js
+@@ -332,6 +332,7 @@
+       { label: 'Estatísticas da coluna', cmd: 'columnStats' },
+       { label: 'Intervalos nomeados', cmd: 'namedRanges' },
+       { label: 'Histórico de versões', icon: 'history', cmd: 'versionHistory' }, '-',
++      { label: 'Histórico do container', icon: 'history', cmd: 'containerHistorico' },
+       { label: 'Notificações no celular', cmd: 'notificacoes' },
+     ] },
+     // tudo o que define quem pode ver, editar ou usar cada função fica aqui (e não no botão direito)
+@@ -347,7 +348,10 @@
+       { label: 'Containers da Carga OF (DATA BAIXA)', cmd: 'cargaLookup' }, '-',
+       { label: 'Regras de alerta (ALERTA)', icon: 'bell', cmd: 'alertRules' },
+       { label: 'Enviar status por e-mail: quem pode', cmd: 'mailWho' },
+-      { label: 'PRÉ STACKING VAZIO: clientes com 1 - / 2 - CONTAINER', cmd: 'psRegra' }, '-',
++      { label: 'PRÉ STACKING VAZIO: clientes com 1 - / 2 - CONTAINER', cmd: 'psRegra' },
++      { label: 'Custos de demurrage', cmd: 'demCustos' },
++      { label: 'Status automático por e-mail', cmd: 'statusAuto' },
++      { label: 'Registro de automações', cmd: 'automacoes' }, '-',
+       { label: 'Métricas, gráficos e teste de pico', icon: 'chart', cmd: 'adminMetricas' },
+       { label: 'Sessões: deslogar usuários', icon: 'lock', cmd: 'adminSessions' },
+     ] },
+diff --git a/src/collab.js b/src/collab.js
+index 7622ef7..1bef6fb 100644
+--- a/src/collab.js
++++ b/src/collab.js
+@@ -1187,7 +1187,7 @@
+   // (formatação, regras, estrutura, filtros, congelar, tamanho de linhas e colunas) é dos administradores,
+   // e essas opções nem aparecem para eles.
+   const EXEC_OK = new Set(['insertProcess', 'informCriticals', 'sendStatus', 'printDoc', 'tagSC', 'tagSPOT', 'escalarVeiculo', 'confirmarEscala', 'bloquearVeiculo', 'destravarVeiculo', 'pedirTroca', 'messages', 'undo', 'redo', 'cut', 'copy', 'paste', 'pasteValues', 'find', 'findReplace', 'clearValues',
+-    'zoom', 'painelDia', 'indicadores', 'tema', 'notificacoes', 'toggleFormulaBar', 'toggleMenus', 'fullscreen', 'toggleGridlines', 'toggleFormulas', 'switchSheet', 'nextSheet', 'prevSheet',
++    'zoom', 'painelDia', 'indicadores', 'tema', 'notificacoes', 'containerHistorico', 'toggleFormulaBar', 'toggleMenus', 'fullscreen', 'toggleGridlines', 'toggleFormulas', 'switchSheet', 'nextSheet', 'prevSheet',
+     'selectAll', 'selectColumn', 'selectRow', 'insertDate', 'insertTime', 'insertDateTime', 'fillDown', 'fillRight',
+     'print', 'download', 'openCloud', 'share', 'login', 'cellHistory', 'cellHistoryAll', 'shortcuts', 'about', 'updates', 'functionList', 'columnStats',
+     // barra de ferramentas liberada para os setores
+diff --git a/src/grid.js b/src/grid.js
+index fd24f1a..4437ea8 100644
+--- a/src/grid.js
++++ b/src/grid.js
+@@ -257,6 +257,8 @@
+         st.hasCrit = true;
+         s = Object.assign({}, s, Math.floor(Date.now() / 550) % 2 ? { bg: '#d93025', color: '#ffffff', b: true } : { bg: '#fce8e6', color: '#b3261e', b: true });
+       }
++      // demurrage do vazio vencendo (amarelo) ou vencida (vermelho), sem piscar
++      if (App.demurrageCell) { const dm = App.demurrageCell(sh, si, r, c); if (dm) s = Object.assign({}, s, dm); }
+       // veículo preenchido sem CARRETA, MOTORISTA, CPF ou CONTATO: campo obrigatório em laranja
+       if (App.vehicleMissing && App.vehicleMissing(sh, si, r, c)) s = Object.assign({}, s, { bg: '#ffd8a8', color: '#8a3c00', b: true });
+       // PROG. repetido em outra linha: fica roxo com o texto em destaque até corrigir
+diff --git a/src/prestacking.js b/src/prestacking.js
+index 0535c23..99b469b 100644
+--- a/src/prestacking.js
++++ b/src/prestacking.js
+@@ -323,6 +323,7 @@
+       }
+       if (muda.length) App.change('DATA BAIXA (API)', () => { for (const [row, data] of muda) { App.setRaw(ps, row, dc, data); App.setStyle(ps, row, dc, (st) => { st.nf = 'dd/mm/yyyy'; }); } });
+       if (muda.length) App.emit('notify', `DATA BAIXA preenchida em ${muda.length} ${muda.length === 1 ? 'linha' : 'linhas'} do PRÉ STACKING VAZIO.`);
++      if (muda.length && App.logAuto) App.logAuto('DATA BAIXA', `Preenchida pela API em ${muda.length} ${muda.length === 1 ? 'linha' : 'linhas'}: ${muda.map(([row, data]) => `linha ${row} = ${data}`).slice(0, 8).join(', ')}`, ps.name);
+     });
+     if (faltam.length) App.emit('notify', `DATA BAIXA: ${faltam.length === 1 ? 'o container ' + faltam[0] + ' não foi encontrado' : faltam.length + ' containers não foram encontrados'} na API.`);
+     if (baixaPend) setTimeout(buscaBaixa, 200);
+@@ -363,6 +364,7 @@
+       });
+     }); } finally { aplicando = false; }
+     if (baixaForcar.size) pedirBaixa();
++    if (feitos && App.logAuto) App.logAuto('Confirmação MAPA ↔ PRÉ STACKING', `Confirmado: ${lista.map((x) => x.desc).slice(0, 6).join('; ')}`);
+     App.emit('notify', (feitos ? `${feitos} ${feitos === 1 ? 'campo atualizado' : 'campos atualizados'}.` : 'Nada a atualizar.') + (sem.size ? ` Sem permissão: ${[...sem].join(', ')}.` : ''));
+   }
+ 
+@@ -387,6 +389,7 @@
+       }
+     });
+     if (msgs.length) notify(msgs.slice(0, 4).join(' ') + (msgs.length > 4 ? ` (+${msgs.length - 4})` : ''));
++    if (msgs.length && App.logAuto) msgs.forEach((m) => App.logAuto('PRÉ STACKING', m));
+     if (baixaPend) setTimeout(buscaBaixa, 200);
+     if (pergunta.length) setTimeout(perguntar, 120);
+     return changed;
+diff --git a/src/views.js b/src/views.js
+index a9f5472..edd88b5 100644
+--- a/src/views.js
++++ b/src/views.js
+@@ -289,7 +289,7 @@
+     'fmt_number', 'fmt_time', 'fmt_date', 'fmt_currency', 'fmt_percent', 'fmt_scientific', 'paintFormat', 'alignLeft', 'alignCenter', 'alignRight', 'valignTop', 'valignMiddle', 'valignBottom',
+     'wrapOverflow', 'wrapWrap', 'wrapClip', 'insertDate', 'insertTime', 'insertDateTime', 'markCritical', 'cellHistory', 'zoom', 'toggleGridlines', 'toggleFormulas', 'toggleFormulaBar',
+     'toggleMenus', 'fullscreen', 'selectAll', 'selectColumn', 'selectRow', 'switchSheet', 'nextSheet', 'prevSheet', 'openCloud', 'share', 'login', 'shortcuts', 'about',
+-    'functionList', 'menuSearch', 'createFilterView', 'createGroupedView', 'closeFilterView', 'clearViewFilters', 'toggleOldRows', 'myView', 'viewAs', 'saveFilterView', 'manageSavedViews', 'openSavedViews', 'cellHistoryAll', 'alerts', 'alertRules', 'updates', 'versionHistory', 'dssLookup', 'messages', 'insertProcess', 'informCriticals', 'sendStatus', 'sheetColor', 'escalarVeiculo', 'confirmarEscala', 'bloquearVeiculo', 'destravarVeiculo', 'pedirTroca', 'painelDia', 'indicadores', 'tema', 'notificacoes']);
++    'functionList', 'menuSearch', 'createFilterView', 'createGroupedView', 'closeFilterView', 'clearViewFilters', 'toggleOldRows', 'myView', 'viewAs', 'saveFilterView', 'manageSavedViews', 'openSavedViews', 'cellHistoryAll', 'alerts', 'alertRules', 'updates', 'versionHistory', 'dssLookup', 'messages', 'insertProcess', 'informCriticals', 'sendStatus', 'sheetColor', 'escalarVeiculo', 'confirmarEscala', 'bloquearVeiculo', 'destravarVeiculo', 'pedirTroca', 'painelDia', 'indicadores', 'tema', 'notificacoes', 'containerHistorico']);
+   function lockInView() {
+     for (const id in App.cmds) {
+       const c = App.cmds[id];
