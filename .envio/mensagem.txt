@@ -1,0 +1,1 @@
+Módulos novos: demurrage, histórico do container, status automático, registro de automações e monitor do servidor
