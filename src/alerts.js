@@ -17,6 +17,7 @@
     prog: { label: 'PROG. duplicado', msg: 'PROG. duplicado' },
     frete: { label: 'FRETE faltando (cavalo de terceiro)', msg: 'Preencher o FRETE' },
     vehicle: { label: 'Veículo incompleto (falta CARRETA, MOTORISTA, CPF ou CONTATO)', msg: 'Veículo incompleto' },
+    demurrage: { label: 'Demurrage do vazio vencida ou vencendo (até 2 dias)', msg: 'Devolver o vazio: DATA BAIXA + DEMMURAGE' },
   };
   // condições da regra personalizada
   const OPS = [
@@ -88,6 +89,7 @@
         else if (k === 'prog') { const c = colOf(sh, 'PROG'); test = (r) => c && App.progDuplicates && !!App.progDuplicates(sh, si, r, c); }
         else if (k === 'frete') { const c = colOf(sh, 'FRETE'); test = (r) => c && App.freteAlert && App.freteAlert(sh, si, r, c); }
         else if (k === 'vehicle') test = (r) => App.vehicleMissingFields && App.vehicleMissingFields(sh, si, r).length > 0;
+        else if (k === 'demurrage') test = (r) => !!(App.demurrageInfo && App.demurrageInfo(sh, si, r));
         else return;
       } else {
         const conds = (rule.conds || []).filter((x) => x.col >= 1 && x.op);
@@ -134,13 +136,17 @@
     const list = [];
     doc.sheets.forEach((sh, si) => {
       if (sh.shadow) return;
-      for (const rule of sh.alertRules || []) {
+      // demurrage do vazio entra sozinha no ALERTA (sem precisar criar a regra)
+      const auto = App.demurrageCols && App.demurrageCols(sh) && !(sh.alertRules || []).some((x) => x.kind === 'demurrage')
+        ? [{ id: 'auto-demurrage', name: 'Demurrage do vazio', kind: 'demurrage', color: '#e8710a', msg: 'Vencida ou vencendo em até 2 dias (DATA BAIXA + DEMMURAGE). Devolver o vazio.', who: [], show: [] }] : [];
+      for (const rule of (sh.alertRules || []).concat(auto)) {
         if (rule.off || !canSee(rule)) continue;
         const rows = evalRule(sh, si, rule);
         if (rows.length) list.push({ sh, si, rule, rows });
       }
     });
     last = { list, total: list.reduce((s, x) => s + x.rows.length, 0) };
+    if (App.reportaAlertas) App.reportaAlertas(list);
     renderButton();
     renderTicker();
     if (panel && !panel.hidden) renderPanel();

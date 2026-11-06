@@ -257,6 +257,8 @@
         st.hasCrit = true;
         s = Object.assign({}, s, Math.floor(Date.now() / 550) % 2 ? { bg: '#d93025', color: '#ffffff', b: true } : { bg: '#fce8e6', color: '#b3261e', b: true });
       }
+      // demurrage do vazio vencendo (amarelo) ou vencida (vermelho), sem piscar
+      if (App.demurrageCell) { const dm = App.demurrageCell(sh, si, r, c); if (dm) s = Object.assign({}, s, dm); }
       // veículo preenchido sem CARRETA, MOTORISTA, CPF ou CONTATO: campo obrigatório em laranja
       if (App.vehicleMissing && App.vehicleMissing(sh, si, r, c)) s = Object.assign({}, s, { bg: '#ffd8a8', color: '#8a3c00', b: true });
       // PROG. repetido em outra linha: fica roxo com o texto em destaque até corrigir

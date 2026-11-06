@@ -323,6 +323,7 @@
       }
       if (muda.length) App.change('DATA BAIXA (API)', () => { for (const [row, data] of muda) { App.setRaw(ps, row, dc, data); App.setStyle(ps, row, dc, (st) => { st.nf = 'dd/mm/yyyy'; }); } });
       if (muda.length) App.emit('notify', `DATA BAIXA preenchida em ${muda.length} ${muda.length === 1 ? 'linha' : 'linhas'} do PRÉ STACKING VAZIO.`);
+      if (muda.length && App.logAuto) App.logAuto('DATA BAIXA', `Preenchida pela API em ${muda.length} ${muda.length === 1 ? 'linha' : 'linhas'}: ${muda.map(([row, data]) => `linha ${row} = ${data}`).slice(0, 8).join(', ')}`, ps.name);
     });
     if (faltam.length) App.emit('notify', `DATA BAIXA: ${faltam.length === 1 ? 'o container ' + faltam[0] + ' não foi encontrado' : faltam.length + ' containers não foram encontrados'} na API.`);
     if (baixaPend) setTimeout(buscaBaixa, 200);
@@ -363,6 +364,7 @@
       });
     }); } finally { aplicando = false; }
     if (baixaForcar.size) pedirBaixa();
+    if (feitos && App.logAuto) App.logAuto('Confirmação MAPA ↔ PRÉ STACKING', `Confirmado: ${lista.map((x) => x.desc).slice(0, 6).join('; ')}`);
     App.emit('notify', (feitos ? `${feitos} ${feitos === 1 ? 'campo atualizado' : 'campos atualizados'}.` : 'Nada a atualizar.') + (sem.size ? ` Sem permissão: ${[...sem].join(', ')}.` : ''));
   }
 
@@ -387,6 +389,7 @@
       }
     });
     if (msgs.length) notify(msgs.slice(0, 4).join(' ') + (msgs.length > 4 ? ` (+${msgs.length - 4})` : ''));
+    if (msgs.length && App.logAuto) msgs.forEach((m) => App.logAuto('PRÉ STACKING', m));
     if (baixaPend) setTimeout(buscaBaixa, 200);
     if (pergunta.length) setTimeout(perguntar, 120);
     return changed;
