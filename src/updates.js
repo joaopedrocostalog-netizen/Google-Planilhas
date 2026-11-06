@@ -4,6 +4,12 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '06/11/2026', title: 'Notificações no celular, Painel do dia, tema escuro e Indicadores do mês', items: [
+      ['Notificações', 'Ferramentas › Notificações no celular: avisa neste aparelho quando um container é marcado como crítico, quando pedem troca de veículo, quando chega mensagem no chat e (se quiser) quando um PRÉ STACKING é finalizado. No iPhone, funciona com o app da Tela de Início (iOS 16.4 ou mais novo).'],
+      ['Painel do dia', 'Ver › Painel do dia (ou o calendário no cabeçalho): STATUS do MAPA IMPO e EXPO, PRÉ STACKING em aberto, agendamentos de hoje, atrasados no PRÉ STACKING e demurrage do vazio vencida ou vencendo em até 2 dias. Tocar num item leva até a linha.'],
+      ['Tema escuro', 'Ver › Tema: Claro, Escuro ou Automático (segue o aparelho). As cores de STATUS e alertas continuam as mesmas.'],
+      ['Indicadores do mês', 'Ver › Indicadores do mês: remoções, embarques, devoluções e retiradas por cliente, últimos 6 meses, vazio no prazo da demurrage e tempo do P.S. até o FINALIZADO. Exporta CSV.'],
+    ] },
     { date: '06/11/2026', title: 'Celular e app no iPhone', items: [
       ['App no iPhone', 'No Safari, toque em Compartilhar › Adicionar à Tela de Início: a planilha abre como app, em tela cheia, com ícone próprio.'],
       ['Cabeçalho', 'No celular, o cabeçalho ocupa 2 linhas: título, ALERTA e botões em cima; os menus numa linha que rola de lado.'],

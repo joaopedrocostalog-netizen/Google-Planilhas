@@ -1,4 +1,0 @@
-src/diario.js 9b2fd003096400f47aa3559e3cd0be7c14411a1a
-src/indicadores.js c8fba6601e2b158b2a2c8a5f9e27956497c8a3bc
-src/styles.css dd39f21b65c0feb74e3fe75f3d12878526e14cb7
-src/updates.js 124fbb3f7cabdfc70229c3346df1b2b303e978c4
