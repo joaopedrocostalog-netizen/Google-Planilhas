@@ -14,6 +14,7 @@ const ROOT = path.join(__dirname, '..');
 const PORT = Number(process.env.PORT) || 3000;
 const ORIGINS = (process.env.ALLOWED_ORIGINS || 'https://joaopedrocostalog-netizen.github.io').split(',').map((s) => s.trim()).filter(Boolean);
 const store = createStore();
+const push = require('./push.js').createPush(store, { juntar: Number(process.env.PUSH_JUNTAR_MS) || 20000 });
 // administradores gerais: podem criar e salvar planilhas na nuvem (além de quem já é dono ou administrador de alguma)
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || 'joao.pedro@costalog.com.br').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
 
@@ -373,6 +374,7 @@ function onPatch(c, msg) {
   if (err) { c.ws.send({ type: 'reject', id: msg.id, reason: err }); sendInit(c); return; }
   const hist = historyEntries(room, p);
   const clears = lookupClears(room, p);
+  const avisos = pushEventos(room, p);
   Patch.apply(room.data, p);
   room.version++;
   painel.editou(room, hist.length).catch(() => {});
@@ -405,6 +407,44 @@ function onPatch(c, msg) {
     for (const o of room.clients) { const fp = Perms.filterPatch(fill, o.perms, room.data); if (fp) o.ws.send({ type: 'patch', patch: fp, version: room.version, by: { cid: 'dss', name: 'DSS' } }); }
   }
   scheduleSave(room);
+  if (avisos.length) pushAvisa(room, c.user, avisos).catch((e) => console.error('[push]', e.message));
+}
+// ---------- Notificações no celular: o que muda numa edição ----------
+// marca de crítico ligada, pedido de troca ligado, PRÉ STACKING finalizado (psf) — só o que passou de "não" para "sim"
+function pushEventos(room, p) {
+  const out = [];
+  for (const id in p.sheets || {}) {
+    const e = p.sheets[id];
+    if (!e || !e.cells) continue;
+    const sh = room.data.sheets.find((x) => x.id === id);
+    if (!sh) continue;
+    for (const a in e.cells) {
+      const novo = e.cells[a], velho = sh.cells[a];
+      if (!novo) continue;
+      const lig = (k) => !!novo[k] && !(velho && velho[k]);
+      const valor = String((novo.v !== undefined ? novo.v : velho && velho.v) || '').slice(0, 40);
+      const linha = (a.match(/\d+/) || [''])[0];
+      if (lig('crit')) out.push({ tipo: 'critico', sheetId: id, title: 'Container crítico', plural: '{n} containers críticos', body: `${sh.name} linha ${linha}${valor ? ': ' + valor : ''}` });
+      if (lig('swap')) out.push({ tipo: 'troca', sheetId: id, title: 'Pedido de troca de veículo', plural: '{n} pedidos de troca de veículo', body: `${sh.name} linha ${linha}` });
+      if (lig('psf')) out.push({ tipo: 'prestacking', sheetId: id, title: 'PRÉ STACKING finalizado', plural: '{n} PRÉ STACKING finalizados', body: `${sh.name} linha ${linha}${valor ? ': ' + valor : ''}` });
+    }
+  }
+  return out.slice(0, 30);
+}
+// para quem tem notificações ligadas e acesso à página (membro ou dono, não só o link), menos quem fez a mudança
+async function pushAvisa(room, autor, avisos) {
+  const ids = await push.inscritos();
+  for (const uid of ids) {
+    if (uid === autor.id) continue;
+    const u = await store.getUserById(uid);
+    if (!u) continue;
+    const pm = Perms.compute(permDoc(room), u);
+    if (!pm || pm.viaLink) continue;
+    for (const av of avisos) {
+      if (!Perms.sheetVisible(pm, av.sheetId)) continue;
+      push.avisa(uid, av.tipo, { title: av.title, plural: av.plural, body: av.body + ` (${autor.name || 'alguém'})`, tag: av.tipo + '-' + room.id, doc: room.id, hash: '#nuvem=' + room.id });
+    }
+  }
 }
 function onPresence(c, msg) {
   c.presence = { sheetId: String(msg.sheetId || ''), sel: msg.sel || null, editing: !!msg.editing };
@@ -690,7 +730,20 @@ route('POST', '/api/messages', async (req) => {
   const m = await store.addMessage({ from_id: user.id, to_id: to, doc_id: room ? room.id : null, text, ref });
   const out = Object.assign(pubMsg(m), { fromUser: await userBrief(user.id) });
   deliver([to, user.id], { type: 'dm', msg: out });
+  push.avisa(to, 'chat', { title: `Mensagem de ${user.name || 'alguém'}`, plural: '{n} mensagens novas', body: String(text).slice(0, 140), tag: 'chat-' + user.id, doc: 'chat-' + user.id, hash: room ? '#nuvem=' + room.id : '' });
   return out;
+});
+
+// ---------- Notificações no celular (Web Push) ----------
+route('GET', '/api/push/chave', async (req) => { await requireUser(req); return { chave: (await push.chaves()).pub }; });
+route('POST', '/api/push/estado', async (req) => { const user = await requireUser(req); const b = await readBody(req, 4000); return push.estado(user.id, String(b.endpoint || '')); });
+route('POST', '/api/push/inscrever', async (req) => { const user = await requireUser(req); const b = await readBody(req, 8000); return push.inscreve(user.id, b); });
+route('POST', '/api/push/cancelar', async (req) => { const user = await requireUser(req); const b = await readBody(req, 4000); return push.cancela(user.id, String(b.endpoint || '')); });
+route('POST', '/api/push/teste', async (req) => {
+  const user = await requireUser(req);
+  if (rateLimited('push:' + user.id)) throw httpError(429, 'Aguarde um pouco antes de testar de novo.');
+  const n = await push.paraPessoa(user.id, 'teste', { title: 'Planilhas Costalog', body: 'As notificações estão funcionando neste aparelho.', tag: 'teste' });
+  return { enviadas: n };
 });
 
 // ---------- Rotas das versões ----------
@@ -1635,7 +1688,7 @@ function describeDbError(e) {
 
 (async function start() {
   for (let attempt = 1; ; attempt++) {
-    try { await store.init(); await loadColors(); setTimeout(() => { loadDrivers().catch(() => {}); }, 3000); break; }
+    try { await store.init(); await loadColors(); if (!process.env.DSS_DIARIO_OFF) setTimeout(() => { loadDrivers().catch(() => {}); }, 3000); break; }
     catch (e) {
       // o banco gratuito às vezes demora a acordar: até 12 tentativas, esperando até 15 s entre elas
       console.error(`Não foi possível iniciar o banco de dados (tentativa ${attempt}/12): ${describeDbError(e)}`);

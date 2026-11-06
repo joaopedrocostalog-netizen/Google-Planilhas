@@ -1,1 +1,0 @@
-Notificações no celular (servidor): Web Push com VAPID e aes128gcm, inscrições, avisos de crítico, troca, chat e PRÉ STACKING finalizado

@@ -61,7 +61,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       { nro_container: 'MSCU 123.456-7', data_hora_entrada: '2026-10-30 08:00:00' },
     ] }));
   }).listen(CARGA_PORT);
-  const proc = spawn(process.execPath, [path.join(__dirname, '..', 'server', 'index.js')], { env: Object.assign({}, process.env, { PORT: String(PORT), DATABASE_URL: '', ADMIN_EMAILS: 'ana@empresa.com', Carga_OF_Container: `http://127.0.0.1:${CARGA_PORT}/listarCargaContainerTerminal`, DSS_USUARIO: 'dss', DSS_SENHA: 'segredo', DSS_BASE_URL: `http://127.0.0.1:${CARGA_PORT}` }), stdio: ['ignore', 'pipe', 'pipe'] });
+  // servidor de push falso (como o da Apple/Google): guarda o que chegar
+  const PUSH_PORT = PORT + 1001, pushRecebidos = [];
+  const pushSrv = require('http').createServer((req, res) => { const ch = []; req.on('data', (d) => ch.push(d)); req.on('end', () => { pushRecebidos.push({ headers: req.headers, body: Buffer.concat(ch) }); res.writeHead(201); res.end(); }); }).listen(PUSH_PORT);
+  const proc = spawn(process.execPath, [path.join(__dirname, '..', 'server', 'index.js')], { env: Object.assign({}, process.env, { PORT: String(PORT), DATABASE_URL: '', ADMIN_EMAILS: 'ana@empresa.com', Carga_OF_Container: `http://127.0.0.1:${CARGA_PORT}/listarCargaContainerTerminal`, DSS_USUARIO: 'dss', DSS_SENHA: 'segredo', DSS_BASE_URL: `http://127.0.0.1:${CARGA_PORT}`, PUSH_PERMITE_HTTP: '1', PUSH_JUNTAR_MS: '150', DSS_DIARIO_OFF: '1' }), stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';
   proc.stdout.on('data', (d) => { log += d; });
   proc.stderr.on('data', (d) => { log += d; });
@@ -403,12 +406,49 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const lote = await api('POST', '/api/carga/datas-baixa', { containers: ['TRHU 861.819-1', 'MSCU1234567', 'ABCD0000000'] }, ana.token);
     check('várias DATA BAIXA de uma vez', lote.resultados, { TRHU8618191: '05/11/2026', MSCU1234567: '30/10/2026', ABCD0000000: null });
     check('DATA BAIXA exige login', (await api('GET', '/api/carga/data-baixa?container=TRHU8618191'))._status, 401);
+    // ---------- notificações no celular: chave VAPID, inscrição, envio cifrado de verdade ----------
+    {
+      const crypto = require('crypto');
+      const b64u = (b) => Buffer.from(b).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      const unb = (s) => Buffer.from(String(s).replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+      const { chave } = await api('GET', '/api/push/chave', null, ana.token);
+      check('chave pública VAPID (65 bytes)', unb(chave).length, 65);
+      const ua = crypto.createECDH('prime256v1'); ua.generateKeys();
+      const auth = crypto.randomBytes(16);
+      const sub = { endpoint: `http://127.0.0.1:${PUSH_PORT}/push/abc`, keys: { p256dh: b64u(ua.getPublicKey()), auth: b64u(auth) } };
+      const ins = await api('POST', '/api/push/inscrever', { subscription: sub, prefs: { critico: true, chat: false }, appUrl: 'https://exemplo.github.io/Google-Planilhas/' }, ana.token);
+      check('inscrição do aparelho', ins.ok, true);
+      const est = await api('POST', '/api/push/estado', { endpoint: sub.endpoint }, ana.token);
+      check('preferências guardadas', [est.inscrito, est.prefs.critico, est.prefs.chat, est.prefs.troca], [true, true, false, true]);
+      const t = await api('POST', '/api/push/teste', {}, ana.token);
+      check('teste enviado', t.enviadas, 1);
+      const rec = pushRecebidos[pushRecebidos.length - 1];
+      check('cabeçalhos do Web Push', [rec.headers['content-encoding'], /^vapid t=.+, k=/.test(rec.headers.authorization)], ['aes128gcm', true]);
+      // assinatura do JWT VAPID confere com a chave pública
+      const jwt = /t=([^,]+)/.exec(rec.headers.authorization)[1].split('.');
+      const pubKey = crypto.createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: b64u(unb(chave).subarray(1, 33)), y: b64u(unb(chave).subarray(33)) }, format: 'jwk' });
+      check('JWT VAPID assinado', crypto.verify('sha256', Buffer.from(jwt[0] + '.' + jwt[1]), { key: pubKey, dsaEncoding: 'ieee-p1363' }, unb(jwt[2])), true);
+      // decifra como o celular faria (RFC 8291)
+      const body = rec.body, salt = body.subarray(0, 16), idlen = body[20], asPub = body.subarray(21, 21 + idlen), enc = body.subarray(21 + idlen);
+      const shared = ua.computeSecret(asPub);
+      const ikm = Buffer.from(crypto.hkdfSync('sha256', shared, auth, Buffer.concat([Buffer.from('WebPush: info\0'), ua.getPublicKey(), asPub]), 32));
+      const cek = Buffer.from(crypto.hkdfSync('sha256', ikm, salt, Buffer.from('Content-Encoding: aes128gcm\0'), 16));
+      const nonce = Buffer.from(crypto.hkdfSync('sha256', ikm, salt, Buffer.from('Content-Encoding: nonce\0'), 12));
+      const dc = crypto.createDecipheriv('aes-128-gcm', cek, nonce); dc.setAuthTag(enc.subarray(-16));
+      const plain = Buffer.concat([dc.update(enc.subarray(0, -16)), dc.final()]);
+      const msg = JSON.parse(plain.subarray(0, plain.length - 1).toString());
+      check('notificação decifrada no aparelho', [msg.title, /funcionando/.test(msg.body)], ['Planilhas Costalog', true]);
+      const can = await api('POST', '/api/push/cancelar', { endpoint: sub.endpoint }, ana.token);
+      check('desligar notificações', [can.ok, (await api('POST', '/api/push/estado', { endpoint: sub.endpoint }, ana.token)).inscrito], [true, false]);
+      check('notificações exigem login', (await api('GET', '/api/push/chave'))._status, 401);
+    }
   } catch (e) {
     fail++;
     console.log('ERRO:', e.message, '\n', log.slice(-2000));
   } finally {
     proc.kill();
     cargaSrv.close();
+    pushSrv.close();
   }
   console.log(`\n${pass} testes passaram, ${fail} falharam.`);
   process.exit(fail ? 1 : 0);
