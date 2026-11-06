@@ -135,7 +135,16 @@
       <div class="dia-list">${secAtr.map((i) => item(lista[i], i, `${esc(fmtData(lista[i].s))} ${esc(fmtHora(lista[i].s))} · ${esc(lista[i].op || lista[i].sh.name)}`)).join('') || '<p class="sp-hint">Nada atrasado.</p>'}</div>
       <h3 class="dia-h warn">Demurrage do vazio (vencida ou em até 2 dias) <small>${d.demurrage.length}</small></h3>
       <div class="dia-list">${secDem.map((i) => item(lista[i], i, lista[i].falta < 0 ? `<em class="bad">vencida há ${-lista[i].falta} ${lista[i].falta === -1 ? 'dia' : 'dias'}</em> · prazo ${esc(fmtData(lista[i].prazo))}` : `<em class="warn">${lista[i].falta === 0 ? 'vence hoje' : 'vence em ' + lista[i].falta + (lista[i].falta === 1 ? ' dia' : ' dias')}</em> · prazo ${esc(fmtData(lista[i].prazo))}`)).join('') || '<p class="sp-hint">Nenhuma demurrage vencendo.</p>'}</div>
-      ${d.semAbas.length ? `<p class="sp-hint">Abas não encontradas: ${esc(d.semAbas.join(', '))}.</p>` : ''}`;
+      ${d.semAbas.length ? `<p class="sp-hint">Abas não encontradas: ${esc(d.semAbas.join(', '))}.</p>` : ''}
+      <div id="dia-sa"></div>`;
+    // status automático esperando conferência (vem do servidor)
+    if (App.statusPendentes) App.statusPendentes().then((l) => {
+      const el = box.querySelector('#dia-sa');
+      if (!el || !l.length) return;
+      el.innerHTML = `<h3 class="dia-h warn">Status automático para conferir e enviar <small>${l.length}</small></h3><div class="dia-list">${l.map((x, i) => `<div class="dia-it sa-p"><b>${esc(x.nome)}</b><span>${esc(x.horario)} · ${esc(new Date(x.at).toLocaleDateString('pt-BR'))}</span><small>${esc(x.filtroCol)}: ${esc((x.valores || []).join(', ') || 'todas as linhas')}${x.obs ? ' · ' + esc(x.obs) : ''}</small><span class="sa-bt"><button class="btn btn-primary btn-sm" data-sa="${i}">Conferir e enviar</button><button class="btn btn-sm" data-sf="${i}">Marcar como feito</button></span></div>`).join('')}</div>`;
+      el.querySelectorAll('[data-sa]').forEach((b) => (b.onclick = (e) => { e.stopPropagation(); const m = box.closest('dialog'); if (m) m.querySelector('.modal-x').click(); App.statusConferir(l[+b.dataset.sa]); }));
+      el.querySelectorAll('[data-sf]').forEach((b) => (b.onclick = (e) => { e.stopPropagation(); App.statusFeito(l[+b.dataset.sf]).then(() => render(box)); }));
+    });
     box.onclick = (e) => {
       const b = e.target.closest('[data-i]');
       if (b) { const x = lista[+b.dataset.i]; const m = box.closest('dialog'); if (m) m.querySelector('.modal-x').click(); goTo(x.sh, x.r, x.c); return; }

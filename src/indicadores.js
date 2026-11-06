@@ -33,6 +33,7 @@
         if (k === 'vz') {
           const baixa = O.serial(L.get('DATABAIXA')), dem = Number(String(L.get('DEMPS') || '').replace(',', '.')), dt = O.serial(L.get('DATA'));
           if (baixa !== null && dem > 0 && dt !== null) { m.prazo = Math.floor(baixa) + dem; m.sobra = m.prazo - Math.floor(dt); }
+          m.diaria = App.demDiaria ? App.demDiaria(O.txt(L.get('ARMADOR')), O.txt(L.get('TIPO'))) : 0;
         }
         out.push(m);
       }
@@ -58,13 +59,18 @@
     for (let i = 5; i >= 0; i--) { const x = voltaMes(ym, i); meses.push({ ym: x, n: todos.filter((m) => mesDe(m.quando) === x).length }); }
     return {
       total: doMes.length, porOp, clientes: [...porCli.values()].sort((a, b) => b.total - a.total),
-      dem: { total: dem.length, dentro: dem.length - fora.length, fora, sobraMedia: dem.length ? dem.reduce((s, m) => s + m.sobra, 0) / dem.length : null },
+      dem: { total: dem.length, dentro: dem.length - fora.length, fora, sobraMedia: dem.length ? dem.reduce((s, m) => s + m.sobra, 0) / dem.length : null,
+        // custo estimado (dias de atraso × diária) e evitado (devoluções no prazo × dias de referência × diária)
+        custo: fora.reduce((s, m) => s + -m.sobra * (m.diaria || 0), 0),
+        evitado: dem.filter((m) => m.sobra >= 0).reduce((s, m) => s + ((App.demCfg && App.demCfg().ref) || 3) * (m.diaria || 0), 0),
+        semDiaria: dem.filter((m) => !m.diaria).length },
       tempo: tempos.length ? { n: tempos.length, media: tempos.reduce((a, b) => a + b, 0) / tempos.length } : null,
       meses,
     };
   }
 
   const nf = (n, d) => Number(n).toLocaleString('pt-BR', { minimumFractionDigits: d || 0, maximumFractionDigits: d || 0 });
+  const moeda = (v) => `${(App.demCfg && App.demCfg().moeda) || 'US$'} ${nf(v || 0, 2)}`;
   const tempoTxt = (h) => (h < 48 ? nf(h, 1) + ' h' : nf(h / 24, 1) + ' dias');
   function render(box, ym) {
     const d = calcula(ym), O = App.opData;
@@ -76,7 +82,12 @@
         ${OPS.map((o) => `<div class="ind-k"><b>${nf(d.porOp[o])}</b><span>${esc(o.toLowerCase())}</span></div>`).join('')}
         <div class="ind-k ${pct === null ? '' : pct >= 90 ? 'ok' : pct >= 70 ? 'warn' : 'bad'}"><b>${pct === null ? '—' : pct + '%'}</b><span>vazio no prazo da demurrage</span></div>
         <div class="ind-k"><b>${d.tempo ? tempoTxt(d.tempo.media) : '—'}</b><span>do P.S. ao FINALIZADO${d.tempo ? ` (${d.tempo.n})` : ''}</span></div>
+        <div class="ind-k ${d.dem.custo ? 'bad' : ''}"><b>${moeda(d.dem.custo)}</b><span>custo estimado de demurrage</span></div>
+        <div class="ind-k ok"><b>${moeda(d.dem.evitado)}</b><span>custo evitado (devolvido no prazo)</span></div>
       </div>
+      ${d.dem.total && d.dem.semDiaria ? `<p class="sp-hint">${d.dem.semDiaria} ${d.dem.semDiaria === 1 ? 'devolução sem diária cadastrada' : 'devoluções sem diária cadastrada'} para o armador: ajuste em Administrador › Custos de demurrage.</p>` : ''}
+      ${d.dem.total ? `<p class="sp-hint">Evitado = devoluções no prazo × ${(App.demCfg && App.demCfg().ref) || 3} dias de referência × diária do armador (o que seria pago se cada uma atrasasse esse tanto).</p>` : ''}`;
+    box.innerHTML += `
       <h3 class="dia-h">Últimos 6 meses</h3>
       <div class="ind-bars">${d.meses.map((m) => `<div class="ind-bar${m.ym === ym ? ' sel' : ''}" title="${esc(nomeMes(m.ym))}: ${m.n}"><b>${m.n}</b><i style="height:${Math.round(100 * m.n / maxM)}%"></i><span>${esc(curto(m.ym))}</span></div>`).join('')}</div>
       <h3 class="dia-h">Por cliente <small>${d.clientes.length}</small></h3>
@@ -84,7 +95,7 @@
         ${d.clientes.map((c) => `<tr><td>${esc(c.cli)}</td>${OPS.map((o) => `<td class="n">${c[o] || ''}</td>`).join('')}<td class="n"><b>${c.total}</b></td></tr>`).join('') || `<tr><td colspan="6" class="sp-hint">Nenhuma movimentação em ${esc(nomeMes(ym))}.</td></tr>`}
       </tbody></table></div>
       <h3 class="dia-h ${d.dem.fora.length ? 'bad' : ''}">Demurrage fora do prazo <small>${d.dem.fora.length} de ${d.dem.total}</small></h3>
-      <div class="dia-list">${d.dem.fora.map((m, i) => `<button class="dia-it" data-f="${i}"><b>${esc(m.cont || '(sem container)')}</b><span>${esc(m.cli)}</span><small><em class="bad">${-m.sobra} ${m.sobra === -1 ? 'dia' : 'dias'} depois do prazo</em> · prazo ${esc(O.fmtData(m.prazo))}</small></button>`).join('') || '<p class="sp-hint">Nenhuma devolução ou retirada fora do prazo neste mês.</p>'}</div>
+      <div class="dia-list">${d.dem.fora.map((m, i) => `<button class="dia-it" data-f="${i}"><b>${esc(m.cont || '(sem container)')}</b><span>${esc(m.cli)}</span><small><em class="bad">${-m.sobra} ${m.sobra === -1 ? 'dia' : 'dias'} depois do prazo</em> · prazo ${esc(O.fmtData(m.prazo))}${m.diaria ? ' · ≈ ' + esc(moeda(-m.sobra * m.diaria)) : ''}</small></button>`).join('') || '<p class="sp-hint">Nenhuma devolução ou retirada fora do prazo neste mês.</p>'}</div>
       ${d.dem.sobraMedia !== null ? `<p class="sp-hint">Em média, o vazio voltou ${nf(Math.abs(d.dem.sobraMedia), 1)} ${d.dem.sobraMedia >= 0 ? 'dias antes' : 'dias depois'} do fim da demurrage.</p>` : ''}
       ${d.tempo ? '' : '<p class="sp-hint">O tempo do P.S. até o FINALIZADO começa a ser medido a partir de agora (linhas finalizadas depois desta atualização).</p>'}`;
     box.onclick = (e) => {
@@ -98,7 +109,8 @@
   function csv(d, ym) {
     const q = (v) => { const s = String(v === null || v === undefined ? '' : v); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
     const L = [[`Indicadores de ${nomeMes(ym)}`], [], ['Cliente', ...OPS, 'Total'], ...d.clientes.map((c) => [c.cli, ...OPS.map((o) => c[o] || 0), c.total]), [],
-      ['Demurrage fora do prazo'], ['Container', 'Cliente', 'Prazo', 'Dias depois do prazo'], ...d.dem.fora.map((m) => [m.cont, m.cli, App.opData.fmtData(m.prazo), -m.sobra])];
+      ['Demurrage'], ['Custo estimado', d.dem.custo.toFixed(2)], ['Custo evitado', d.dem.evitado.toFixed(2)], [],
+      ['Demurrage fora do prazo'], ['Container', 'Cliente', 'Prazo', 'Dias depois do prazo', 'Custo estimado'], ...d.dem.fora.map((m) => [m.cont, m.cli, App.opData.fmtData(m.prazo), -m.sobra, (-m.sobra * (m.diaria || 0)).toFixed(2)])];
     const blob = new Blob(['\uFEFF' + L.map((r) => r.map(q).join(';')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = `indicadores-${Math.floor(ym / 100)}-${String(ym % 100).padStart(2, '0')}.csv`;

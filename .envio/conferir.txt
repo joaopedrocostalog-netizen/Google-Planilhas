@@ -1,5 +1,0 @@
-src/styles.css 1171baf6e7af3f3cbcbc10a2b5bc87f1fad180c7
-src/updates.js feaa9973118f89d13cbc332a7689bb3b52f80ee7
-src/indicadores.js ec36deba3401ff7ec28cf0553b76c00d88c03f0e
-src/diario.js d80162909710167f57c0b18b723ded0f57ec3a70
-src/notify.js 212b7b4bd8c0d2ac7990acec40f0fa1e04d17ae4

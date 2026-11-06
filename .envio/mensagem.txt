@@ -1,1 +1,0 @@
-Painel do dia com status para conferir, custos nos Indicadores, novos avisos no celular e estilos

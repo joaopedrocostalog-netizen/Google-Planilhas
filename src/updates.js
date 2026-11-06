@@ -4,6 +4,15 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '06/11/2026', title: 'Demurrage, alertas no celular, status automático, histórico do container e mais', items: [
+      ['Demurrage', 'No PRÉ STACKING VAZIO, CONTAINER, DATA BAIXA e DEMMURAGE ficam amarelos quando o prazo (DATA BAIXA + DEMMURAGE) vence em até 2 dias e vermelhos quando venceu. Entra sozinho no botão ALERTA e avisa no celular.'],
+      ['Alertas no celular', 'As regras do botão ALERTA também viram notificação. Em Notificações no celular, "Exemplo de cada aviso" manda um exemplo de cada tipo.'],
+      ['Status automático', 'Administrador › Status automático por e-mail: aba, linhas (CLIENTE, REFERENCIA…), STATUS que ficam de fora, horários, dias e quem confere. Na hora, o setor recebe o aviso e confere no Painel do dia; o e-mail só sai depois de confirmar.'],
+      ['Histórico do container', 'Botão direito no container › Histórico do container (ou Ferramentas): ficha das linhas atuais e linha do tempo de tudo o que mudou. Em Personalizar, escolha campos, colunas e pessoas e oculte itens um a um. Dá para imprimir.'],
+      ['Registro de automações', 'Administrador › Registro de automações: o que a planilha e o servidor fizeram sozinhos (PRÉ STACKING, DATA BAIXA, confirmações, avisos, status automático), com quem e quando.'],
+      ['Servidor fora do ar', 'Quando o servidor não responde aparece uma faixa no topo (acordando ou fora do ar). Um monitor confere o servidor a cada 10 minutos, mantém acordado e abre um aviso no GitHub se cair.'],
+      ['Custos de demurrage', 'Administrador › Custos de demurrage: diária por armador (20\' e 40\'). Os Indicadores do mês mostram o custo estimado das devoluções fora do prazo e o custo evitado.'],
+    ] },
     { date: '06/11/2026', title: 'Validação do número do container', items: [
       ['Container', 'Nas colunas CONTAINER, 1 - CONTAINER e 2 - CONTAINER, o número é conferido pelo padrão internacional (4 letras, 6 números e o dígito verificador). Número errado ganha um sublinhado ondulado vermelho.'],
       ['Motivo', 'Passe o mouse no número sublinhado (no celular, toque na célula) para ver o motivo, por exemplo qual deveria ser o último dígito. Ao digitar ou colar um número errado, a planilha avisa na hora. Nada é bloqueado.'],
