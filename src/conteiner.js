@@ -52,7 +52,20 @@
     cache.set(sh.id, c);
     return c;
   }
-  App.on('change', () => cache.clear());
+  // o cabeçalho só muda se a alteração mexe nas 15 primeiras linhas ou nos nomes das colunas: edições comuns
+  // (inclusive as recebidas de outras pessoas) não precisam varrer a página de novo
+  const tocaCabecalho = (p) => {
+    if (!p || !p.sheets) return true;
+    for (const id in p.sheets) {
+      const e = p.sheets[id];
+      if (e.created || e.removed || (e.props && ('colNames' in e.props || 'cols' in e.props))) return true;
+      for (const a in e.cells || {}) { const m = /\d+$/.exec(a); if (!m || +m[0] <= 15) return true; }
+    }
+    return false;
+  };
+  App.on('localPatch', (p) => { if (tocaCabecalho(p)) cache.clear(); });
+  App.on('remotePatch', (p) => { if (tocaCabecalho(p)) cache.clear(); });
+  App.on('change', (e) => { if (!e || (!e.label && !e.remote)) cache.clear(); });
   App.on('sheet', () => cache.clear());
 
   // usado pela grade e pela dica: problema do container nesta célula (linha/coluna reais) ou null

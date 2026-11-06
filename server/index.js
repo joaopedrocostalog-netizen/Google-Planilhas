@@ -4,7 +4,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { accept } = require('./ws');
+const { accept, prepare, join } = require('./ws.js');
 const createStore = require('./store');
 const Patch = require('../src/patch.js');
 const Perms = require('../src/perms.js');
@@ -265,7 +265,9 @@ function pessoasNaSala(room, soNaoAdmin) {
 }
 // contadores do dia (horário de Brasília), guardados no banco (settings › metricas_dia:<id>) para não sumir quando o
 // servidor gratuito dorme: pico de pessoas ao mesmo tempo, quem entrou hoje e quem esperou vaga.
-const hojeBR = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }); // aaaa-mm-dd
+// formatador criado uma vez só (criar um a cada chamada custa caro e acontecia a cada entrada)
+const FMT_DIA_BR = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' });
+const hojeBR = () => FMT_DIA_BR.format(new Date()); // aaaa-mm-dd
 const inicioHojeISO = () => new Date(hojeBR() + 'T00:00:00-03:00').toISOString();
 const diasMetricas = new Map();
 async function diaDe(id) {
@@ -301,15 +303,46 @@ async function registrarBloqueio(room, user) {
   d.ultimosBloqueados = [{ name: user.name, email: user.email, at: new Date().toISOString() }, ...d.ultimosBloqueados].slice(0, 10);
   salvarDia(room.id);
 }
+// Quem tem as mesmas páginas e colunas visíveis recebe exatamente o mesmo conteúdo: a chave junta só o que os
+// filtros de permissão leem (admin, páginas e colunas), para o texto ser convertido e compactado uma vez só.
+const chavesPerms = new WeakMap();
+function chavePerms(perms) {
+  let k = chavesPerms.get(perms);
+  if (k === undefined) { k = JSON.stringify([!!perms.admin, perms.sheets, perms.cols]); chavesPerms.set(perms, k); }
+  return k;
+}
+// A planilha filtrada, já convertida em texto (e compactada na primeira entrada que pedir), fica guardada enquanto
+// ninguém editar: quem entra em seguida (ex.: todos reconectando depois de um deploy) reaproveita.
+function docPreparado(room, perms) {
+  if (!room.initCache || room.initCache.version !== room.version) room.initCache = { version: room.version, map: new Map() };
+  const k = chavePerms(perms);
+  let d = room.initCache.map.get(k);
+  if (!d) { d = prepare(Perms.filterDoc(room.data, perms)); room.initCache.map.set(k, d); }
+  return d;
+}
 function sendInit(c) {
   const room = c.room;
-  c.ws.send({
-    type: 'init', doc: Perms.filterDoc(room.data, c.perms), version: room.version, perms: c.perms,
+  const resto = JSON.stringify({
+    version: room.version, perms: c.perms,
     me: Object.assign(publicUser(c.user), { cid: c.cid }),
     peers: [...room.clients].filter((x) => x !== c && x.user && seesPeer(c, x)).map(peerInfo),
   });
+  // {"type":"init","doc":<planilha guardada>,"version":…} — o mesmo conteúdo de antes, montado em pedaços
+  c.ws.sendPrepared(join([prepare('{"type":"init","doc":'), docPreparado(room, c.perms), prepare(',' + resto.slice(1))]));
 }
-function broadcast(room, except, msg) { for (const c of room.clients) if (c !== except) c.ws.send(msg); }
+function broadcast(room, except, msg) { const p = prepare(msg); for (const c of room.clients) if (c !== except) c.ws.sendPrepared(p); }
+// manda uma alteração a todos (menos "except"), filtrada pelas permissões de cada um: o filtro e a conversão em
+// texto acontecem uma vez por grupo de permissões, não uma vez por pessoa
+function enviarPatch(room, except, patch, by, pular) {
+  const porChave = new Map();
+  for (const o of room.clients) {
+    if (o === except || (pular && pular.has(o))) continue;
+    const k = chavePerms(o.perms);
+    let pp = porChave.get(k);
+    if (pp === undefined) { const fp = Perms.filterPatch(patch, o.perms, room.data); pp = fp ? prepare({ type: 'patch', patch: fp, version: room.version, by }) : null; porChave.set(k, pp); }
+    if (pp) o.ws.sendPrepared(pp);
+  }
+}
 
 // Recalcula permissões de todos na sala (após mudar compartilhamento ou páginas)
 function refreshRoom(room, reinit) {
@@ -394,19 +427,15 @@ function onPatch(c, msg) {
     }
   }
   c.ws.send({ type: 'ack', id: msg.id, version: room.version });
-  for (const o of room.clients) {
-    if (o === c) continue;
-    if (reinit.has(o)) { sendInit(o); continue; }
-    const fp = Perms.filterPatch(p, o.perms, room.data);
-    if (fp) o.ws.send({ type: 'patch', patch: fp, version: room.version, by: { cid: c.cid, name: c.user.name } });
-  }
+  for (const o of reinit) if (o !== c) sendInit(o);
+  enviarPatch(room, c, p, { cid: c.cid, name: c.user.name }, reinit);
   if (accessChanged && !c.perms.admin) sendInit(c);
   // completa o CPF/CNPJ do motorista (DSS) e avisa todos, inclusive quem digitou
   const fill = lookupFills(room, p, clears);
   if (fill) {
     Patch.apply(room.data, fill);
     room.version++;
-    for (const o of room.clients) { const fp = Perms.filterPatch(fill, o.perms, room.data); if (fp) o.ws.send({ type: 'patch', patch: fp, version: room.version, by: { cid: 'dss', name: 'DSS' } }); }
+    enviarPatch(room, null, fill, { cid: 'dss', name: 'DSS' });
   }
   scheduleSave(room);
   if (avisos.length) pushAvisa(room, c.user, avisos).catch((e) => console.error('[push]', e.message));
@@ -1685,6 +1714,7 @@ async function shutdown() {
   // grava o que estiver pendente antes de desligar (novas publicações reiniciam o servidor)
   const t = setTimeout(() => process.exit(0), 20000);
   for (const room of rooms.values()) { try { if (room.saving) await room.saving; room.saving = null; await saveRoom(room); } catch (e) { /* tenta as outras */ } }
+  if (store.flushHistory) await store.flushHistory().catch((e) => console.error('Falha ao gravar histórico', e.message));
   clearTimeout(t);
   process.exit(0);
 }

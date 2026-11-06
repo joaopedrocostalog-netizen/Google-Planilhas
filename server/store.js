@@ -121,6 +121,25 @@ function pgStore(url) {
   });
   pool.on('error', (e) => console.error('Erro na conexão com o banco:', e.code || '', e.message));
   const q = (text, params) => pool.query(text, params);
+  // fila do histórico (ver addHistory): uma gravação por vez; se o banco falhar, as linhas voltam para a fila
+  // (até 20 mil, para não ocupar memória sem limite enquanto o banco estiver fora)
+  let histFila = [], histTimer = null, histGravando = Promise.resolve();
+  function flushHistory() {
+    clearTimeout(histTimer); histTimer = null;
+    histGravando = histGravando.catch(() => {}).then(async () => {
+      if (!histFila.length) return;
+      const lote = histFila; histFila = [];
+      try {
+        await q(`INSERT INTO cell_history (doc_id, sheet_id, addr, user_id, user_name, ip, before, after, at)
+          SELECT x.d, x.s, x.a, x.u, x.n, x.i, x.b, x.f, x.t FROM jsonb_to_recordset($1::jsonb) AS x(d text, s text, a text, u text, n text, i text, b text, f text, t timestamptz)`, [JSON.stringify(lote)]);
+      } catch (e) {
+        histFila = lote.concat(histFila).slice(-20000);
+        if (!histTimer) histTimer = setTimeout(() => { histTimer = null; flushHistory().catch(() => {}); }, 5000);
+        throw e;
+      }
+    });
+    return histGravando;
+  }
   const row = async (text, params) => { const r = await q(text, params); return r.rows[0] || null; };
   return {
     kind: 'postgres' + (schema ? ` (schema ${schema})` : ''),
@@ -216,11 +235,15 @@ function pgStore(url) {
     async saveDoc(id, { title, data, version }) { await q("UPDATE docs SET title = $2, data_gz = $3, data = '{}'::jsonb, version = $4, updated_at = now() WHERE id = $1", [id, title, await gzip(JSON.stringify(data)), version]); },
     async saveAcl(id, acl) { await q('UPDATE docs SET acl = $2, updated_at = now() WHERE id = $1', [id, JSON.stringify(acl)]); },
     async deleteDoc(id) { await q('DELETE FROM docs WHERE id = $1', [id]); },
+    // histórico das células: acumula por até 1 s (ou 500 linhas) e grava tudo numa consulta só, em vez de uma ida ao
+    // banco por edição; cada linha guarda a hora exata da edição. Leituras do histórico gravam a fila antes.
     async addHistory(docId, user, entries) {
-      await q(`INSERT INTO cell_history (doc_id, sheet_id, addr, user_id, user_name, ip, before, after)
-        SELECT $1, x.s, x.a, $2, $3, $5, x.b, x.f FROM jsonb_to_recordset($4::jsonb) AS x(s text, a text, b text, f text)`,
-      [docId, user.id, user.name, JSON.stringify(entries), user.ip || null]);
+      const at = new Date().toISOString();
+      for (const e of entries) histFila.push({ d: docId, s: e.s, a: e.a, u: user.id, n: user.name, i: user.ip || null, b: e.b, f: e.f, t: at });
+      if (histFila.length >= 500) return flushHistory();
+      if (!histTimer) histTimer = setTimeout(() => { histTimer = null; flushHistory().catch((e) => console.error('Falha ao gravar histórico', e.message)); }, 1000);
     },
+    flushHistory: () => flushHistory(),
     async addVersion(docId, v) {
       const r = await q('INSERT INTO doc_versions (doc_id, name, by_name, auto, data_gz) VALUES ($1, $2, $3, $4, $5) RETURNING id, at', [docId, v.name || '', v.by_name || '', !!v.auto, await gzip(JSON.stringify(v.data))]);
       // guarda todas as versões com nome e as 50 automáticas mais recentes
@@ -240,6 +263,7 @@ function pgStore(url) {
     },
     async renameVersion(docId, id, name) { await q('UPDATE doc_versions SET name = $3 WHERE doc_id = $1 AND id = $2', [docId, Number(id), name]); },
     async getHistory(docId, sheetId, addr, limit) {
+      await flushHistory();
       const r = await q('SELECT user_id, user_name, ip, at, before, after FROM cell_history WHERE doc_id = $1 AND sheet_id = $2 AND addr = $3 ORDER BY id DESC LIMIT $4', [docId, sheetId, addr, limit]);
       return r.rows;
     },
@@ -255,6 +279,7 @@ function pgStore(url) {
     },
     // métricas: edições de células desde "since" (ISO), quantas pessoas e quem mais editou
     async historyStats(docId, since) {
+      await flushHistory();
       const r = await q(`SELECT user_id AS id, max(user_name) AS name, count(*)::int AS n FROM cell_history
         WHERE doc_id = $1 AND at >= $2 GROUP BY user_id ORDER BY n DESC`, [docId, since]);
       return { edicoes: r.rows.reduce((t, x) => t + x.n, 0), pessoas: r.rows.length, top: r.rows.slice(0, 5) };

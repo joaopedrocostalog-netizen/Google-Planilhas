@@ -485,6 +485,57 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       check('histórico do container responde', Array.isArray(await api('POST', `/api/docs/${did}/historico-container`, { container: 'CSQU 305438-3', linhas: [{ sheetId: 'mi', rows: [2] }] }, ana.token)), true);
       await api('POST', '/api/push/cancelar', { endpoint: sub.endpoint }, ana.token);
     }
+    // compressão no tempo real (permessage-deflate): o navegador pede, o servidor aceita e a planilha viaja compactada
+    {
+      const net = require('net'), zlib = require('zlib');
+      const SYNC = { finishFlush: zlib.constants.Z_SYNC_FLUSH };
+      const cells = {};
+      for (let r = 1; r <= 400; r++) for (let k = 0; k < 8; k++) cells[String.fromCharCode(65 + k) + r] = { v: 'CONTAINER ' + (r * 8 + k), s: { ha: 'center' } };
+      const dz = await api('POST', '/api/docs', { title: 'Compressão', data: { sheets: [{ id: 'z1', name: 'Z', rows: 500, cols: 10, cells }] } }, ana.token);
+      // conexão "na unha", byte a byte, como um navegador (com ou sem pedir compressão)
+      const bruto = (ext) => new Promise((res, rej) => {
+        const so = net.connect(PORT, '127.0.0.1');
+        let buf = Buffer.alloc(0), hdr = null;
+        so.on('connect', () => so.write(`GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n${ext ? 'Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n' : ''}\r\n`));
+        so.on('data', (d) => {
+          buf = Buffer.concat([buf, d]);
+          if (!hdr) {
+            const i = buf.indexOf('\r\n\r\n');
+            if (i < 0) return;
+            hdr = buf.subarray(0, i).toString(); buf = buf.subarray(i + 4);
+            // o pedido de entrada também vai compactado quando a compressão foi combinada
+            let pl = Buffer.from(JSON.stringify({ type: 'hello', token: ana.token, doc: dz.id }));
+            let rsv = 0;
+            if (ext) { const z = zlib.deflateRawSync(pl, SYNC); pl = z.subarray(0, z.length - 4); rsv = 0x40; }
+            const mask = Buffer.from([1, 2, 3, 4]), m = Buffer.from(pl);
+            for (let k = 0; k < m.length; k++) m[k] ^= mask[k & 3];
+            const h = m.length < 126 ? Buffer.from([0x81 | rsv, 0x80 | m.length]) : Buffer.from([0x81 | rsv, 0x80 | 126, m.length >> 8, m.length & 255]);
+            so.write(Buffer.concat([h, mask, m]));
+          }
+          for (;;) {
+            if (buf.length < 2) return;
+            let len = buf[1] & 127, off = 2;
+            if (len === 126) { if (buf.length < 4) return; len = buf.readUInt16BE(2); off = 4; } else if (len === 127) { if (buf.length < 10) return; len = buf.readUInt32BE(6); off = 10; }
+            if (buf.length < off + len) return;
+            const rsv1 = (buf[0] & 0x40) !== 0;
+            let pl = buf.subarray(off, off + len);
+            buf = buf.subarray(off + len);
+            const wire = pl.length;
+            if (rsv1) pl = zlib.inflateRawSync(Buffer.concat([pl, Buffer.from([0, 0, 255, 255])]), SYNC);
+            const msg = JSON.parse(pl.toString());
+            if (msg.type === 'init') { so.destroy(); return res({ hdr, rsv1, wire, msg }); }
+          }
+        });
+        so.on('error', rej);
+        setTimeout(() => rej(new Error('sem resposta do tempo real')), 5000);
+      });
+      const comZ = await bruto(true), semZ = await bruto(false);
+      check('compressão combinada só quando o navegador pede', [/permessage-deflate/.test(comZ.hdr), comZ.rsv1, /permessage-deflate/.test(semZ.hdr), semZ.rsv1], [true, true, false, false]);
+      check('a planilha chega igual com e sem compressão', [comZ.msg.doc.sheets[0].cells.H400.v, JSON.stringify(comZ.msg.doc) === JSON.stringify(semZ.msg.doc), comZ.msg.me.email], ['CONTAINER 3207', true, 'ana@empresa.com']);
+      check('a planilha viaja pelo menos 5 vezes menor', comZ.wire * 5 < semZ.wire, true);
+      console.log(`  (compressão no tempo real: ${semZ.wire} bytes → ${comZ.wire} bytes)`);
+      await api('DELETE', '/api/docs/' + dz.id, null, ana.token);
+    }
   } catch (e) {
     fail++;
     console.log('ERRO:', e.message, '\n', log.slice(-2000));

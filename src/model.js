@@ -166,6 +166,7 @@
     App.wb.invalidate();
     App._fmtCache = new Map();
     App._cfCache = new Map();
+    if (window.Perms && window.Perms.planilhaMudou) window.Perms.planilhaMudou();
   }
   App.invalidate = invalidate;
   // Aplica uma alteração ao documento mantendo a página ativa
@@ -180,14 +181,101 @@
     invalidate();
   }
   App.applyPatch = applyPatch;
+
+  // ---------- Comparação antes/depois de uma alteração ----------
+  // Dá exatamente o mesmo resultado de Patch.diffPair sobre uma "foto" do documento (JSON sem os campos que começam
+  // com _), mas sem converter o documento inteiro em texto e ler tudo de volta a cada edição (numa planilha de
+  // alguns MB isso custava ~300 ms por Enter): guarda o texto de cada célula e de cada propriedade das páginas,
+  // compara texto com texto e só lê de volta o que mudou.
+  // texto sem os campos _: converte direto (rápido) e só refaz com o filtro se aparecer "_ (um campo _ só pode
+  // aparecer assim; se for outra coisa, o filtro apenas confirma o mesmo texto)
+  const jsR = (x) => { let t = JSON.stringify(x); if (t !== undefined && t.indexOf('"_') >= 0) t = JSON.stringify(x, replacer); return t === undefined ? null : t; };
+  const NUL = (j) => (j === null || j === undefined ? 'null' : j);
+  function marcaPagina(sh) {
+    const cells = new Map(), props = new Map(), keys = [];
+    for (const k of Object.keys(sh)) {
+      if (k[0] === '_') continue;
+      if (k === 'cells') {
+        if (sh.cells === undefined) continue;
+        keys.push(k);
+        const cs = sh.cells || {};
+        for (const a in cs) { const j = jsR(cs[a]); if (j !== null) cells.set(a, j); }
+        continue;
+      }
+      const j = jsR(sh[k]);
+      if (j === null) continue;
+      keys.push(k); props.set(k, j);
+    }
+    return { cells, props, keys };
+  }
+  function marca() {
+    return { title: doc.title, names: jsR(doc.names || {}), order: doc.sheets.map((x) => x.id), sheets: new Map(doc.sheets.map((x) => [x.id, marcaPagina(x)])) };
+  }
+  // a página como estava antes (para recriar uma página excluída ao desfazer)
+  function paginaDaMarca(m) {
+    const o = {};
+    for (const k of m.keys) {
+      if (k === 'cells') { const c = {}; for (const [a, j] of m.cells) c[a] = JSON.parse(j); o.cells = c; }
+      else o[k] = JSON.parse(m.props.get(k));
+    }
+    return o;
+  }
+  // [alteração, inversa] entre a marca B (antes) e o documento agora; [null, null] quando nada mudou
+  function diffMarca(B) {
+    const f = { sheets: {} }, r = { sheets: {} };
+    let changed = false;
+    if ((B.title || '') !== (doc.title || '')) { f.title = doc.title; r.title = B.title; changed = true; }
+    const an = jsR(doc.names || {});
+    if (NUL(B.names) !== NUL(an)) { f.names = JSON.parse(NUL(an)); r.names = JSON.parse(NUL(B.names)); changed = true; }
+    const ao = doc.sheets.map((x) => x.id);
+    if (JSON.stringify(B.order) !== JSON.stringify(ao)) { f.order = ao; r.order = B.order.slice(); changed = true; }
+    const am = new Map(doc.sheets.map((x) => [x.id, x]));
+    for (const [id, sh] of am) {
+      const o = B.sheets.get(id);
+      if (!o) { f.sheets[id] = { created: JSON.parse(JSON.stringify(sh, replacer)) }; r.sheets[id] = { removed: true }; changed = true; continue; }
+      const fc = {}, rc = {}, fp = {}, rp = {};
+      let nc = 0, np = 0;
+      const ac = sh.cells || {};
+      for (const a in ac) {
+        const ja = jsR(ac[a]);
+        if (ja === null) continue;
+        const jb = o.cells.get(a);
+        if (ja !== NUL(jb)) { fc[a] = JSON.parse(ja); rc[a] = jb === undefined ? null : JSON.parse(jb); nc++; }
+      }
+      for (const [a, jb] of o.cells) { const x = ac[a]; if (x === undefined || typeof x === 'function') { fc[a] = null; rc[a] = JSON.parse(jb); nc++; } }
+      const keys = new Set(o.keys.filter((k) => k !== 'cells').concat(Object.keys(sh).filter((k) => k !== 'cells' && k[0] !== '_')));
+      for (const k of keys) {
+        const ja = jsR(sh[k]), jb = o.props.get(k);
+        if (NUL(ja) !== NUL(jb)) { fp[k] = ja === null ? null : JSON.parse(ja); rp[k] = jb === undefined ? null : JSON.parse(jb); np++; }
+      }
+      if (nc || np) {
+        f.sheets[id] = {}; r.sheets[id] = {};
+        if (nc) { f.sheets[id].cells = fc; r.sheets[id].cells = rc; }
+        if (np) { f.sheets[id].props = fp; r.sheets[id].props = rp; }
+        changed = true;
+      }
+    }
+    for (const [id, o] of B.sheets) if (!am.has(id)) { f.sheets[id] = { removed: true }; r.sheets[id] = { created: paginaDaMarca(o) }; changed = true; }
+    return changed ? [f, r] : [null, null];
+  }
+  App._diffMarca = diffMarca; App._marca = marca; // usados pelos testes de equivalência
+
   // Executa uma alteração com registro no histórico. fn pode retornar false para cancelar.
   App.change = (label, fn) => {
-    const snap = snapshot();
+    const before = marca(), ativoAntes = doc.active;
     let res;
-    try { res = fn(); } catch (e) { console.error(e); restore(snap); App.emit('notify', 'Não foi possível concluir a operação.'); return false; }
+    try { res = fn(); } catch (e) {
+      console.error(e);
+      // volta ao estado de antes (o mesmo que restaurar a foto completa)
+      const inv = diffMarca(before)[1];
+      if (inv) applyPatch(inv);
+      doc.active = Math.max(0, Math.min(ativoAntes, doc.sheets.length - 1));
+      invalidate(); App.emit('sheet'); App.emit('change', { undo: true }); scheduleSave();
+      App.emit('notify', 'Não foi possível concluir a operação.');
+      return false;
+    }
     if (res === false) return false;
-    const before = JSON.parse(snap);
-    let [fwd, inv] = window.Patch.diffPair(before, JSON.parse(JSON.stringify(docView(), replacer)));
+    let [fwd, inv] = diffMarca(before);
     // quem só preenche valores (planilhas compartilhadas): mantém apenas os valores das células,
     // descartando formatação, notas e links que viriam junto (ao colar, arrastar o preenchimento etc.)
     if (fwd && App.valuesOnly && App.valuesOnly()) {
@@ -207,18 +295,18 @@
         }
       }
       if (dropped) {
-        [fwd, inv] = window.Patch.diffPair(before, JSON.parse(JSON.stringify(docView(), replacer)));
+        [fwd, inv] = diffMarca(before);
         invalidate();
         if (!fwd) { App.emit('change', {}); App.emit('notify', window.Perms.FORMAT_MSG); return false; }
       }
     }
     // veículo preenchido fora do Escalar veículo (colar, digitar…): fica aguardando confirmação da escala
     if (fwd && App.autoPendingEscala && !App._escalando && App.autoPendingEscala(fwd, inv)) {
-      [fwd, inv] = window.Patch.diffPair(before, JSON.parse(JSON.stringify(docView(), replacer)));
+      [fwd, inv] = diffMarca(before);
     }
     // PRÉ STACKING: P.S. CH / P.S. VZ marcados no MAPA criam as linhas; mudanças no PRÉ STACKING voltam para o MAPA
     if (fwd && App.preStackingHook && App.preStackingHook(fwd, inv)) {
-      [fwd, inv] = window.Patch.diffPair(before, JSON.parse(JSON.stringify(docView(), replacer)));
+      [fwd, inv] = diffMarca(before);
     }
     // veículo bloqueado (escala): nem administradores trocam sem destravar antes
     if (fwd && App.lockViolation) {
@@ -271,6 +359,7 @@
   // Alteração vinda de outra pessoa (não entra no histórico local)
   App.applyRemote = (p) => {
     applyPatch(p);
+    App.emit('remotePatch', p);
     if (isStructural(p)) App.emit('sheet');
     App.emit('change', { remote: true });
     if (p.title !== undefined) App.emit('title');
@@ -450,12 +539,13 @@
     return res;
   };
 
-  // Texto de exibição de um valor
+  // Texto de exibição de um valor (formatador criado uma vez só: criar um a cada número custava ~20 µs por número)
+  const FMT_NUM = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 10, useGrouping: false });
   function fmtAuto(v) {
     if (!isFinite(v)) return '#NUM!';
     const a = Math.abs(v);
     if (a !== 0 && (a >= 1e15 || a < 1e-9)) return v.toExponential(4).replace('.', ',').replace('e+', 'E+').replace('e-', 'E-');
-    return Number(v.toPrecision(11)).toLocaleString('pt-BR', { maximumFractionDigits: 10, useGrouping: false });
+    return FMT_NUM.format(Number(v.toPrecision(11)));
   }
   App.fmtValue = (v, nf) => {
     if (v === null || v === undefined) return '';

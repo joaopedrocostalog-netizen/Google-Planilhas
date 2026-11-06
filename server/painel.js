@@ -8,8 +8,11 @@
 
 module.exports = function painel(ctx) {
   const { store, rooms, route, requireUser, getRoom, httpError, readBody, Perms, permDoc, uid } = ctx;
-  const hojeBR = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
-  const horaBR = (t) => Number(new Date(t || Date.now()).toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false })) % 24;
+  // formatadores criados uma vez só: criar um a cada edição custava ~0,5 ms por edição
+  const FMT_DIA = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' });
+  const FMT_HORA = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false });
+  const hojeBR = () => FMT_DIA.format(new Date());
+  const horaBR = (t) => Number(FMT_HORA.format(new Date(t || Date.now()))) % 24;
   const ehTeste = (room) => !!(room && room.temp);
 
   // ---------- Linha do tempo do dia (settings › painel_dia:<id>) ----------
@@ -88,7 +91,7 @@ module.exports = function painel(ctx) {
   async function edicoesPorDia(id) {
     const c = cacheDias.get(id);
     if (c && Date.now() - c.t < 5 * 60e3) return c.v;
-    const inicio = (k) => { const d = new Date(Date.now() - k * 86400e3).toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }); return { d, iso: new Date(d + 'T00:00:00-03:00').toISOString() }; };
+    const inicio = (k) => { const d = FMT_DIA.format(new Date(Date.now() - k * 86400e3)); return { d, iso: new Date(d + 'T00:00:00-03:00').toISOString() }; };
     const out = [];
     for (let k = 0; k <= 6; k++) {
       const { d, iso } = inicio(k);

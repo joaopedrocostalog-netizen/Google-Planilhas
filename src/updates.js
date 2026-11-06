@@ -4,6 +4,11 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '06/11/2026', title: 'Planilha mais rápida (servidor e tela)', items: [
+      ['Entrar na planilha', 'A planilha agora viaja compactada entre o servidor e o navegador (cerca de 25 vezes menor), o que ajuda principalmente no celular e quando todos reconectam depois de uma atualização.'],
+      ['Digitar', 'Cada edição ficou cerca de duas vezes mais leve: a tela compara só o texto de cada célula, sem refazer uma cópia da planilha inteira a cada Enter. Rolar e receber edições de outras pessoas também ficaram mais leves.'],
+      ['Servidor', 'Cada edição é convertida e enviada uma vez para todos (antes era uma vez por pessoa), a planilha já pronta é reaproveitada por quem entra em seguida e o histórico das células é gravado em lotes. O servidor gasta cerca de 40% menos por edição e 70% menos quando várias pessoas entram juntas.'],
+    ] },
     { date: '06/11/2026', title: 'Demurrage, alertas no celular, status automático, histórico do container e mais', items: [
       ['Demurrage', 'No PRÉ STACKING VAZIO, CONTAINER, DATA BAIXA e DEMMURAGE ficam amarelos quando o prazo (DATA BAIXA + DEMMURAGE) vence em até 2 dias e vermelhos quando venceu. Entra sozinho no botão ALERTA e avisa no celular.'],
       ['Alertas no celular', 'As regras do botão ALERTA também viram notificação. Em Notificações no celular, "Exemplo de cada aviso" manda um exemplo de cada tipo.'],

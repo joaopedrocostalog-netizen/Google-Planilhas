@@ -33,18 +33,24 @@
   const nrm = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\b(DE|DA|DO|DAS|DOS)\b/g, ' ').replace(/[^A-Z0-9]/g, '');
   const ESC_FIELDS = ['CAVALO', 'CARRETA', 'MOTORISTA', 'CPF', 'CONTATO'];
   const escCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  // na tela, a planilha avisa quando muda (planilhaMudou); enquanto não mudar, o resultado guardado vale e não é
+  // preciso remontar o nome de até 400 colunas a cada chamada (isso acontecia para cada célula desenhada).
+  // No servidor ninguém avisa, então lá a conferência completa continua a cada chamada.
+  let geracao = 0, avisa = false;
+  function planilhaMudou() { geracao++; avisa = true; }
   function escalaCols(sheet) {
     if (!sheet) return {};
+    if (avisa) { const h = escCache && escCache.get(sheet); if (h && h.gen === geracao) return h.cols; }
     const names = sheet.colNames || {}, cells = sheet.cells || {};
     const maxC = Math.min(Math.max(sheet.cols || 26, ...Object.keys(names).map(Number)), 400);
     const labels = [];
     for (let c = 1; c <= maxC; c++) labels.push(names[c] || (cells[colName(c) + '1'] && cells[colName(c) + '1'].v) || '');
     const key = labels.join('\u0001');
     const hit = escCache && escCache.get(sheet);
-    if (hit && hit.key === key) return hit.cols;
+    if (hit && hit.key === key) { hit.gen = geracao; return hit.cols; }
     const cols = {};
     labels.forEach((l, i) => { const k = nrm(l); if (ESC_FIELDS.includes(k) && !cols[k]) cols[k] = i + 1; });
-    if (escCache) escCache.set(sheet, { key, cols });
+    if (escCache) escCache.set(sheet, { key, cols, gen: geracao });
     return cols;
   }
   // Lista de "quem pode" (setores e/ou pessoas): vale para o setor da pessoa e para a própria pessoa (member.rid)
@@ -404,7 +410,7 @@
   // Pode ver a célula?
   const canSee = (perms, sheetId, addr) => sheetVisible(perms, sheetId) && colLevel(perms, sheetId, colOf(addr)) !== 'none';
 
-  const api = { inList, LOCK_MSG, lockedCol, escalaCols, escalaCheck, ESC_FIELDS, normName: nrm, COLS_MSG, FORMAT_MSG, nonValue, execMerge, execAllowed, stable, normCell, EXEC_STYLE, compute, validate, filterDoc, filterPatch, levelOf, colLevel, sheetVisible, bestLevel, hasHiddenCols, hasColRules, blockingProtection, defaultAcl, canSee, colOf, colName, RANK, LEVELS };
+  const api = { inList, LOCK_MSG, lockedCol, escalaCols, planilhaMudou, escalaCheck, ESC_FIELDS, normName: nrm, COLS_MSG, FORMAT_MSG, nonValue, execMerge, execAllowed, stable, normCell, EXEC_STYLE, compute, validate, filterDoc, filterPatch, levelOf, colLevel, sheetVisible, bestLevel, hasHiddenCols, hasColRules, blockingProtection, defaultAcl, canSee, colOf, colName, RANK, LEVELS };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Perms = api;
 })(typeof window !== 'undefined' ? window : globalThis);
