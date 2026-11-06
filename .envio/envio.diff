@@ -1,0 +1,449 @@
+diff --git a/server/index.js b/server/index.js
+index f9e25fc..084b8c1 100644
+--- a/server/index.js
++++ b/server/index.js
+@@ -163,8 +163,10 @@ async function getRoom(id) {
+   data.title = row.title;
+   const room = { id, ownerId: row.owner_id, acl: Object.assign(Perms.defaultAcl(), row.acl || {}), data, version: row.version || 0, clients: new Set(), dirty: false, timer: null };
+   rooms.set(id, room);
++  if (rotinasSrv) rotinasSrv.marcaAtivo(id).catch(() => {});
+   return room;
+ }
++let rotinasSrv = null;
+ const permDoc = (room) => ({ ownerId: room.ownerId, acl: room.acl, data: room.data });
+ // Gravação no banco: no máximo a cada ~10 s por planilha (planilhas grandes pesam no banco gratuito),
+ // uma gravação por vez e sempre a versão mais nova. Ao sair o último usuário ou ao desligar, grava na hora.
+@@ -739,12 +741,29 @@ route('GET', '/api/push/chave', async (req) => { await requireUser(req); return
+ route('POST', '/api/push/estado', async (req) => { const user = await requireUser(req); const b = await readBody(req, 4000); return push.estado(user.id, String(b.endpoint || '')); });
+ route('POST', '/api/push/inscrever', async (req) => { const user = await requireUser(req); const b = await readBody(req, 8000); return push.inscreve(user.id, b); });
+ route('POST', '/api/push/cancelar', async (req) => { const user = await requireUser(req); const b = await readBody(req, 4000); return push.cancela(user.id, String(b.endpoint || '')); });
++// teste: uma notificação simples ou um exemplo de cada tipo de aviso (exemplos: true)
++const EXEMPLOS_PUSH = [
++  ['critico', 'Container crítico', 'Exemplo: MAPA IMPO linha 12: MSCU1234565 (Ana)'],
++  ['troca', 'Pedido de troca de veículo', 'Exemplo: MAPA IMPO linha 8 (Bruno)'],
++  ['chat', 'Mensagem de Ana', 'Exemplo: O container da linha 12 já saiu do terminal?'],
++  ['prestacking', 'PRÉ STACKING finalizado', 'Exemplo: PRÉ STACKING VAZIO linha 5: TGHU3000005 (Carla)'],
++  ['alerta', 'ALERTA: Agendamento vencido', 'Exemplo: MAPA EXPO: CSQU3054383 · ACME LTDA'],
++  ['demurrage', 'Demurrage do vazio', 'Exemplo: TRHU 861.819-1 (GLOVIS): vence em 2 dias · prazo 08/11/2026'],
++  ['status', 'Status automático para conferir', 'Exemplo: Status ACME (08:00) — toque para conferir e enviar'],
++];
+ route('POST', '/api/push/teste', async (req) => {
+   const user = await requireUser(req);
+   if (rateLimited('push:' + user.id)) throw httpError(429, 'Aguarde um pouco antes de testar de novo.');
++  const b = await readBody(req, 2000).catch(() => ({}));
++  if (b && b.exemplos) {
++    let n = 0;
++    for (const [tipo, title, body] of EXEMPLOS_PUSH) n += await push.paraPessoa(user.id, 'teste', { title, body, tag: 'exemplo-' + tipo });
++    return { enviadas: n, exemplos: EXEMPLOS_PUSH.length };
++  }
+   const n = await push.paraPessoa(user.id, 'teste', { title: 'Planilhas Costalog', body: 'As notificações estão funcionando neste aparelho.', tag: 'teste' });
+   return { enviadas: n };
+ });
++rotinasSrv = require('./rotinas.js')({ store, push, Perms, getRoom, permDoc, route, readBody, requireUser, httpError });
+ 
+ // ---------- Rotas das versões ----------
+ route('GET', '/api/docs/:id/versions', async (req, p) => {
+diff --git a/server/push.js b/server/push.js
+index 581a3a4..885a1a6 100644
+--- a/server/push.js
++++ b/server/push.js
+@@ -7,8 +7,8 @@ const crypto = require('crypto');
+ 
+ const b64u = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+ const unb64u = (s) => Buffer.from(String(s).replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+-const TIPOS = ['critico', 'troca', 'chat', 'prestacking'];
+-const PREFS_PADRAO = { critico: true, troca: true, chat: true, prestacking: false };
++const TIPOS = ['critico', 'troca', 'chat', 'prestacking', 'alerta', 'demurrage', 'status'];
++const PREFS_PADRAO = { critico: true, troca: true, chat: true, prestacking: false, alerta: true, demurrage: true, status: true };
+ 
+ function createPush(store, opts) {
+   const log = (opts && opts.log) || console;
+diff --git a/server/rotinas.js b/server/rotinas.js
+new file mode 100644
+index 0000000..6bdcfb9
+--- /dev/null
++++ b/server/rotinas.js
+@@ -0,0 +1,283 @@
++// Rotinas do servidor (Planilhas Costalog):
++// - Registro de automações: tudo o que a planilha ou o servidor faz sozinho (PRÉ STACKING, DATA BAIXA, confirmações,
++//   avisos no celular, status automático), com quem e quando. Fica em settings › auto_log (até 3000 por planilha).
++// - Alertas (botão ALERTA): as regras são calculadas na tela de quem está com a planilha aberta; cada alerta novo é
++//   enviado ao servidor, que avisa no celular uma vez só (settings › push_alertas guarda o que já foi avisado).
++// - Demurrage do vazio: a cada 30 min o servidor confere o PRÉ STACKING VAZIO (DATA BAIXA + DEMMURAGE) e avisa no
++//   celular quando vence em 2 dias, hoje ou venceu (uma vez por etapa).
++// - Status automático: o administrador agenda (aba, filtro, horários, dias, setor). Na hora, o servidor cria uma
++//   pendência e avisa o setor; o e-mail só sai depois que alguém do setor confere e confirma na tela de envio.
++'use strict';
++
++const norm = (s) => String(s === null || s === undefined ? '' : s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase()
++  .replace(/\b(DE|DA|DO|DAS|DOS)\b/g, ' ').replace(/[^A-Z0-9]/g, '');
++const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
++// hora de Brasília (sem horário de verão desde 2019)
++const agoraBR = () => { const d = new Date(Date.now() - 3 * 3600e3); return { d, hm: `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`, dia: d.getUTCDay(), data: d.toISOString().slice(0, 10) }; };
++const serialHoje = () => Math.floor((Date.now() - 3 * 3600e3) / 86400000) + 25569;
++function serialDe(v) {
++  if (typeof v === 'number' && v > 20000 && v < 80000) return Math.floor(v);
++  const t = String(v === null || v === undefined ? '' : v).trim();
++  let m = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/.exec(t);
++  if (m) { const y = +m[3] < 100 ? 2000 + +m[3] : +m[3]; return Math.floor(Date.UTC(y, +m[2] - 1, +m[1]) / 86400000) + 25569; }
++  m = /^(\d{4})-(\d{2})-(\d{2})/.exec(t);
++  if (m) return Math.floor(Date.UTC(+m[1], +m[2] - 1, +m[3]) / 86400000) + 25569;
++  if (/^\d{5}(\.\d+)?$/.test(t)) return Math.floor(+t);
++  return null;
++}
++const fmtSerial = (s) => { const d = new Date((s - 25569) * 86400000); return `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${d.getUTCFullYear()}`; };
++function addrToStr(r, c) { let s = ''; let n = c; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s + r; }
++function parseAddr(a) { const m = /^([A-Z]+)(\d+)$/.exec(a); if (!m) return null; let c = 0; for (const ch of m[1]) c = c * 26 + ch.charCodeAt(0) - 64; return { row: +m[2], col: c }; }
++
++// colunas de uma aba pelo cabeçalho (linha com CONTAINER até a 15ª)
++function colunas(sh) {
++  let hr = 0;
++  for (const a in sh.cells) { const p = parseAddr(a); if (p && p.row <= 15 && norm(sh.cells[a].v) === 'CONTAINER' && (!hr || p.row < hr)) hr = p.row; }
++  hr = hr || 1;
++  const map = new Map();
++  for (const a in sh.cells) { const p = parseAddr(a); if (p && p.row === hr) { const k = norm(sh.cells[a].v); if (k && !map.has(k)) map.set(k, p.col); } }
++  for (const k in sh.colNames || {}) { const n = norm(sh.colNames[k]); if (n && !map.has(n)) map.set(n, +k); }
++  const col = (...nomes) => { for (const n of nomes) { const c = map.get(norm(n)); if (c) return c; } return null; };
++  return { hr, map, col };
++}
++const valor = (sh, r, c) => { if (!c) return ''; const x = sh.cells[addrToStr(r, c)]; return x && x.v !== undefined && x.v !== null ? x.v : ''; };
++
++module.exports = function rotinas(d) {
++  const { store, push, Perms, getRoom, permDoc, route, readBody, requireUser, httpError } = d;
++  const log = d.log || console;
++
++  // ---------- planilhas ativas (as que já foram abertas): o servidor confere demurrage e status nelas ----------
++  let ativas = null;
++  async function docsAtivos() { if (!ativas) { try { ativas = new Set((await store.getSetting('docs_ativos')) || []); } catch (e) { ativas = new Set(); } } return ativas; }
++  async function marcaAtivo(id) { const s = await docsAtivos(); if (!s.has(id)) { s.add(id); await store.setSetting('docs_ativos', [...s].slice(-50)).catch(() => {}); } }
++
++  // ---------- registro de automações ----------
++  async function autoLog(docId, itens, by) {
++    if (!itens.length) return;
++    const all = (await store.getSetting('auto_log').catch(() => null)) || {};
++    const lista = all[docId] || [];
++    const at = new Date().toISOString();
++    for (const it of itens) lista.push({ at, tipo: String(it.tipo || 'Automação').slice(0, 60), desc: String(it.desc || '').slice(0, 400), aba: String(it.aba || '').slice(0, 80), por: by ? String(by.name || '').slice(0, 80) : 'Servidor', origem: by ? 'planilha' : 'servidor' });
++    all[docId] = lista.slice(-3000);
++    await store.setSetting('auto_log', all);
++  }
++  async function salaDe(req, id, precisaAdmin) {
++    const user = await requireUser(req);
++    const room = await getRoom(id);
++    if (!room) throw httpError(404, 'Planilha não encontrada.');
++    const perms = Perms.compute(permDoc(room), user);
++    if (!perms) throw httpError(403, 'Você não tem acesso a esta planilha.');
++    if (precisaAdmin && !perms.admin) throw httpError(403, 'Somente administradores.');
++    marcaAtivo(room.id).catch(() => {});
++    return { user, room, perms };
++  }
++  route('POST', '/api/docs/:id/automacoes', async (req, p) => {
++    const { user, room } = await salaDe(req, p.id);
++    const b = await readBody(req, 60000);
++    const itens = (Array.isArray(b.itens) ? b.itens : []).slice(0, 50);
++    await autoLog(room.id, itens, user);
++    return { ok: true };
++  });
++  route('GET', '/api/docs/:id/automacoes', async (req, p) => {
++    const { room } = await salaDe(req, p.id, true);
++    const all = (await store.getSetting('auto_log').catch(() => null)) || {};
++    return (all[room.id] || []).slice().reverse();
++  });
++
++  // quem recebe um aviso desta planilha: inscritos com acesso (membro/dono), que veem a aba e estão na lista "who"
++  async function destinatarios(room, sheetId, who) {
++    const out = [];
++    for (const uidX of await push.inscritos()) {
++      const u = await store.getUserById(uidX);
++      if (!u) continue;
++      const pm = Perms.compute(permDoc(room), u);
++      if (!pm || pm.viaLink) continue;
++      if (sheetId && !Perms.sheetVisible(pm, sheetId)) continue;
++      if (who && who.length && !pm.admin && !Perms.inList(who, pm)) continue;
++      out.push(uidX);
++    }
++    return out;
++  }
++
++  // ---------- alertas novos (vindos da tela de quem está com a planilha aberta) ----------
++  route('POST', '/api/docs/:id/alertas/novos', async (req, p) => {
++    const { room } = await salaDe(req, p.id);
++    const b = await readBody(req, 120000);
++    const itens = (Array.isArray(b.itens) ? b.itens : []).slice(0, 200).filter((x) => x && x.k);
++    const todos = (await store.getSetting('push_alertas').catch(() => null)) || {};
++    const primeira = !todos[room.id];
++    const vistos = todos[room.id] || {};
++    const limite = Date.now() - 36 * 3600e3;
++    for (const k in vistos) if (vistos[k] < limite) delete vistos[k];
++    const novos = itens.filter((x) => !vistos[String(x.k).slice(0, 300)]);
++    for (const x of novos) vistos[String(x.k).slice(0, 300)] = Date.now();
++    todos[room.id] = vistos;
++    await store.setSetting('push_alertas', todos);
++    // primeira vez desta planilha: só guarda o que já existia (não manda uma enxurrada de avisos antigos)
++    if (primeira || !novos.length) return { novos: 0, base: primeira };
++    for (const x of novos) {
++      const sh = room.data.sheets.find((s) => s.id === x.sheetId);
++      const regra = sh && (sh.alertRules || []).find((r) => r.id === x.regra);
++      for (const u of await destinatarios(room, x.sheetId, regra ? regra.who : null)) {
++        push.avisa(u, 'alerta', { title: 'ALERTA: ' + String(x.title || 'alerta').slice(0, 80), plural: '{n} alertas novos', body: String(x.body || '').slice(0, 160), tag: 'alerta-' + room.id, doc: room.id, hash: '#nuvem=' + room.id });
++      }
++    }
++    autoLog(room.id, [{ tipo: 'Aviso no celular', desc: `${novos.length} ${novos.length === 1 ? 'alerta novo avisado' : 'alertas novos avisados'}: ${novos.slice(0, 3).map((x) => x.title).join(', ')}` }]).catch(() => {});
++    return { novos: novos.length };
++  });
++
++  // ---------- demurrage do vazio (servidor, a cada 30 min) ----------
++  async function confereDemurrage() {
++    const enviados = (await store.getSetting('push_dem').catch(() => null)) || {};
++    const hoje = serialHoje();
++    let mudou = false;
++    for (const docId of await docsAtivos()) {
++      const room = await getRoom(docId).catch(() => null);
++      if (!room) continue;
++      for (const sh of room.data.sheets || []) {
++        const n = norm(sh.name);
++        if (!(n.includes('STACKING') && n.includes('VAZIO'))) continue;
++        const C = colunas(sh);
++        const cc = C.col('CONTAINER'), cb = C.col('DATA BAIXA'), cd = C.col('DEMMURAGE', 'DEMURRAGE', 'DEMURRAGEM', 'DEM'), cdt = C.col('DATA'), cs = C.col('STATUS'), ccl = C.col('CLIENTE');
++        if (!cc || !cb || !cd) continue;
++        const linhas = new Set();
++        for (const a in sh.cells) { const p = parseAddr(a); if (p && p.col === cc && p.row > C.hr && String(sh.cells[a].v || '').trim()) linhas.add(p.row); }
++        const avisos = [];
++        for (const r of linhas) {
++          if (norm(valor(sh, r, cs)).includes('FINALIZ') || String(valor(sh, r, cdt)).trim()) continue;
++          const baixa = serialDe(valor(sh, r, cb)), dem = Number(String(valor(sh, r, cd)).replace(',', '.'));
++          if (baixa === null || !(dem > 0)) continue;
++          const prazo = baixa + dem, falta = prazo - hoje;
++          const etapa = falta < 0 ? 'vencida' : falta === 0 ? 'hoje' : falta <= 2 ? '2dias' : null;
++          if (!etapa) continue;
++          const cont = String(valor(sh, r, cc)).trim();
++          const k = `${docId}|${norm(cont)}|${prazo}|${etapa}`;
++          if (enviados[k]) continue;
++          enviados[k] = Date.now(); mudou = true;
++          avisos.push({ cont, cli: String(valor(sh, r, ccl)).trim(), etapa, falta, prazo });
++        }
++        if (!avisos.length) continue;
++        const us = await destinatarios(room, sh.id, null);
++        for (const a of avisos) {
++          const txt = a.etapa === 'vencida' ? `vencida há ${-a.falta} ${a.falta === -1 ? 'dia' : 'dias'}` : a.etapa === 'hoje' ? 'vence hoje' : `vence em ${a.falta} ${a.falta === 1 ? 'dia' : 'dias'}`;
++          for (const u of us) push.avisa(u, 'demurrage', { title: 'Demurrage do vazio', plural: '{n} demurrages do vazio', body: `${a.cont}${a.cli ? ' (' + a.cli + ')' : ''}: ${txt} · prazo ${fmtSerial(a.prazo)}`, tag: 'dem-' + room.id, doc: room.id, hash: '#nuvem=' + room.id });
++        }
++        autoLog(room.id, [{ tipo: 'Demurrage', aba: sh.name, desc: `Aviso no celular: ${avisos.map((a) => a.cont).slice(0, 6).join(', ')}${avisos.length > 6 ? '…' : ''} (${avisos.length})` }]).catch(() => {});
++      }
++    }
++    if (mudou) {
++      const lim = Date.now() - 20 * 86400e3;
++      for (const k in enviados) if (enviados[k] < lim) delete enviados[k];
++      await store.setSetting('push_dem', enviados).catch(() => {});
++    }
++  }
++
++  // ---------- status automático ----------
++  const limpaAg = (a) => ({
++    id: String(a.id || uid()).slice(0, 40), nome: String(a.nome || 'Status').slice(0, 80), ativo: a.ativo !== false,
++    sheetId: String(a.sheetId || ''), filtroCol: String(a.filtroCol || 'CLIENTE').slice(0, 60),
++    valores: (Array.isArray(a.valores) ? a.valores : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 100),
++    ignorar: (Array.isArray(a.ignorar) ? a.ignorar : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 20),
++    horarios: (Array.isArray(a.horarios) ? a.horarios : []).filter((h) => /^\d{2}:\d{2}$/.test(h)).slice(0, 8),
++    dias: (Array.isArray(a.dias) ? a.dias : [1, 2, 3, 4, 5]).map(Number).filter((x) => x >= 0 && x <= 6),
++    who: (Array.isArray(a.who) ? a.who : []).map(String).slice(0, 50), obs: String(a.obs || '').slice(0, 300),
++  });
++  route('GET', '/api/docs/:id/status-auto', async (req, p) => {
++    const { room } = await salaDe(req, p.id, true);
++    return ((await store.getSetting('status_auto').catch(() => null)) || {})[room.id] || [];
++  });
++  route('PUT', '/api/docs/:id/status-auto', async (req, p) => {
++    const { room, user } = await salaDe(req, p.id, true);
++    const b = await readBody(req, 100000);
++    const all = (await store.getSetting('status_auto').catch(() => null)) || {};
++    all[room.id] = (Array.isArray(b.agendamentos) ? b.agendamentos : []).slice(0, 50).map(limpaAg);
++    await store.setSetting('status_auto', all);
++    autoLog(room.id, [{ tipo: 'Status automático', desc: `Agendamentos salvos (${all[room.id].length})` }], user).catch(() => {});
++    return all[room.id];
++  });
++  const visivel = (pm, x) => pm.admin || !x.who || !x.who.length || Perms.inList(x.who, pm);
++  route('GET', '/api/docs/:id/status-auto/pendentes', async (req, p) => {
++    const { room, perms } = await salaDe(req, p.id);
++    const all = (await store.getSetting('status_pend').catch(() => null)) || {};
++    return (all[room.id] || []).filter((x) => !x.feito && visivel(perms, x) && Perms.sheetVisible(perms, x.sheetId));
++  });
++  route('POST', '/api/docs/:id/status-auto/pendentes/:pid/feito', async (req, p) => {
++    const { room, perms, user } = await salaDe(req, p.id);
++    const all = (await store.getSetting('status_pend').catch(() => null)) || {};
++    const x = (all[room.id] || []).find((y) => y.id === p.pid);
++    if (!x || !visivel(perms, x)) throw httpError(404, 'Pendência não encontrada.');
++    x.feito = { at: new Date().toISOString(), por: user.name };
++    await store.setSetting('status_pend', all);
++    autoLog(room.id, [{ tipo: 'Status automático', desc: `"${x.nome}" conferido por ${user.name}` }], user).catch(() => {});
++    return { ok: true };
++  });
++  async function confereStatus() {
++    const cfg = (await store.getSetting('status_auto').catch(() => null)) || {};
++    const agora = agoraBR();
++    const [hh, mm] = agora.hm.split(':').map(Number), minAgora = hh * 60 + mm;
++    let fired = (await store.getSetting('status_fired').catch(() => null)) || {};
++    let pend = null, mudou = false;
++    for (const docId in cfg) {
++      for (const ag of cfg[docId] || []) {
++        if (!ag.ativo || !ag.dias.includes(agora.dia)) continue;
++        for (const h of ag.horarios) {
++          const [a, b] = h.split(':').map(Number), m = a * 60 + b;
++          // na hora ou até 30 min depois (se o servidor estava dormindo), uma vez por dia e horário
++          if (minAgora < m || minAgora - m > 30) continue;
++          const k = `${docId}|${ag.id}|${agora.data}|${h}`;
++          if (fired[k]) continue;
++          fired[k] = Date.now(); mudou = true;
++          const room = await getRoom(docId).catch(() => null);
++          if (!room) continue;
++          pend = pend || (await store.getSetting('status_pend').catch(() => null)) || {};
++          const lista = pend[docId] || [];
++          // a do mesmo agendamento ainda não conferida é substituída pela nova
++          for (const y of lista) if (y.agId === ag.id && !y.feito) y.feito = { at: new Date().toISOString(), por: 'substituída' };
++          const x = { id: uid(), agId: ag.id, nome: ag.nome, sheetId: ag.sheetId, filtroCol: ag.filtroCol, valores: ag.valores, ignorar: ag.ignorar, who: ag.who, obs: ag.obs, at: new Date().toISOString(), horario: h, feito: null };
++          lista.push(x);
++          pend[docId] = lista.slice(-200);
++          for (const u of await destinatarios(room, ag.sheetId, ag.who)) push.avisa(u, 'status', { title: 'Status automático para conferir', plural: '{n} status automáticos para conferir', body: `${ag.nome} (${h}) — toque para conferir e enviar`, tag: 'status-' + room.id, doc: room.id, hash: '#nuvem=' + room.id });
++          autoLog(docId, [{ tipo: 'Status automático', desc: `"${ag.nome}" das ${h} pronto para conferir (aviso ao setor)` }]).catch(() => {});
++        }
++      }
++    }
++    if (pend) await store.setSetting('status_pend', pend).catch(() => {});
++    if (mudou) {
++      const lim = Date.now() - 3 * 86400e3;
++      for (const k in fired) if (fired[k] < lim) delete fired[k];
++      await store.setSetting('status_fired', fired).catch(() => {});
++    }
++  }
++
++  // ---------- histórico do container ----------
++  // linhas atuais do container (enviadas pela tela) + mudanças em que o número aparece (mesmo que tenha mudado de linha)
++  route('POST', '/api/docs/:id/historico-container', async (req, p) => {
++    const { room, perms } = await salaDe(req, p.id);
++    const b = await readBody(req, 20000);
++    const cont = norm(b.container);
++    if (cont.length < 6) throw httpError(400, 'Informe o número do container.');
++    const out = [], vistos = new Set();
++    const junta = (rows) => { for (const h of rows) { const k = h.sheet_id + h.addr + h.at + h.after; if (vistos.has(k) || !Perms.canSee(perms, h.sheet_id, h.addr)) continue; vistos.add(k); out.push({ s: h.sheet_id, a: h.addr, at: h.at, uid: h.user_id || null, name: h.user_name || 'Alguém', before: h.before, after: h.after }); } };
++    for (const ped of (Array.isArray(b.linhas) ? b.linhas : []).slice(0, 10)) {
++      const sh = room.data.sheets.find((s) => s.id === ped.sheetId);
++      if (!sh || !Perms.sheetVisible(perms, sh.id)) continue;
++      let maxC = 1;
++      for (const a in sh.cells) { const q = parseAddr(a); if (q && q.col > maxC) maxC = q.col; }
++      const addrs = [];
++      for (const r of (Array.isArray(ped.rows) ? ped.rows : []).slice(0, 4)) for (let c = 1; c <= Math.min(maxC, 120); c++) addrs.push(addrToStr(Number(r), c));
++      if (addrs.length) junta(await store.getHistoryCells(room.id, sh.id, addrs, 3000));
++    }
++    junta(await store.getHistoryByText(room.id, cont, 500));
++    out.sort((x, y) => String(y.at).localeCompare(String(x.at)));
++    return out.slice(0, 3000);
++  });
++
++  if (process.env.ROTINAS_TESTE === '1') route('POST', '/api/_rotinas', async (req) => { await requireUser(req); await confereDemurrage(); await confereStatus(); return { ok: true }; });
++  // relógios (o Render gratuito dorme sem acesso: o monitor do GitHub mantém acordado)
++  if (!process.env.ROTINAS_OFF) {
++    setInterval(() => { confereStatus().catch((e) => log.error('[status auto]', e.message)); }, 60e3).unref();
++    setInterval(() => { confereDemurrage().catch((e) => log.error('[demurrage]', e.message)); }, 30 * 60e3).unref();
++    setTimeout(() => { confereDemurrage().catch(() => {}); confereStatus().catch(() => {}); }, 20e3).unref();
++  }
++  return { autoLog, marcaAtivo, confereDemurrage, confereStatus, _serialDe: serialDe };
++};
+diff --git a/server/store.js b/server/store.js
+index b9e68a5..e6ed154 100644
+--- a/server/store.js
++++ b/server/store.js
+@@ -78,6 +78,15 @@ function memoryStore(file) {
+     async getHistory(docId, sheetId, addr, limit) {
+       return (db.history[docId] || []).filter((h) => h.sheet_id === sheetId && h.addr === addr).slice(-limit).reverse().map(clone);
+     },
++    // histórico do container: células das linhas dele e mudanças em que o número aparece
++    async getHistoryCells(docId, sheetId, addrs, limit) {
++      const set = new Set(addrs);
++      return (db.history[docId] || []).filter((h) => h.sheet_id === sheetId && set.has(h.addr)).slice(-limit).reverse().map(clone);
++    },
++    async getHistoryByText(docId, text, limit) {
++      const t = String(text).toUpperCase();
++      return (db.history[docId] || []).filter((h) => String(h.before || '').toUpperCase().replace(/[^A-Z0-9]/g, '').includes(t) || String(h.after || '').toUpperCase().replace(/[^A-Z0-9]/g, '').includes(t)).slice(-limit).reverse().map(clone);
++    },
+     // métricas: edições de células desde "since" (ISO), quantas pessoas e quem mais editou
+     async historyStats(docId, since) {
+       const by = new Map();
+@@ -234,6 +243,16 @@ function pgStore(url) {
+       const r = await q('SELECT user_id, user_name, ip, at, before, after FROM cell_history WHERE doc_id = $1 AND sheet_id = $2 AND addr = $3 ORDER BY id DESC LIMIT $4', [docId, sheetId, addr, limit]);
+       return r.rows;
+     },
++    async getHistoryCells(docId, sheetId, addrs, limit) {
++      const r = await q('SELECT sheet_id, addr, user_id, user_name, at, before, after FROM cell_history WHERE doc_id = $1 AND sheet_id = $2 AND addr = ANY($3::text[]) ORDER BY id DESC LIMIT $4', [docId, sheetId, addrs, limit]);
++      return r.rows;
++    },
++    async getHistoryByText(docId, text, limit) {
++      const r = await q(`SELECT sheet_id, addr, user_id, user_name, at, before, after FROM cell_history WHERE doc_id = $1
++        AND (regexp_replace(upper(coalesce(before, '')), '[^A-Z0-9]', '', 'g') LIKE $2 OR regexp_replace(upper(coalesce(after, '')), '[^A-Z0-9]', '', 'g') LIKE $2)
++        ORDER BY id DESC LIMIT $3`, [docId, '%' + String(text).toUpperCase() + '%', limit]);
++      return r.rows;
++    },
+     // métricas: edições de células desde "since" (ISO), quantas pessoas e quem mais editou
+     async historyStats(docId, since) {
+       const r = await q(`SELECT user_id AS id, max(user_name) AS name, count(*)::int AS n FROM cell_history
+diff --git a/tests/server.test.js b/tests/server.test.js
+index ea06a32..3df0b59 100644
+--- a/tests/server.test.js
++++ b/tests/server.test.js
+@@ -64,7 +64,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+   // servidor de push falso (como o da Apple/Google): guarda o que chegar
+   const PUSH_PORT = PORT + 1001, pushRecebidos = [];
+   const pushSrv = require('http').createServer((req, res) => { const ch = []; req.on('data', (d) => ch.push(d)); req.on('end', () => { pushRecebidos.push({ headers: req.headers, body: Buffer.concat(ch) }); res.writeHead(201); res.end(); }); }).listen(PUSH_PORT);
+-  const proc = spawn(process.execPath, [path.join(__dirname, '..', 'server', 'index.js')], { env: Object.assign({}, process.env, { PORT: String(PORT), DATABASE_URL: '', ADMIN_EMAILS: 'ana@empresa.com', Carga_OF_Container: `http://127.0.0.1:${CARGA_PORT}/listarCargaContainerTerminal`, DSS_USUARIO: 'dss', DSS_SENHA: 'segredo', DSS_BASE_URL: `http://127.0.0.1:${CARGA_PORT}`, PUSH_PERMITE_HTTP: '1', PUSH_JUNTAR_MS: '150', DSS_DIARIO_OFF: '1' }), stdio: ['ignore', 'pipe', 'pipe'] });
++  const proc = spawn(process.execPath, [path.join(__dirname, '..', 'server', 'index.js')], { env: Object.assign({}, process.env, { PORT: String(PORT), DATABASE_URL: '', ADMIN_EMAILS: 'ana@empresa.com', Carga_OF_Container: `http://127.0.0.1:${CARGA_PORT}/listarCargaContainerTerminal`, DSS_USUARIO: 'dss', DSS_SENHA: 'segredo', DSS_BASE_URL: `http://127.0.0.1:${CARGA_PORT}`, PUSH_PERMITE_HTTP: '1', PUSH_JUNTAR_MS: '150', DSS_DIARIO_OFF: '1', ROTINAS_OFF: '1', ROTINAS_TESTE: '1' }), stdio: ['ignore', 'pipe', 'pipe'] });
+   let log = '';
+   proc.stdout.on('data', (d) => { log += d; });
+   proc.stderr.on('data', (d) => { log += d; });
+@@ -441,6 +441,49 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+       const can = await api('POST', '/api/push/cancelar', { endpoint: sub.endpoint }, ana.token);
+       check('desligar notificações', [can.ok, (await api('POST', '/api/push/estado', { endpoint: sub.endpoint }, ana.token)).inscrito], [true, false]);
+       check('notificações exigem login', (await api('GET', '/api/push/chave'))._status, 401);
++      // um exemplo de cada aviso
++      await api('POST', '/api/push/inscrever', { subscription: sub, prefs: {}, appUrl: 'https://exemplo.github.io/Google-Planilhas/' }, ana.token);
++      const antes = pushRecebidos.length;
++      const ex = await api('POST', '/api/push/teste', { exemplos: true }, ana.token);
++      check('exemplo de cada aviso', [ex.exemplos, ex.enviadas, pushRecebidos.length - antes], [7, 7, 7]);
++
++      // ---------- rotinas: automações, alertas, demurrage, status automático, histórico ----------
++      const dr = await api('POST', '/api/docs', { title: 'Rotinas', data: { sheets: [
++        { id: 'vz', name: 'PRÉ STACKING VAZIO', rows: 50, cols: 12, cells: { A1: { v: 'CLIENTE' }, B1: { v: 'CONTAINER' }, C1: { v: 'DATA BAIXA' }, D1: { v: 'DEMMURAGE' }, E1: { v: 'DATA' }, F1: { v: 'STATUS' },
++          A2: { v: 'ACME' }, B2: { v: 'CSQU3054383' }, C2: { v: '01/01/2020' }, D2: { v: '5' }, A3: { v: 'BETA' }, B3: { v: 'MSKU9070323' }, C3: { v: '01/01/2020' }, D3: { v: '5' }, E3: { v: '02/01/2020' } } },
++        { id: 'mi', name: 'MAPA IMPO', rows: 50, cols: 12, cells: { A1: { v: 'CLIENTE' }, B1: { v: 'CONTAINER' }, C1: { v: 'STATUS' }, A2: { v: 'ACME' }, B2: { v: 'CSQU3054383' }, C2: { v: 'EM ABERTO' } } },
++      ] } }, ana.token);
++      const did = dr.id;
++      check('automações: registrar', (await api('POST', `/api/docs/${did}/automacoes`, { itens: [{ tipo: 'PRÉ STACKING', desc: 'CSQU3054383 → PRÉ STACKING VAZIO (linha 2)' }] }, ana.token)).ok, true);
++      const reg = await api('GET', `/api/docs/${did}/automacoes`, null, ana.token);
++      check('automações: listar', [reg.length >= 1, reg[0].tipo, reg[0].por], [true, 'PRÉ STACKING', 'Ana']);
++      // alertas: a 1ª vez só guarda (sem enxurrada); depois avisa o novo
++      const a1 = await api('POST', `/api/docs/${did}/alertas/novos`, { itens: [{ k: 'mi|r1|X', sheetId: 'mi', regra: 'r1', title: 'Agendamento vencido', body: 'MAPA IMPO: X' }] }, ana.token);
++      check('alertas: primeira vez só guarda', [a1.novos, a1.base], [0, true]);
++      const n0 = pushRecebidos.length;
++      const a2 = await api('POST', `/api/docs/${did}/alertas/novos`, { itens: [{ k: 'mi|r1|X', sheetId: 'mi', title: 'Agendamento vencido' }, { k: 'mi|r1|Y', sheetId: 'mi', regra: 'r1', title: 'Agendamento vencido', body: 'MAPA IMPO: Y' }] }, ana.token);
++      await sleep(600);
++      check('alertas: só o novo vira aviso', [a2.novos, pushRecebidos.length - n0], [1, 1]);
++      // demurrage vencida (DATA vazia) avisa uma vez; a devolvida (com DATA) não
++      const n1 = pushRecebidos.length;
++      await api('POST', '/api/_rotinas', {}, ana.token); await sleep(600);
++      const n2 = pushRecebidos.length;
++      await api('POST', '/api/_rotinas', {}, ana.token); await sleep(600);
++      check('demurrage: avisa uma vez só', [n2 - n1, pushRecebidos.length - n2], [1, 0]);
++      // status automático: agenda para agora, o servidor cria a pendência e avisa; conferir marca como feito
++      const br = new Date(Date.now() - 3 * 3600e3), hm = `${String(br.getUTCHours()).padStart(2, '0')}:${String(br.getUTCMinutes()).padStart(2, '0')}`;
++      const cfg = await api('PUT', `/api/docs/${did}/status-auto`, { agendamentos: [{ nome: 'Status ACME', sheetId: 'mi', filtroCol: 'CLIENTE', valores: ['ACME'], horarios: [hm], dias: [0, 1, 2, 3, 4, 5, 6] }] }, ana.token);
++      check('status automático salvo', [cfg.length, cfg[0].horarios[0], cfg[0].ativo], [1, hm, true]);
++      const n3 = pushRecebidos.length;
++      await api('POST', '/api/_rotinas', {}, ana.token); await sleep(600);
++      const pend = await api('GET', `/api/docs/${did}/status-auto/pendentes`, null, ana.token);
++      check('status automático: pendência e aviso', [pend.length, pend[0] && pend[0].nome, pushRecebidos.length - n3], [1, 'Status ACME', 1]);
++      await api('POST', '/api/_rotinas', {}, ana.token);
++      check('status automático: uma vez por horário', (await api('GET', `/api/docs/${did}/status-auto/pendentes`, null, ana.token)).length, 1);
++      await api('POST', `/api/docs/${did}/status-auto/pendentes/${pend[0].id}/feito`, {}, ana.token);
++      check('status automático: conferido', (await api('GET', `/api/docs/${did}/status-auto/pendentes`, null, ana.token)).length, 0);
++      check('histórico do container responde', Array.isArray(await api('POST', `/api/docs/${did}/historico-container`, { container: 'CSQU 305438-3', linhas: [{ sheetId: 'mi', rows: [2] }] }, ana.token)), true);
++      await api('POST', '/api/push/cancelar', { endpoint: sub.endpoint }, ana.token);
+     }
+   } catch (e) {
+     fail++;

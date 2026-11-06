@@ -1,0 +1,1 @@
+Servidor: registro de automações, alertas e demurrage no celular, status automático, histórico do container e exemplos de aviso
