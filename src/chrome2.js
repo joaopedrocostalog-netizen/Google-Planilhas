@@ -212,6 +212,7 @@
       if (info.note) html += `<div class="tip-note">${esc(info.note)}</div>`;
       const dup = App.progDuplicates && App.withReal(() => { const p = App.realCell ? App.realCell(h.r, h.c) : { r: h.r, c: h.c }; const d = p ? App.progDuplicates(sh, App.doc.active, p.r, p.c) : null; return d ? d.filter((x) => x !== p.r) : null; });
       const miss = App.vehicleMissing && App.withReal(() => { const p = App.realCell ? App.realCell(h.r, h.c) : { r: h.r, c: h.c }; return p && App.vehicleMissing(sh, App.doc.active, p.r, p.c); });
+      if (info.contErr) html += `<div class="tip-err"><b>${esc(info.contErr.titulo)}</b><p>${esc(info.contErr.cont)}: ${esc(info.contErr.msg)}</p></div>`;
       if (miss) html += '<div class="tip-err"><b>Campo obrigatório</b><p>Esta linha tem CAVALO: CARRETA, MOTORISTA, CPF e CONTATO precisam estar preenchidos. Para tirar o veículo, apague a placa ou o motorista (os outros campos são apagados juntos).</p></div>';
       if (dup) html += `<div class="tip-err"><b>PROG. duplicado</b><p>Este número de programação também está ${dup.length === 1 ? 'na linha' : 'nas linhas'} ${dup.join(', ')}. Ajuste para não repetir.</p></div>`;
       if (!html) { tip.hidden = true; return; }

@@ -1410,3 +1410,4 @@ html.dark .dia-chip b { color: #ff8a92; }
 @media (max-width: 760px) { #btn-dia { padding: 5px; } .ind-bars { height: 110px; } }
 html.dark .doc-title { background: transparent; border-color: transparent; color: #fff; }
 html.dark .doc-title:focus { background: #191919; border-color: var(--red); }
+html.dark .toast { background: #2b2b2b; color: #f1f1f1; border: 1px solid #3a3a3a; }

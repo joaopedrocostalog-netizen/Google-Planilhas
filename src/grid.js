@@ -281,7 +281,9 @@
     if (!link && typeof v === 'string' && /^(https?:\/\/|www\.)\S+$/i.test(v)) link = v.startsWith('www.') ? 'https://' + v : v;
     // marcas da operação (coluna MODALIDADE): SC = sem custos, SPOT = frete spot
     const tags = cell && (cell.sc || cell.spot) ? [cell.sc ? 'SC' : '', cell.spot ? 'SPOT' : ''].filter(Boolean) : null;
-    return { cell, raw, v, s, text, align, dv, link, crit, locked, swap, tags, isErr: E.isErr(v), note: cell && cell.note, comment: cell && cell.comments && cell.comments.length };
+    // número de container fora do padrão ISO 6346 (dígito verificador): sublinhado ondulado vermelho
+    const contErr = App.containerCheck ? App.containerCheck(sh, si, r, c) : null;
+    return { cell, raw, v, s, text, align, dv, link, crit, locked, swap, tags, contErr, isErr: E.isErr(v), note: cell && cell.note, comment: cell && cell.comments && cell.comments.length };
   }
   App.cellInfo = (r, c) => cellInfo(App.sheet(), doc.active, r, c);
 
@@ -672,7 +674,8 @@
     ctx.rect(it.tx + 1, it.y + 1, it.tw - 2, it.h - 2);
     ctx.clip();
     ctx.font = fontFor(s);
-    let color = s.color || C.text;
+    // tema escuro: célula com fundo próprio (cabeçalho cinza, STATUS…) e sem cor de texto mantém o texto legível sobre o fundo
+    let color = s.color || (s.bg && C.bg !== '#ffffff' ? (App.textOn ? App.textOn(s.bg) : '#000000') : C.text);
     if (C.bg !== '#ffffff' && !s.bg && escuroDemais(color)) color = C.text;
     if (inf.link && !s.color) color = C.link;
     ctx.fillStyle = color;
@@ -745,6 +748,17 @@
           const lx = align === 'l' ? tx : align === 'c' ? tx - w / 2 : tx - w;
           ctx.fillRect(lx, s.st ? y - 0.5 * z : y + fs * 0.42, w, Math.max(1, z));
           if (s.u && s.st) ctx.fillRect(lx, y + fs * 0.42, w, Math.max(1, z));
+        }
+        // container com número errado: sublinhado ondulado (sutil, mas fácil de ver)
+        if (inf.contErr && i === 0) {
+          const w = Math.min(ctx.measureText(ln).width, it.tw - 2 * pad);
+          const lx = align === 'l' ? tx : align === 'c' ? tx - w / 2 : tx - w;
+          const yy = Math.min(y + fs * 0.55, it.y + it.h - 2 * z), a = 1.4 * z, step = 2.5 * z;
+          ctx.save();
+          ctx.strokeStyle = C.bg === '#ffffff' ? '#d93025' : '#ff6b6b'; ctx.lineWidth = Math.max(1, 1.1 * z); ctx.lineJoin = 'round';
+          ctx.beginPath(); ctx.moveTo(lx, yy);
+          for (let k = 1, xx = lx + step; xx <= lx + w + 0.1; k++, xx += step) ctx.lineTo(xx, yy + (k % 2 ? a : -a) * 0.6);
+          ctx.stroke(); ctx.restore();
         }
       });
     }

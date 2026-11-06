@@ -1,1 +1,0 @@
-Validação do número do container (ISO 6346) com sublinhado e aviso; texto legível no tema escuro

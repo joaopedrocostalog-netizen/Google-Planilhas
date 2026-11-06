@@ -4,6 +4,11 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '06/11/2026', title: 'Validação do número do container', items: [
+      ['Container', 'Nas colunas CONTAINER, 1 - CONTAINER e 2 - CONTAINER, o número é conferido pelo padrão internacional (4 letras, 6 números e o dígito verificador). Número errado ganha um sublinhado ondulado vermelho.'],
+      ['Motivo', 'Passe o mouse no número sublinhado (no celular, toque na célula) para ver o motivo, por exemplo qual deveria ser o último dígito. Ao digitar ou colar um número errado, a planilha avisa na hora. Nada é bloqueado.'],
+      ['Tema escuro', 'Corrigido: o texto de células com fundo claro próprio (como o cabeçalho cinza) voltou a aparecer no tema escuro.'],
+    ] },
     { date: '06/11/2026', title: 'Notificações no celular, Painel do dia, tema escuro e Indicadores do mês', items: [
       ['Notificações', 'Ferramentas › Notificações no celular: avisa neste aparelho quando um container é marcado como crítico, quando pedem troca de veículo, quando chega mensagem no chat e (se quiser) quando um PRÉ STACKING é finalizado. No iPhone, funciona com o app da Tela de Início (iOS 16.4 ou mais novo).'],
       ['Painel do dia', 'Ver › Painel do dia (ou o calendário no cabeçalho): STATUS do MAPA IMPO e EXPO, PRÉ STACKING em aberto, agendamentos de hoje, atrasados no PRÉ STACKING e demurrage do vazio vencida ou vencendo em até 2 dias. Tocar num item leva até a linha.'],
