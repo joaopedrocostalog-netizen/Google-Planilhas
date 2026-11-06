@@ -127,6 +127,26 @@ module.exports = function painel(ctx) {
     };
   });
 
+  // ---------- Histórico de alterações da planilha inteira (administradores) ----------
+  // filtros: quem (id da pessoa), pagina (id), periodo (hoje, 7d, 30d, tudo), texto (no antes, no depois ou no
+  // endereço); 100 por vez, do mais novo para o mais antigo; antesDe = id da última linha mostrada (carregar mais)
+  route('GET', '/api/docs/:id/alteracoes', async (req, p) => {
+    const { room } = await adminRoom(req, p.id);
+    const q = new URL(req.url, 'http://x').searchParams;
+    const LIM = 100;
+    const f = { quem: q.get('quem') || null, pagina: q.get('pagina') || null, texto: (q.get('texto') || '').trim().slice(0, 100) || null, antesDe: Number(q.get('antesDe')) || null };
+    const periodo = q.get('periodo') || '7d';
+    if (periodo === 'hoje') f.desde = new Date(hojeBR() + 'T00:00:00-03:00').toISOString();
+    else if (periodo === '7d' || periodo === '30d') f.desde = new Date(Date.now() - (periodo === '7d' ? 7 : 30) * 86400e3).toISOString();
+    const corta = (v) => (v === null || v === undefined ? null : String(v).length > 300 ? String(v).slice(0, 300) + '…' : String(v));
+    const rows = await store.listHistory(room.id, Object.assign({}, f, { limit: LIM + 1 }));
+    return {
+      linhas: rows.slice(0, LIM).map((x) => ({ id: x.id, pagina: x.sheet_id, addr: x.addr, quem: { id: x.user_id, name: x.user_name }, ip: x.ip || null, at: x.at, antes: corta(x.before), depois: corta(x.after) })),
+      mais: rows.length > LIM,
+      pessoas: f.antesDe ? undefined : await store.historyPeople(room.id),
+    };
+  });
+
   // ---------- Teste de carga ----------
   // Uma sala de teste por vez no servidor. Limites: até 60 pessoas simuladas, até 120 s, até 60 edições/min por pessoa.
   let teste = null;

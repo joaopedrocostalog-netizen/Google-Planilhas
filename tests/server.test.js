@@ -485,6 +485,35 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       check('histórico do container responde', Array.isArray(await api('POST', `/api/docs/${did}/historico-container`, { container: 'CSQU 305438-3', linhas: [{ sheetId: 'mi', rows: [2] }] }, ana.token)), true);
       await api('POST', '/api/push/cancelar', { endpoint: sub.endpoint }, ana.token);
     }
+    // histórico de alterações da planilha inteira (administradores)
+    {
+      const dh = await api('POST', '/api/docs', { title: 'Hist', data: { sheets: [{ id: 'h1', name: 'MAPA', rows: 200, cols: 5, cells: { A1: { v: 'CLIENTE' } } }, { id: 'h2', name: 'EXPO', rows: 50, cols: 5, cells: {} }] } }, ana.token);
+      await api('PUT', `/api/docs/${dh.id}/share`, { acl: { link: 'none', sectors: [], members: [{ email: 'bia@empresa.com', role: 'editor' }] } }, ana.token);
+      const biaH = await api('POST', '/api/login', { email: 'bia@empresa.com', password: 'segredo2' });
+      const HA = await connect(ana.token, dh.id), HB = await connect(biaH.token, dh.id);
+      await HA.wait('init'); await HB.wait('init');
+      const ed = async (c, id, sh, a, v) => { c.send({ type: 'patch', id, patch: { sheets: { [sh]: { cells: { [a]: { v } } } } } }); await c.wait('ack'); };
+      await ed(HA, 1, 'h1', 'A2', 'ACME 50%');
+      await ed(HB, 1, 'h1', 'A3', 'BETA');
+      await ed(HB, 2, 'h2', 'B2', 'EXPO 1');
+      await ed(HA, 2, 'h1', 'A2', 'ACME LOG');
+      for (let i = 0; i < 101; i++) await ed(HB, 10 + i, 'h1', 'C' + (2 + i), 'lote ' + i);
+      const tudo = await api('GET', `/api/docs/${dh.id}/alteracoes?periodo=tudo`, null, ana.token);
+      check('histórico: 100 por vez, mais novo primeiro, com pessoas', [tudo.linhas.length, tudo.mais, tudo.linhas[0].depois, tudo.pessoas.map((x) => `${x.name}:${x.n}`).join(',')], [100, true, 'lote 100', 'Ana:2,Bia:103']);
+      const resto = await api('GET', `/api/docs/${dh.id}/alteracoes?periodo=tudo&antesDe=${tudo.linhas[99].id}`, null, ana.token);
+      check('histórico: carregar mais continua de onde parou', [resto.linhas.length, resto.mais, resto.linhas[resto.linhas.length - 1].depois, resto.pessoas], [5, false, 'ACME 50%', undefined]);
+      const ana1 = await api('GET', `/api/docs/${dh.id}/alteracoes?periodo=hoje&quem=${tudo.pessoas[0].id}`, null, ana.token);
+      check('histórico: filtro por pessoa, com antes e depois', ana1.linhas.map((x) => `${x.addr}:${x.antes}→${x.depois}`), ['A2:ACME 50%→ACME LOG', 'A2:null→ACME 50%']);
+      const pag = await api('GET', `/api/docs/${dh.id}/alteracoes?periodo=7d&pagina=h2`, null, ana.token);
+      check('histórico: filtro por página', pag.linhas.map((x) => x.depois), ['EXPO 1']);
+      const txt = await api('GET', `/api/docs/${dh.id}/alteracoes?periodo=30d&texto=${encodeURIComponent('50%')}`, null, ana.token);
+      check('histórico: busca por texto (com % literal)', txt.linhas.map((x) => x.depois), ['ACME LOG', 'ACME 50%']);
+      const cel = await api('GET', `/api/docs/${dh.id}/alteracoes?periodo=tudo&texto=a3`, null, ana.token);
+      check('histórico: busca pela célula', cel.linhas.map((x) => x.addr), ['A3']);
+      check('histórico: só administradores', (await api('GET', `/api/docs/${dh.id}/alteracoes`, null, biaH.token))._status, 403);
+      HA.ws.close(); HB.ws.close();
+      await api('DELETE', '/api/docs/' + dh.id, null, ana.token);
+    }
     // compressão no tempo real (permessage-deflate): o navegador pede, o servidor aceita e a planilha viaja compactada
     {
       const net = require('net'), zlib = require('zlib');

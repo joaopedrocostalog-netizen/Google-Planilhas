@@ -1,1 +1,0 @@
-Interface: autocompletar com valores da coluna; histórico de alterações da planilha (filtros por pessoa, página, período e texto)

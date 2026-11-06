@@ -393,10 +393,56 @@
     renderAc();
     return true;
   }
+  // Valores já digitados na mesma coluna (como no Excel): só entra quando nenhuma das listas acima vale para a
+  // célula. A lista aparece sem nada escolhido: Enter grava o que foi digitado; para usar uma sugestão, desça com a
+  // seta (ou Tab, ou clique). Os textos mais usados na coluna vêm primeiro.
+  const colCache = new Map();
+  App.on('change', () => colCache.clear());
+  App.on('sheet', () => colCache.clear());
+  function colValores(sh, c, linhaAtual) {
+    const k = sh.id + ':' + c;
+    let m = colCache.get(k);
+    if (!m) {
+      m = new Map();
+      const used = App.usedRange(sh);
+      for (let r = 2; r <= used.maxR; r++) {
+        const v = App.raw(sh, r, c);
+        if (typeof v !== 'string') continue;
+        const t = v.trim();
+        if (!t || t[0] === '=' || t.length > 80 || /^[\d.,\/:\-\s]+$/.test(t)) continue;
+        const x = m.get(t) || { t, n: 0, f: fold(t), r };
+        x.n++; m.set(t, x);
+      }
+      colCache.set(k, m);
+    }
+    return m;
+  }
+  function colAc() {
+    const sh = doc.sheets[ed.si];
+    const real = ed.real || { r: ed.r, c: ed.c };
+    const txt = ta.value.trim();
+    if (!sh || !txt || ta.value[0] === '=' || ed.acAll || /^[\d.,\/:\-\s]+$/.test(txt)) return false;
+    const q = fold(txt);
+    const starts = [], has = [];
+    for (const x of App.withReal(() => colValores(sh, real.c, real.r)).values()) {
+      if (x.n === 1 && x.r === real.r) continue; // o próprio texto desta célula
+      if (x.f === q) continue;
+      if (x.f.startsWith(q)) starts.push(x); else if (q.length >= 3 && x.f.includes(q)) has.push(x);
+    }
+    const ord = (a, b) => (b.n - a.n) || a.t.localeCompare(b.t, 'pt-BR');
+    ed.ac = starts.sort(ord).concat(has.sort(ord)).slice(0, 8).map((x) => ({ show: x.t, args: null, desc: '', colItem: true }));
+    if (!ed.ac.length) { hideAc(); return true; }
+    ed.acCol = true;
+    ed.acIndex = -1;
+    renderAc();
+    return true;
+  }
   function updateAc() {
+    if (ed.acCol) { ed.acCol = false; if (ed.acIndex < 0) ed.acIndex = 0; }
     if (lookupAc()) return;
     if (sugAc()) return;
     if (dvAc()) return;
+    if (ta.value[0] !== '=' && colAc()) return;
     const w = currentWord();
     if (!w || w.word.length < 1) { hideAc(); return; }
     const q = fold(w.word);
@@ -426,7 +472,7 @@
     const on = acEl.querySelector('.ac-item.on');
     if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest' });
   }
-  function hideAc() { ed.ac = []; ed.acIndex = 0; if (acEl) acEl.hidden = true; }
+  function hideAc() { ed.ac = []; ed.acIndex = 0; ed.acCol = false; if (acEl) acEl.hidden = true; }
   function acceptAc() {
     const it = ed.ac[ed.acIndex];
     if (!it) return false;
@@ -438,7 +484,7 @@
       commit(1, 0);
       return true;
     }
-    if (it.dvItem) {
+    if (it.dvItem || it.colItem) {
       setText(it.show, it.show.length);
       hideAc();
       commit(1, 0);
@@ -522,8 +568,11 @@
     const isBar = e.target === bar;
     if (!acEl.hidden && ed.ac.length) {
       if (e.key === 'ArrowDown') { e.preventDefault(); ed.acIndex = (ed.acIndex + 1) % ed.ac.length; renderAc(); return; }
-      if (e.key === 'ArrowUp') { e.preventDefault(); ed.acIndex = (ed.acIndex - 1 + ed.ac.length) % ed.ac.length; renderAc(); return; }
-      if (e.key === 'Tab' || (e.key === 'Enter' && !e.altKey && !e.ctrlKey)) { e.preventDefault(); acceptAc(); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); ed.acIndex = ed.acIndex <= 0 ? ed.ac.length - 1 : ed.acIndex - 1; renderAc(); return; }
+      // valores da coluna sem nada escolhido: Enter grava o que foi digitado (Tab usa a primeira sugestão)
+      if (e.key === 'Enter' && ed.acCol && ed.acIndex < 0) hideAc();
+      else if (e.key === 'Tab' && ed.acCol && ed.acIndex < 0) { e.preventDefault(); ed.acIndex = 0; acceptAc(); return; }
+      else if (e.key === 'Tab' || (e.key === 'Enter' && !e.altKey && !e.ctrlKey)) { e.preventDefault(); acceptAc(); return; }
       if (e.key === 'Escape') { e.preventDefault(); hideAc(); return; }
     }
     switch (e.key) {

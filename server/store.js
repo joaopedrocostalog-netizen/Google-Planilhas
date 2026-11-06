@@ -87,6 +87,28 @@ function memoryStore(file) {
       const t = String(text).toUpperCase();
       return (db.history[docId] || []).filter((h) => String(h.before || '').toUpperCase().replace(/[^A-Z0-9]/g, '').includes(t) || String(h.after || '').toUpperCase().replace(/[^A-Z0-9]/g, '').includes(t)).slice(-limit).reverse().map(clone);
     },
+    // histórico da planilha inteira, do mais novo para o mais antigo, com filtros (ver pgStore.listHistory)
+    async listHistory(docId, f) {
+      const t = f.texto ? f.texto.toLowerCase() : null;
+      const all = (db.history[docId] || []).map((h, i) => Object.assign({ id: i + 1 }, h));
+      const out = [];
+      for (let i = all.length - 1; i >= 0 && out.length < f.limit; i--) {
+        const h = all[i];
+        if (f.antesDe && h.id >= f.antesDe) continue;
+        if (f.quem && h.user_id !== f.quem) continue;
+        if (f.pagina && h.sheet_id !== f.pagina) continue;
+        if (f.desde && h.at < f.desde) continue;
+        if (f.ate && h.at >= f.ate) continue;
+        if (t && ![h.before, h.after, h.addr].some((x) => String(x || '').toLowerCase().includes(t))) continue;
+        out.push(clone(h));
+      }
+      return out;
+    },
+    async historyPeople(docId) {
+      const m = new Map();
+      for (const h of db.history[docId] || []) m.set(h.user_id, { id: h.user_id, name: h.user_name, n: ((m.get(h.user_id) || {}).n || 0) + 1 });
+      return [...m.values()].sort((a, b) => String(a.name).localeCompare(String(b.name), 'pt-BR'));
+    },
     // métricas: edições de células desde "since" (ISO), quantas pessoas e quem mais editou
     async historyStats(docId, since) {
       const by = new Map();
@@ -170,6 +192,7 @@ function pgStore(url) {
       await q('CREATE INDEX IF NOT EXISTS cell_history_cell ON cell_history(doc_id, sheet_id, addr, id DESC)');
       await q('ALTER TABLE cell_history ADD COLUMN IF NOT EXISTS ip TEXT');
       await q('CREATE INDEX IF NOT EXISTS cell_history_doc_at ON cell_history(doc_id, at)');
+      await q('CREATE INDEX IF NOT EXISTS cell_history_doc_id ON cell_history(doc_id, id DESC)');
       await q(`CREATE TABLE IF NOT EXISTS messages (
         id BIGSERIAL PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT NOT NULL, doc_id TEXT,
         text TEXT NOT NULL, ref JSONB, at TIMESTAMPTZ NOT NULL DEFAULT now(), read_at TIMESTAMPTZ)`);
@@ -278,6 +301,27 @@ function pgStore(url) {
       return r.rows;
     },
     // métricas: edições de células desde "since" (ISO), quantas pessoas e quem mais editou
+    // histórico da planilha inteira, do mais novo para o mais antigo: filtros por pessoa, página, período e texto
+    // (no antes, no depois ou no endereço); "antesDe" pagina pelo id (carregar mais)
+    async listHistory(docId, f) {
+      await flushHistory();
+      const w = ['doc_id = $1'], p = [docId];
+      const add = (cond, v) => { p.push(v); w.push(cond.replace('?', '$' + p.length)); };
+      if (f.antesDe) add('id < ?', f.antesDe);
+      if (f.quem) add('user_id = ?', f.quem);
+      if (f.pagina) add('sheet_id = ?', f.pagina);
+      if (f.desde) add('at >= ?', f.desde);
+      if (f.ate) add('at < ?', f.ate);
+      if (f.texto) { p.push('%' + f.texto.replace(/[\\%_]/g, (c) => '\\' + c) + '%'); const n = '$' + p.length; w.push(`(before ILIKE ${n} OR after ILIKE ${n} OR addr ILIKE ${n})`); }
+      p.push(f.limit);
+      const r = await q(`SELECT id, sheet_id, addr, user_id, user_name, ip, at, before, after FROM cell_history WHERE ${w.join(' AND ')} ORDER BY id DESC LIMIT $${p.length}`, p);
+      return r.rows.map((x) => Object.assign(x, { id: Number(x.id) }));
+    },
+    async historyPeople(docId) {
+      await flushHistory();
+      const r = await q('SELECT user_id AS id, max(user_name) AS name, count(*)::int AS n FROM cell_history WHERE doc_id = $1 GROUP BY user_id ORDER BY max(user_name)', [docId]);
+      return r.rows;
+    },
     async historyStats(docId, since) {
       await flushHistory();
       const r = await q(`SELECT user_id AS id, max(user_name) AS name, count(*)::int AS n FROM cell_history

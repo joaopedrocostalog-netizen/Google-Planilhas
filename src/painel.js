@@ -362,4 +362,80 @@
     timer = setInterval(recarregar, 15000);
   }
   App.commands.def('adminMetricas', 'Métricas da planilha, gráficos e teste de pico', painel);
+
+  // ---------- Histórico de alterações da planilha inteira (administradores) ----------
+  // Cada célula alterada, por quem e quando, com o antes e o depois; filtros por pessoa, página, período e texto.
+  // Clicar numa linha leva até a célula.
+  async function alteracoes() {
+    const cloud = App.cloud;
+    if (!App.cloudMode || !cloud.id) return notify('Disponível nas planilhas da nuvem.');
+    if (!cloud.realPerms || !cloud.realPerms.admin) return notify('Somente administradores veem o histórico de alterações da planilha.');
+    const docId = cloud.id, E = window.GridEngine;
+    const f = { quem: '', pagina: '', periodo: '7d', texto: '' };
+    let linhas = [], mais = false, pessoas = [], carregando = false;
+    const m = App.ui.modal({
+      title: 'Histórico de alterações', width: '920px', cls: 'mt-modal hz-modal', enterSubmits: false,
+      body: `<div class="hz-filtros">
+          <label>Pessoa<select class="input" id="hz-quem"><option value="">Todas</option></select></label>
+          <label>Página<select class="input" id="hz-pag"><option value="">Todas</option>${App.doc.sheets.map((s) => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('')}</select></label>
+          <label>Período<select class="input" id="hz-per"><option value="hoje">Hoje</option><option value="7d" selected>Últimos 7 dias</option><option value="30d">Últimos 30 dias</option><option value="tudo">Tudo</option></select></label>
+          <label class="hz-busca">Procurar<input class="input" id="hz-txt" placeholder="Texto ou célula (ex.: D45)"></label>
+        </div><div class="hz-res"></div>`,
+      buttons: [{ label: 'Fechar' }],
+    });
+    const el = (q) => m.el.querySelector(q), res = el('.hz-res');
+    const dataHora = (t) => { const d = new Date(t); return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); };
+    const valor = (v) => (v === null || v === undefined || v === '' ? '<i class="hz-vazio">vazio</i>' : esc(v));
+    const onde = (x) => {
+      const sh = App.doc.sheets.find((s) => s.id === x.pagina);
+      if (!sh) return `<span class="hz-pag">Página excluída</span> ${esc(x.addr)}`;
+      let col = '';
+      try { const a = E.parseAddr(x.addr); const h = App.raw(sh, 1, a.col); if (h !== undefined && h !== null && String(h).trim() && String(h)[0] !== '=') col = String(h).trim(); } catch (e) { /* sem cabeçalho */ }
+      return `<span class="hz-pag">${esc(sh.name)}</span>${col ? ` · ${esc(col)}` : ''} <span class="hz-addr">${esc(x.addr)}</span>`;
+    };
+    function draw() {
+      if (!linhas.length) { res.innerHTML = `<p class="sp-hint pn-vazio">${carregando ? 'Carregando…' : 'Nenhuma alteração encontrada com esses filtros.'}</p>`; return; }
+      res.innerHTML = `<div class="mt-table-wrap"><table class="mt-table hz-table"><thead><tr><th>Quando</th><th>Quem</th><th>Onde</th><th>Antes → Depois</th></tr></thead><tbody>${linhas.map((x, i) => `<tr data-i="${i}" title="Ir até a célula">
+          <td class="hz-when">${dataHora(x.at)}</td><td>${esc(x.quem.name || '—')}</td><td>${onde(x)}</td>
+          <td class="hz-vals"><span class="hz-antes${x.antes === null || x.antes === undefined || x.antes === '' ? ' sem' : ''}">${valor(x.antes)}</span><span class="hz-seta">→</span><span class="hz-depois">${valor(x.depois)}</span></td></tr>`).join('')}</tbody></table></div>
+        <div class="hz-pe"><span class="sp-hint">${n(linhas.length)} ${linhas.length === 1 ? 'alteração' : 'alterações'}${mais ? ' (há mais)' : ''}</span>${mais ? '<button class="btn" id="hz-mais">Carregar mais</button>' : ''}</div>`;
+      res.querySelectorAll('tbody tr').forEach((tr) => (tr.onclick = () => ir(linhas[+tr.dataset.i])));
+      const bm = res.querySelector('#hz-mais'); if (bm) bm.onclick = () => carregar(true);
+    }
+    function ir(x) {
+      const si = App.doc.sheets.findIndex((s) => s.id === x.pagina);
+      if (si < 0) return notify('Essa página não existe mais.');
+      let a; try { a = E.parseAddr(x.addr); } catch (e) { return; }
+      m.close ? m.close() : m.el.close();
+      if (App.doc.active !== si) { App.doc.active = si; App.emit('sheet'); }
+      App.grid.select(a.row, a.col);
+    }
+    let pedido = 0;
+    async function carregar(maisLinhas) {
+      const meu = ++pedido;
+      carregando = true; if (!maisLinhas) { linhas = []; draw(); }
+      const qs = new URLSearchParams({ periodo: f.periodo });
+      if (f.quem) qs.set('quem', f.quem); if (f.pagina) qs.set('pagina', f.pagina); if (f.texto) qs.set('texto', f.texto);
+      if (maisLinhas && linhas.length) qs.set('antesDe', linhas[linhas.length - 1].id);
+      let r;
+      try { r = await api('GET', `/api/docs/${docId}/alteracoes?${qs}`); } catch (e) { carregando = false; if (meu === pedido) { res.innerHTML = `<p class="sp-hint pn-vazio">${esc(e.message)}</p>`; } return; }
+      if (meu !== pedido) return; // chegou depois de outro filtro: descarta
+      carregando = false;
+      linhas = maisLinhas ? linhas.concat(r.linhas) : r.linhas; mais = r.mais;
+      if (r.pessoas && !pessoas.length) {
+        pessoas = r.pessoas;
+        el('#hz-quem').innerHTML = '<option value="">Todas</option>' + pessoas.map((p) => `<option value="${esc(p.id)}">${esc(p.name)} (${n(p.n)})</option>`).join('');
+        el('#hz-quem').value = f.quem;
+      }
+      draw();
+    }
+    el('#hz-quem').onchange = (e) => { f.quem = e.target.value; carregar(); };
+    el('#hz-pag').onchange = (e) => { f.pagina = e.target.value; carregar(); };
+    el('#hz-per').onchange = (e) => { f.periodo = e.target.value; carregar(); };
+    let tt = null;
+    el('#hz-txt').onkeydown = (e) => e.stopPropagation();
+    el('#hz-txt').oninput = (e) => { clearTimeout(tt); tt = setTimeout(() => { f.texto = e.target.value.trim(); carregar(); }, 350); };
+    carregar();
+  }
+  App.commands.def('adminAlteracoes', 'Histórico de alterações da planilha', alteracoes);
 })();

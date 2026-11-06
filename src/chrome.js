@@ -353,6 +353,7 @@
       { label: 'Status automático por e-mail', cmd: 'statusAuto' },
       { label: 'Registro de automações', cmd: 'automacoes' }, '-',
       { label: 'Métricas, gráficos e teste de pico', icon: 'chart', cmd: 'adminMetricas' },
+      { label: 'Histórico de alterações da planilha', icon: 'history', cmd: 'adminAlteracoes' },
       { label: 'Sessões: deslogar usuários', icon: 'lock', cmd: 'adminSessions' },
     ] },
     { label: 'Extensões', items: () => [{ label: 'Nenhuma extensão instalada', disabled: true, need: 'extensions' }] },

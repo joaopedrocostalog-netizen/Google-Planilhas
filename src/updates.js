@@ -4,6 +4,10 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '06/11/2026', title: 'Autocompletar na coluna e histórico de alterações da planilha', items: [
+      ['Autocompletar', 'Ao digitar numa célula, aparecem os textos já usados na mesma coluna (os mais usados primeiro, sem diferença de acento ou maiúscula). Enter grava o que você digitou; para usar uma sugestão, desça com a seta, aperte Tab ou clique nela.'],
+      ['Histórico de alterações', 'Administrador › "Histórico de alterações da planilha": cada célula alterada, por quem e quando, com o antes e o depois. Filtros por pessoa, página, período e texto; clique numa linha para ir até a célula.'],
+    ] },
     { date: '06/11/2026', title: 'Planilha mais rápida (servidor e tela)', items: [
       ['Entrar na planilha', 'A planilha agora viaja compactada entre o servidor e o navegador (cerca de 25 vezes menor), o que ajuda principalmente no celular e quando todos reconectam depois de uma atualização.'],
       ['Digitar', 'Cada edição ficou cerca de duas vezes mais leve: a tela compara só o texto de cada célula, sem refazer uma cópia da planilha inteira a cada Enter. Rolar e receber edições de outras pessoas também ficaram mais leves.'],
