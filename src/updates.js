@@ -6,6 +6,7 @@
   const UPDATES = [
     { date: '09/11/2026', title: 'Servidor no Railway', items: [
       ['Servidor', 'O servidor da planilha passou da Render para o Railway. A conexão com o banco interno do Railway agora funciona sem travar na tela de conexão.'],
+      ['Dados', 'Contas, senhas, planilhas, histórico, versões e mensagens são copiados do banco antigo para o novo de uma vez só, na subida do servidor. Quem já estava conectado continua conectado.'],
     ] },
     { date: '06/11/2026', title: 'Autocompletar na coluna e histórico de alterações da planilha', items: [
       ['Autocompletar', 'Ao digitar numa célula, aparecem os textos já usados na mesma coluna (os mais usados primeiro, sem diferença de acento ou maiúscula). Enter grava o que você digitou; para usar uma sugestão, desça com a seta, aperte Tab ou clique nela.'],

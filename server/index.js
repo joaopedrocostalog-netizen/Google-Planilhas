@@ -1735,9 +1735,17 @@ function describeDbError(e) {
   return parts.join(' | ');
 }
 
+// MIGRAR_DE: endereço de um banco antigo; na subida, copia tudo dele para o banco atual (uma vez só)
+async function migrarSePedido() {
+  const de = process.env.MIGRAR_DE;
+  if (!de || !process.env.DATABASE_URL) return;
+  try { await require('./migrar.js').migrar(de, process.env.DATABASE_URL); }
+  catch (e) { console.error('Migração NÃO foi feita (o banco atual ficou como estava): ' + describeDbError(e)); }
+}
+
 (async function start() {
   for (let attempt = 1; ; attempt++) {
-    try { await store.init(); await loadColors(); if (!process.env.DSS_DIARIO_OFF) setTimeout(() => { loadDrivers().catch(() => {}); }, 3000); break; }
+    try { await store.init(); await migrarSePedido(); await loadColors(); if (!process.env.DSS_DIARIO_OFF) setTimeout(() => { loadDrivers().catch(() => {}); }, 3000); break; }
     catch (e) {
       // o banco gratuito às vezes demora a acordar: até 12 tentativas, esperando até 15 s entre elas
       console.error(`Não foi possível iniciar o banco de dados (tentativa ${attempt}/12): ${describeDbError(e)}`);

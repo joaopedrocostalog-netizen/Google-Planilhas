@@ -1,1 +1,0 @@
-Migração do banco: MIGRAR_DE copia contas, planilhas, histórico e mensagens do banco antigo (uma vez só, numa transação)
