@@ -4,6 +4,9 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '09/11/2026', title: 'Servidor no Railway', items: [
+      ['Servidor', 'O servidor da planilha passou da Render para o Railway. A conexão com o banco interno do Railway agora funciona sem travar na tela de conexão.'],
+    ] },
     { date: '06/11/2026', title: 'Autocompletar na coluna e histórico de alterações da planilha', items: [
       ['Autocompletar', 'Ao digitar numa célula, aparecem os textos já usados na mesma coluna (os mais usados primeiro, sem diferença de acento ou maiúscula). Enter grava o que você digitou; para usar uma sugestão, desça com a seta, aperte Tab ou clique nela.'],
       ['Histórico de alterações', 'Administrador › "Histórico de alterações da planilha": cada célula alterada, por quem e quando, com o antes e o depois. Filtros por pessoa, página, período e texto; clique numa linha para ir até a célula.'],
