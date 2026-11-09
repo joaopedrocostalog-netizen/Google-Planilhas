@@ -1,49 +1,67 @@
-diff --git a/server/glitch-config.js b/server/glitch-config.js
-new file mode 100644
-index 0000000000000000000000000000000000000000..4e01566ac999485671e49ac4d50fd5878bb2af4d
---- /dev/null
-+++ b/server/glitch-config.js
-@@ -0,0 +1,13 @@
-+// Detecta se está rodando em Glitch e ajusta configurações
-+module.exports = function detectGlitch() {
-+  const inGlitch = process.env.PROJECT_DOMAIN ? true : false;
-+  
-+  if (inGlitch) {
-+    console.log('[Glitch] Detectado Glitch. Domínio:', process.env.PROJECT_DOMAIN);
-+    // Glitch fornece essas variáveis automaticamente
-+    process.env.GLITCH_URL = `https://${process.env.PROJECT_DOMAIN}.glitch.me`;
-+    console.log('[Glitch] URL do servidor:', process.env.GLITCH_URL);
-+  }
-+  
-+  return inGlitch;
-+};
-diff --git a/server/index.js b/server/index.js
-index 733e17d84d641eb977bba56826db7efdc94080c5..a1e98b45289a6aa3c1637a557b34285aaf8131c3 100644
---- a/server/index.js
-+++ b/server/index.js
-@@ -11,2 +11,3 @@ const Perms = require('../src/perms.js');
- const mail = require('./mail.js');
-+const detectGlitch = require('./glitch-config');
+diff --git a/server/store.js b/server/store.js
+index 779ded2b3a4b05aaea5096cb337b5aa5782af515..98109cebe69a162911cc7df4a8e3e38dd6789dbe 100644
+--- a/server/store.js
++++ b/server/store.js
+@@ -130,8 +130,19 @@ const gzip = promisify(zlib.gzip), gunzip = promisify(zlib.gunzip);
  
-@@ -14,2 +15,3 @@ const ROOT = path.join(__dirname, '..');
- const PORT = Number(process.env.PORT) || 3000;
-+const inGlitch = detectGlitch();
- const ORIGINS = (process.env.ALLOWED_ORIGINS || 'https://joaopedrocostalog-netizen.github.io').split(',').map((s) => s.trim()).filter(Boolean);
-diff --git a/src/config.glitch.example.js b/src/config.glitch.example.js
-new file mode 100644
-index 0000000000000000000000000000000000000000..3540a3c44f3e61f261c0a6380be45cb14b58487c
---- /dev/null
-+++ b/src/config.glitch.example.js
-@@ -0,0 +1,12 @@
-+// PARA USAR EM GLITCH:
-+// 1. Copie este arquivo para src/config.js
-+// 2. Mude \"SEU_PROJETO\" para o nome do seu projeto no Glitch
-+// 3. Commit e push para main
++// Conexões internas dispensam SSL: Render (host sem pontos), Railway (*.railway.internal) e a própria máquina.
++// A externa exige. PGSSL=0 ou sslmode=disable na URL desligam; PGSSL=1 ou sslmode=require obrigam.
++function usaSsl(url) {
++  if (process.env.PGSSL === '0') return false;
++  if (process.env.PGSSL === '1') return true;
++  let u = null;
++  try { u = new URL(url); } catch (e) { return true; }
++  const modo = (u.searchParams.get('sslmode') || '').toLowerCase();
++  if (modo === 'disable') return false;
++  if (modo === 'require' || modo === 'verify-ca' || modo === 'verify-full') return true;
++  const host = u.hostname.toLowerCase();
++  return !(!host.includes('.') || host.endsWith('.internal') || host === 'localhost' || host === '127.0.0.1' || host === '[::1]');
++}
 +
-+(function () {
-+  'use strict';
-+  var GLITCH_URL = 'https://SEU_PROJETO.glitch.me';  // ← Mude aqui
-+  if (window.PLANILHAS_API === undefined) {
-+    window.PLANILHAS_API = /\\.github\\.io$/.test(location.hostname) ? GLITCH_URL : location.origin;
+ function pgStore(url) {
+   const { Pool } = require('pg');
+-  // URL interna da Render (host sem pontos) e localhost dispensam SSL; a externa exige
+-  let host = '';
+-  try { host = new URL(url).hostname; } catch (e) { /* mantém vazio */ }
+-  const noSsl = process.env.PGSSL === '0' || !host.includes('.') || host === '127.0.0.1';
++  const noSsl = !usaSsl(url);
+   // PGSCHEMA: espaço separado dentro de um banco compartilhado com outros sistemas
+@@ -337 +348,2 @@ module.exports = function createStore() {
+ };
++module.exports.usaSsl = usaSsl;
+diff --git a/src/config.js b/src/config.js
+index 283198db1db08231fb67b4d28a36172475756f69..a4919e7486eaf40cc7d9cbb3eb0b287371c18d26 100644
+--- a/src/config.js
++++ b/src/config.js
+@@ -4,3 +4,3 @@
+   'use strict';
+-  var RENDER_URL = 'https://planilhas-servidor.onrender.com';
++  var RENDER_URL = 'https://google-planilhas-production.up.railway.app';
+   if (window.PLANILHAS_API === undefined) {
+diff --git a/src/updates.js b/src/updates.js
+index 6bdb0b862a35c1386d3a9d5439ee66e3e9bd765d..c21042e731254f1ab140bc94767103c046abdb5e 100644
+--- a/src/updates.js
++++ b/src/updates.js
+@@ -6,2 +6,5 @@
+   const UPDATES = [
++    { date: '09/11/2026', title: 'Servidor no Railway', items: [
++      ['Servidor', 'O servidor da planilha passou da Render para o Railway. A conexão com o banco interno do Railway agora funciona sem travar na tela de conexão.'],
++    ] },
+     { date: '06/11/2026', title: 'Autocompletar na coluna e histórico de alterações da planilha', items: [
+diff --git a/tests/server.test.js b/tests/server.test.js
+index 1580ef335530d8651dc80e8e18cf0fbc38411ef2..87bdf3e92724b70789a29004e098889599c0eb19 100644
+--- a/tests/server.test.js
++++ b/tests/server.test.js
+@@ -575,2 +575,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+   }
++  {
++    // SSL do banco: interno sem SSL (Render, Railway), externo com SSL
++    const { usaSsl } = require('../server/store.js');
++    check('banco interno da Render dispensa SSL', usaSsl('postgres://u:p@dpg-abc123-a/banco'), false);
++    check('banco interno do Railway dispensa SSL', usaSsl('postgresql://postgres:x@postgres.railway.internal:5432/railway'), false);
++    check('banco externo da Render exige SSL', usaSsl('postgres://u:p@dpg-abc123-a.virginia-postgres.render.com/banco'), true);
++    check('banco público do Railway exige SSL', usaSsl('postgresql://postgres:x@shuttle.proxy.rlwy.net:41234/railway'), true);
++    check('sslmode=disable desliga o SSL', usaSsl('postgresql://u:p@db.exemplo.com/b?sslmode=disable'), false);
++    check('localhost dispensa SSL', usaSsl('postgres://u:p@localhost:5432/b'), false);
 +  }
-+})();
+   console.log(`\n${pass} testes passaram, ${fail} falharam.`);

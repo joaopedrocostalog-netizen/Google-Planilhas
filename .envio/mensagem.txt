@@ -1,1 +1,1 @@
-Suporte a Glitch: detecção automática, config.js de exemplo e guia de deploy completo
+Banco: conexão interna do Railway sem SSL (o servidor ficava preso tentando conectar)
