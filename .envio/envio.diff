@@ -1,0 +1,49 @@
+diff --git a/server/glitch-config.js b/server/glitch-config.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..4e01566ac999485671e49ac4d50fd5878bb2af4d
+--- /dev/null
++++ b/server/glitch-config.js
+@@ -0,0 +1,13 @@
++// Detecta se está rodando em Glitch e ajusta configurações
++module.exports = function detectGlitch() {
++  const inGlitch = process.env.PROJECT_DOMAIN ? true : false;
++  
++  if (inGlitch) {
++    console.log('[Glitch] Detectado Glitch. Domínio:', process.env.PROJECT_DOMAIN);
++    // Glitch fornece essas variáveis automaticamente
++    process.env.GLITCH_URL = `https://${process.env.PROJECT_DOMAIN}.glitch.me`;
++    console.log('[Glitch] URL do servidor:', process.env.GLITCH_URL);
++  }
++  
++  return inGlitch;
++};
+diff --git a/server/index.js b/server/index.js
+index 733e17d84d641eb977bba56826db7efdc94080c5..a1e98b45289a6aa3c1637a557b34285aaf8131c3 100644
+--- a/server/index.js
++++ b/server/index.js
+@@ -11,2 +11,3 @@ const Perms = require('../src/perms.js');
+ const mail = require('./mail.js');
++const detectGlitch = require('./glitch-config');
+ 
+@@ -14,2 +15,3 @@ const ROOT = path.join(__dirname, '..');
+ const PORT = Number(process.env.PORT) || 3000;
++const inGlitch = detectGlitch();
+ const ORIGINS = (process.env.ALLOWED_ORIGINS || 'https://joaopedrocostalog-netizen.github.io').split(',').map((s) => s.trim()).filter(Boolean);
+diff --git a/src/config.glitch.example.js b/src/config.glitch.example.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..3540a3c44f3e61f261c0a6380be45cb14b58487c
+--- /dev/null
++++ b/src/config.glitch.example.js
+@@ -0,0 +1,12 @@
++// PARA USAR EM GLITCH:
++// 1. Copie este arquivo para src/config.js
++// 2. Mude \"SEU_PROJETO\" para o nome do seu projeto no Glitch
++// 3. Commit e push para main
++
++(function () {
++  'use strict';
++  var GLITCH_URL = 'https://SEU_PROJETO.glitch.me';  // ← Mude aqui
++  if (window.PLANILHAS_API === undefined) {
++    window.PLANILHAS_API = /\\.github\\.io$/.test(location.hostname) ? GLITCH_URL : location.origin;
++  }
++})();

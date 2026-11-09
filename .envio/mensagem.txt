@@ -1,0 +1,1 @@
+Suporte a Glitch: detecção automática, config.js de exemplo e guia de deploy completo
