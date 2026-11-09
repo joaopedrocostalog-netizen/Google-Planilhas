@@ -573,6 +573,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     cargaSrv.close();
     pushSrv.close();
   }
+  {
+    // SSL do banco: interno sem SSL (Render, Railway), externo com SSL
+    const { usaSsl } = require('../server/store.js');
+    check('banco interno da Render dispensa SSL', usaSsl('postgres://u:p@dpg-abc123-a/banco'), false);
+    check('banco interno do Railway dispensa SSL', usaSsl('postgresql://postgres:x@postgres.railway.internal:5432/railway'), false);
+    check('banco externo da Render exige SSL', usaSsl('postgres://u:p@dpg-abc123-a.virginia-postgres.render.com/banco'), true);
+    check('banco público do Railway exige SSL', usaSsl('postgresql://postgres:x@shuttle.proxy.rlwy.net:41234/railway'), true);
+    check('sslmode=disable desliga o SSL', usaSsl('postgresql://u:p@db.exemplo.com/b?sslmode=disable'), false);
+    check('localhost dispensa SSL', usaSsl('postgres://u:p@localhost:5432/b'), false);
+  }
   console.log(`\n${pass} testes passaram, ${fail} falharam.`);
   process.exit(fail ? 1 : 0);
 })();

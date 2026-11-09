@@ -128,12 +128,23 @@ const zlib = require('zlib');
 const { promisify } = require('util');
 const gzip = promisify(zlib.gzip), gunzip = promisify(zlib.gunzip);
 
+// Conexões internas dispensam SSL: Render (host sem pontos), Railway (*.railway.internal) e a própria máquina.
+// A externa exige. PGSSL=0 ou sslmode=disable na URL desligam; PGSSL=1 ou sslmode=require obrigam.
+function usaSsl(url) {
+  if (process.env.PGSSL === '0') return false;
+  if (process.env.PGSSL === '1') return true;
+  let u = null;
+  try { u = new URL(url); } catch (e) { return true; }
+  const modo = (u.searchParams.get('sslmode') || '').toLowerCase();
+  if (modo === 'disable') return false;
+  if (modo === 'require' || modo === 'verify-ca' || modo === 'verify-full') return true;
+  const host = u.hostname.toLowerCase();
+  return !(!host.includes('.') || host.endsWith('.internal') || host === 'localhost' || host === '127.0.0.1' || host === '[::1]');
+}
+
 function pgStore(url) {
   const { Pool } = require('pg');
-  // URL interna da Render (host sem pontos) e localhost dispensam SSL; a externa exige
-  let host = '';
-  try { host = new URL(url).hostname; } catch (e) { /* mantém vazio */ }
-  const noSsl = process.env.PGSSL === '0' || !host.includes('.') || host === '127.0.0.1';
+  const noSsl = !usaSsl(url);
   // PGSCHEMA: espaço separado dentro de um banco compartilhado com outros sistemas
   const schema = process.env.PGSCHEMA || '';
   if (schema && !/^[a-z_][a-z0-9_]*$/.test(schema)) throw new Error('PGSCHEMA inválido: ' + schema);
@@ -335,3 +346,4 @@ module.exports = function createStore() {
   if (process.env.DATABASE_URL) return pgStore(process.env.DATABASE_URL);
   return memoryStore(process.env.DATA_FILE || null);
 };
+module.exports.usaSsl = usaSsl;

@@ -1,1 +1,0 @@
-Banco: conexão interna do Railway sem SSL (o servidor ficava preso tentando conectar)
