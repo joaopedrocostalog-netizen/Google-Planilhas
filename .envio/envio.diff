@@ -1,0 +1,108 @@
+diff --git a/server/index.js b/server/index.js
+index 733e17d84d641eb977bba56826db7efdc94080c5..50a3bf2c751d2181e9bb106aac4f03684cf04a6a 100644
+--- a/server/index.js
++++ b/server/index.js
+@@ -1737,5 +1737,13 @@ function describeDbError(e) {
+ 
++// MIGRAR_DE: endereço de um banco antigo; na subida, copia tudo dele para o banco atual (uma vez só)
++async function migrarSePedido() {
++  const de = process.env.MIGRAR_DE;
++  if (!de || !process.env.DATABASE_URL) return;
++  try { await require('./migrar.js').migrar(de, process.env.DATABASE_URL); }
++  catch (e) { console.error('Migração NÃO foi feita (o banco atual ficou como estava): ' + describeDbError(e)); }
++}
++
+ (async function start() {
+   for (let attempt = 1; ; attempt++) {
+-    try { await store.init(); await loadColors(); if (!process.env.DSS_DIARIO_OFF) setTimeout(() => { loadDrivers().catch(() => {}); }, 3000); break; }
++    try { await store.init(); await migrarSePedido(); await loadColors(); if (!process.env.DSS_DIARIO_OFF) setTimeout(() => { loadDrivers().catch(() => {}); }, 3000); break; }
+     catch (e) {
+diff --git a/server/migrar.js b/server/migrar.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..b843d0bae3fb7db6eec3dedb1d756c80978b3946
+--- /dev/null
++++ b/server/migrar.js
+@@ -0,0 +1,75 @@
++// Migração de banco: copia tudo de um Postgres antigo (MIGRAR_DE) para o banco atual (DATABASE_URL).
++// Roda na subida do servidor, depois de criar as tabelas e antes de abrir as portas.
++// Só roda uma vez: ao terminar, grava 'migracao' em settings; nas próximas subidas não faz nada.
++// O conteúdo do banco novo é substituído pelo do antigo, tudo numa transação só: se algo falhar, nada muda.
++'use strict';
++const { usaSsl } = require('./store.js');
++
++// ordem que respeita as ligações entre tabelas (users antes de docs, docs antes do histórico…)
++const ORDEM = ['users', 'sessions', 'docs', 'settings', 'doc_versions', 'cell_history', 'messages'];
++// tabelas com linhas grandes (planilha inteira compactada) vêm em lotes menores
++const LOTE = { docs: 5, doc_versions: 5 };
++
++async function migrar(origemUrl, destinoUrl, log) {
++  const { Client } = require('pg');
++  log = log || console.log;
++  const conecta = (url) => new Client({ connectionString: url, ssl: usaSsl(url) ? { rejectUnauthorized: false } : false, connectionTimeoutMillis: 20000 });
++  const de = conecta(origemUrl), para = conecta(destinoUrl);
++  await de.connect();
++  await para.connect();
++  try {
++    const feita = await para.query("SELECT value FROM settings WHERE key = 'migracao'");
++    if (feita.rows.length) { log('Migração: já foi feita antes (' + JSON.stringify(feita.rows[0].value) + '); nada a fazer.'); return { feita: false }; }
++
++    const tabelasDe = async (c) => (await c.query("SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'")).rows.map((r) => r.table_name);
++    const naOrigem = new Set(await tabelasDe(de)), noDestino = new Set(await tabelasDe(para));
++    const tabelas = ORDEM.filter((t) => naOrigem.has(t) && noDestino.has(t))
++      .concat([...naOrigem].filter((t) => noDestino.has(t) && !ORDEM.includes(t)).sort());
++    if (!tabelas.length) throw new Error('nenhuma tabela em comum entre os dois bancos');
++    const usuarios = naOrigem.has('users') ? Number((await de.query('SELECT count(*) n FROM users')).rows[0].n) : 0;
++    if (!usuarios) throw new Error('o banco antigo não tem nenhuma conta; confira se MIGRAR_DE aponta para o banco certo');
++
++    const colunas = async (c, t) => (await c.query('SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1', [t])).rows.map((r) => r.column_name);
++    const id = (s) => '"' + s.replace(/"/g, '""') + '"';
++    const resumo = {};
++    await de.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
++    await para.query('BEGIN');
++    try {
++      await para.query('TRUNCATE ' + tabelas.map(id).join(', ') + ' RESTART IDENTITY CASCADE');
++      for (const t of tabelas) {
++        const destino = new Set(await colunas(para, t));
++        const comuns = (await colunas(de, t)).filter((c) => destino.has(c));
++        const lista = comuns.map(id).join(', ');
++        await de.query(`DECLARE cur NO SCROLL CURSOR FOR SELECT row_to_json(x)::text AS j FROM (SELECT ${lista} FROM ${id(t)}) x`);
++        let n = 0;
++        for (;;) {
++          const r = await de.query(`FETCH ${LOTE[t] || 500} FROM cur`);
++          if (!r.rows.length) break;
++          await para.query(`INSERT INTO ${id(t)} (${lista}) SELECT ${lista} FROM jsonb_populate_recordset(NULL::${id(t)}, $1::jsonb)`, ['[' + r.rows.map((x) => x.j).join(',') + ']']);
++          n += r.rows.length;
++        }
++        await de.query('CLOSE cur');
++        // contadores automáticos (BIGSERIAL) continuam depois do maior id copiado
++        const seqs = await para.query(`SELECT column_name, pg_get_serial_sequence($1, column_name) seq FROM information_schema.columns
++          WHERE table_schema = current_schema() AND table_name = $2 AND column_default LIKE 'nextval(%'`, [id(t), t]);
++        for (const s of seqs.rows) if (s.seq) await para.query(`SELECT setval($1, COALESCE((SELECT max(${id(s.column_name)}) FROM ${id(t)}), 0) + 1, false)`, [s.seq]);
++        resumo[t] = n;
++        log(`Migração: ${t}: ${n} linhas copiadas`);
++      }
++      await para.query("INSERT INTO settings (key, value) VALUES ('migracao', $1)", [JSON.stringify({ em: new Date().toISOString(), linhas: resumo })]);
++      await para.query('COMMIT');
++    } catch (e) {
++      await para.query('ROLLBACK').catch(() => {});
++      throw e;
++    } finally {
++      await de.query('ROLLBACK').catch(() => {});
++    }
++    log('Migração concluída: ' + Object.entries(resumo).map(([t, n]) => `${t} ${n}`).join(', '));
++    return { feita: true, linhas: resumo };
++  } finally {
++    await de.end().catch(() => {});
++    await para.end().catch(() => {});
++  }
++}
++
++module.exports = { migrar };
+diff --git a/src/updates.js b/src/updates.js
+index c21042e731254f1ab140bc94767103c046abdb5e..e45cace6ba354cdb0297987a01d2375b3e26a3b5 100644
+--- a/src/updates.js
++++ b/src/updates.js
+@@ -8,2 +8,3 @@
+       ['Servidor', 'O servidor da planilha passou da Render para o Railway. A conexão com o banco interno do Railway agora funciona sem travar na tela de conexão.'],
++      ['Dados', 'Contas, senhas, planilhas, histórico, versões e mensagens são copiados do banco antigo para o novo de uma vez só, na subida do servidor. Quem já estava conectado continua conectado.'],
+     ] },
