@@ -1666,12 +1666,13 @@ function lookupFills(room, p, clears) {
 }
 
 // ---------- Arquivos do site ----------
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
 function serveStatic(req, res, pathname) {
   if (pathname === '/' || pathname === '') pathname = '/index.html';
   if (pathname === '/favicon.ico') pathname = '/assets/favicon.svg';
   const file = path.normalize(path.join(ROOT, decodeURIComponent(pathname)));
-  const allowed = file === path.join(ROOT, 'index.html') || file.startsWith(path.join(ROOT, 'src') + path.sep) || file.startsWith(path.join(ROOT, 'assets') + path.sep);
+  // sw.js e manifest.webmanifest: sem eles as notificações não ligam para quem abre a planilha pelo endereço do servidor
+  const allowed = ['index.html', 'sw.js', 'manifest.webmanifest'].some((f) => file === path.join(ROOT, f)) || file.startsWith(path.join(ROOT, 'src') + path.sep) || file.startsWith(path.join(ROOT, 'assets') + path.sep);
   if (!allowed) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end('Não encontrado'); }
   fs.readFile(file, (err, buf) => {
     if (err) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end('Não encontrado'); }

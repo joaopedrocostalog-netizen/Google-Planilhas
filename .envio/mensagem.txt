@@ -1,1 +1,0 @@
-Servidor entrega o service worker e o manifesto: as notificações ligam também para quem abre a planilha pelo endereço do servidor
