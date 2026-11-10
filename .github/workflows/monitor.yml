@@ -24,7 +24,7 @@ jobs:
       - name: Conferir o servidor
         id: saude
         run: |
-          URL="https://google-planilhas-production.up.railway.app/api/health"
+          URL="https://google-planilhas-production-97fe.up.railway.app/api/health"
           ok=0
           for i in 1 2 3; do
             if curl -fsS --max-time 60 "$URL" -o saude.json; then ok=1; break; fi
