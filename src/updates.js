@@ -4,6 +4,12 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '10/11/2026', title: 'Notificações obrigatórias, mensagem de administrador em destaque e versões a cada 3 horas', items: [
+      ['Notificações', 'Agora são obrigatórias: ao entrar na conta, a planilha só abre depois de ativar as notificações do aparelho, e não há mais como desligar: todos os avisos ficam ligados (a lista está em Ferramentas › Notificações).'],
+      ['Computador', 'Os avisos aparecem como notificação do sistema, por cima de qualquer janela, com a planilha na tela ou não, e ficam até você clicar ou fechar.'],
+      ['Mensagem de administrador', 'Chega em destaque no chat e no meio da tela (fica até responder ou fechar) e vira notificação na hora, sem esperar para juntar com outras.'],
+      ['Histórico de versões', 'A versão automática passou de 30 minutos para 3 horas e só é guardada quando alguém alterou a planilha.'],
+    ] },
     { date: '09/11/2026', title: 'Servidor no Railway', items: [
       ['Servidor', 'O servidor da planilha passou da Render para o Railway. A conexão com o banco interno do Railway agora funciona sem travar na tela de conexão.'],
       ['Dados', 'Contas, senhas, planilhas, histórico, versões e mensagens são copiados do banco antigo para o novo de uma vez só, na subida do servidor. Quem já estava conectado continua conectado.'],
@@ -133,7 +139,7 @@
       ['Menus', 'Os itens dentro dos submenus (ex.: Formatar › Alinhamento › Centro) voltaram a funcionar ao clicar; Recortar e Copiar pelo menu Editar também.'],
       ['Administrador', 'Novo menu Administrador e o painel "Controle do administrador": todas as opções de quem pode ver, editar ou usar cada função ficam ali, e não mais no botão direito.'],
       ['Permissões', 'Além de setores, agora dá para escolher pessoas específicas em: escala de veículos, container crítico e intervalos protegidos.'],
-      ['Histórico de versões', 'Prévia de cada versão com as mudanças daquele backup em destaque (verde = alterado, vermelho = apagado; passe o mouse para ver o valor anterior). Dá para restaurar ou criar uma cópia. Na nuvem, uma versão é guardada a cada 30 minutos de edição.'],
+      ['Histórico de versões', 'Prévia de cada versão com as mudanças daquele backup em destaque (verde = alterado, vermelho = apagado; passe o mouse para ver o valor anterior). Dá para restaurar ou criar uma cópia. Na nuvem, uma versão é guardada a cada 3 horas, só quando houve alteração.'],
       ['Enviar status', 'Funciona com várias linhas selecionadas (arrastando ou com Ctrl) e também pelo menu Inserir.'],
       ['Pedido de troca', 'Depois de destravar, a mensagem do pedido mostra "Troca liberada" para todos do setor e para quem pediu; o botão não destrava de novo.'],
       ['Menu suspenso', 'As opções mostram as cores da formatação condicional (ex.: cada STATUS com a sua cor).'],

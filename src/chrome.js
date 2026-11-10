@@ -333,7 +333,7 @@
       { label: 'Intervalos nomeados', cmd: 'namedRanges' },
       { label: 'Histórico de versões', icon: 'history', cmd: 'versionHistory' }, '-',
       { label: 'Histórico do container', icon: 'history', cmd: 'containerHistorico' },
-      { label: 'Notificações no celular', cmd: 'notificacoes' },
+      { label: 'Notificações', cmd: 'notificacoes' },
     ] },
     // tudo o que define quem pode ver, editar ou usar cada função fica aqui (e não no botão direito)
     { label: 'Administrador', items: () => [

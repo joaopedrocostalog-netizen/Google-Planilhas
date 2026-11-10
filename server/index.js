@@ -202,8 +202,9 @@ async function saveRoom(room) {
   if (room.again || (room.dirty && !room.timer)) { room.again = false; if (room.dirty && !room.timer) scheduleSave(room); }
 }
 // ---------- Versões (backups) ----------
-// uma versão automática a cada 30 min de edição (e sempre antes de restaurar uma versão antiga)
-const VERSION_EVERY = Number(process.env.VERSION_EVERY_MS || 30 * 60 * 1000);
+// uma versão automática a cada 3 h, e só quando alguém alterou a planilha desde a última (sem alteração a planilha
+// nem é salva, então nada é guardado); e sempre antes de restaurar uma versão antiga
+const VERSION_EVERY = Number(process.env.VERSION_EVERY_MS || 3 * 60 * 60 * 1000);
 async function autoVersion(room, force) {
   try {
     if (room.lastVersionAt === undefined) { const l = await store.listVersions(room.id); room.lastVersionAt = l.length ? new Date(l[0].at).getTime() : 0; }
@@ -728,7 +729,8 @@ route('GET', '/api/messages', async (req) => {
 route('GET', '/api/messages/:uid', async (req, p) => {
   const user = await requireUser(req);
   const list = await store.conversation(user.id, p.uid, 300);
-  return { with: await userBrief(p.uid), messages: list.map(pubMsg) };
+  const other = await store.getUserById(p.uid);
+  return { with: Object.assign(await userBrief(p.uid), { admin: !!other && await isGlobalAdmin(other) }), messages: list.map(pubMsg) };
 });
 route('POST', '/api/messages/:uid/read', async (req, p) => {
   const user = await requireUser(req);
@@ -759,9 +761,13 @@ route('POST', '/api/messages', async (req) => {
     }
   }
   const m = await store.addMessage({ from_id: user.id, to_id: to, doc_id: room ? room.id : null, text, ref });
-  const out = Object.assign(pubMsg(m), { fromUser: await userBrief(user.id) });
+  // mensagem de administrador (geral ou desta planilha): chega destacada e notifica na hora (sem juntar com outras)
+  const p = room ? Perms.compute(permDoc(room), user) : null;
+  const fromAdmin = !!(p && p.admin) || await isGlobalAdmin(user);
+  const out = Object.assign(pubMsg(m), { fromUser: await userBrief(user.id), fromAdmin });
   deliver([to, user.id], { type: 'dm', msg: out });
-  push.avisa(to, 'chat', { title: `Mensagem de ${user.name || 'alguém'}`, plural: '{n} mensagens novas', body: String(text).slice(0, 140), tag: 'chat-' + user.id, doc: 'chat-' + user.id, hash: room ? '#nuvem=' + room.id : '' });
+  if (fromAdmin) push.paraPessoa(to, 'admin', { title: `Administrador: ${user.name || 'mensagem'}`, body: String(text).slice(0, 180), tag: 'adm-' + user.id + '-' + m.id, forte: true, hash: room ? '#nuvem=' + room.id : '' }).catch((e) => console.error('[push]', e.message));
+  else push.avisa(to, 'chat', { title: `Mensagem de ${user.name || 'alguém'}`, plural: '{n} mensagens novas', body: String(text).slice(0, 140), tag: 'chat-' + user.id, doc: 'chat-' + user.id, hash: room ? '#nuvem=' + room.id : '' });
   return out;
 });
 

@@ -1,4 +1,6 @@
-// Service worker só para as notificações no celular (não guarda arquivos em cache: a planilha sempre abre atualizada).
+// Service worker só para as notificações (não guarda arquivos em cache: a planilha sempre abre atualizada).
+// No computador o aviso é do sistema: aparece por cima de qualquer janela, com a planilha na tela ou não, e fica
+// até a pessoa clicar ou fechar (requireInteraction).
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 self.addEventListener('push', (e) => {
@@ -6,7 +8,7 @@ self.addEventListener('push', (e) => {
   try { d = e.data ? e.data.json() : {}; } catch (er) { d = { title: 'Planilhas Costalog', body: e.data ? e.data.text() : '' }; }
   const base = self.registration.scope;
   e.waitUntil(self.registration.showNotification(d.title || 'Planilhas Costalog', {
-    body: d.body || '', tag: d.tag || undefined, renotify: !!d.tag,
+    body: d.body || '', tag: d.tag || undefined, renotify: !!d.tag, requireInteraction: true,
     icon: base + 'assets/apple-touch-icon.png', badge: base + 'assets/apple-touch-icon.png',
     data: { url: d.url || base },
   }));

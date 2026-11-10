@@ -473,7 +473,7 @@
     const m = App.ui.modal({
       title: 'Histórico de versões', width: 'min(1500px, 98vw)', cls: 'vh-modal', enterSubmits: false,
       body: `<div class="vh-wrap"><aside class="vh-side"><button class="btn btn-sm" id="vh-save">${icon('plus', 14)} Salvar versão agora</button><div class="vh-items" id="vh-items"><p class="sp-hint">Carregando…</p></div>
-        <p class="sp-hint vh-note">${pv.cloud ? 'Uma versão é guardada no servidor a cada 30 minutos de edição e sempre antes de restaurar outra.' : 'As versões ficam neste navegador (uma a cada 5 minutos de edição).'}</p></aside>
+        <p class="sp-hint vh-note">${pv.cloud ? 'Uma versão é guardada no servidor a cada 3 horas, só quando houve alteração, e sempre antes de restaurar outra.' : 'As versões ficam neste navegador (uma a cada 5 minutos de edição).'}</p></aside>
         <section class="vh-main"><div class="vh-top" id="vh-top"><span class="sp-hint">Escolha uma versão à esquerda para ver a prévia.</span></div><div class="vh-tabs" id="vh-tabs"></div><div class="vh-table" id="vh-table"></div></section></div>`,
       buttons: [{ label: 'Fechar' }],
     });
