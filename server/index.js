@@ -792,8 +792,10 @@ route('POST', '/api/push/teste', async (req) => {
   const b = await readBody(req, 2000).catch(() => ({}));
   if (b && b.exemplos) {
     let n = 0;
-    for (const [tipo, title, body] of EXEMPLOS_PUSH) n += await push.paraPessoa(user.id, 'teste', { title, body, tag: 'exemplo-' + tipo });
-    return { enviadas: n, exemplos: EXEMPLOS_PUSH.length };
+    // o aparelho que pediu mostra os exemplos ele mesmo, um de cada vez (menos); os outros aparelhos da pessoa recebem pelo push
+    const menos = typeof b.menos === 'string' ? b.menos : '';
+    for (const [tipo, title, body] of EXEMPLOS_PUSH) n += await push.paraPessoa(user.id, 'teste', { title, body, tag: 'exemplo-' + tipo }, menos);
+    return { enviadas: n, exemplos: EXEMPLOS_PUSH.length, lista: EXEMPLOS_PUSH.map(([tipo, title, body]) => ({ tipo, title, body })) };
   }
   const n = await push.paraPessoa(user.id, 'teste', { title: 'Planilhas Costalog', body: 'As notificações estão funcionando neste aparelho.', tag: 'teste' });
   return { enviadas: n };

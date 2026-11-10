@@ -449,7 +449,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       await api('POST', '/api/push/inscrever', { subscription: sub, prefs: {}, appUrl: 'https://exemplo.github.io/Google-Planilhas/' }, ana.token);
       const antes = pushRecebidos.length;
       const ex = await api('POST', '/api/push/teste', { exemplos: true }, ana.token);
-      check('exemplo de cada aviso', [ex.exemplos, ex.enviadas, pushRecebidos.length - antes], [7, 7, 7]);
+      check('exemplo de cada aviso', [ex.exemplos, ex.enviadas, pushRecebidos.length - antes, ex.lista.length, ex.lista[0].tipo], [7, 7, 7, 7, 'critico']);
+      const ex2 = await api('POST', '/api/push/teste', { exemplos: true, menos: sub.endpoint }, ana.token);
+      check('exemplos: o aparelho que pediu mostra ele mesmo', [ex2.enviadas, ex2.lista.length, pushRecebidos.length - antes], [0, 7, 7]);
 
       // ---------- rotinas: automações, alertas, demurrage, status automático, histórico ----------
       const dr = await api('POST', '/api/docs', { title: 'Rotinas', data: { sheets: [
