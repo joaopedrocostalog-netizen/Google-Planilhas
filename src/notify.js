@@ -69,10 +69,31 @@
       testar();
     } catch (e) { App.emit('notify', 'Não foi possível ligar as notificações: ' + e.message); }
   }
-  async function testar(exemplos) {
+  // exemplos: este aparelho mostra um de cada vez (a cada 2 s), pelo service worker, igual a um aviso de verdade.
+  // Assim funcionam no computador, onde vários avisos chegando juntos ficam um por cima do outro ou na fila do sistema.
+  // Os outros aparelhos da pessoa recebem os exemplos pelo servidor.
+  let mostrando = false;
+  async function exemplosAqui() {
+    if (mostrando) return App.emit('notify', 'Os exemplos ainda estão aparecendo.');
+    mostrando = true;
     try {
-      const r = await api('POST', '/api/push/teste', exemplos ? { exemplos: true } : {});
-      App.emit('notify', !r.enviadas ? 'Nenhum aparelho recebeu o teste.' : exemplos ? `${r.exemplos} exemplos enviados (um de cada aviso). Bloqueie o celular para ver chegando.` : 'Notificação de teste enviada.');
+      const reg = await registro(), sub = await reg.pushManager.getSubscription();
+      const r = await api('POST', '/api/push/teste', { exemplos: true, menos: sub ? sub.endpoint : '' });
+      const base = reg.scope;
+      App.emit('notify', `${r.lista.length} exemplos vão aparecer neste aparelho, um a cada 2 segundos${r.enviadas ? ' (e nos seus outros aparelhos)' : ''}.`);
+      for (let i = 0; i < r.lista.length; i++) {
+        const x = r.lista[i];
+        if (i) await new Promise((ok) => setTimeout(ok, 2000));
+        await reg.showNotification(x.title, { body: x.body, tag: 'exemplo-' + x.tipo, renotify: true, requireInteraction: true, icon: base + 'assets/apple-touch-icon.png', badge: base + 'assets/apple-touch-icon.png', data: { url: appUrl() } });
+      }
+    } catch (e) { App.emit('notify', 'Não foi possível mostrar os exemplos: ' + e.message); }
+    mostrando = false;
+  }
+  async function testar(exemplos) {
+    if (exemplos) return exemplosAqui();
+    try {
+      const r = await api('POST', '/api/push/teste', {});
+      App.emit('notify', !r.enviadas ? 'Nenhum aparelho recebeu o teste.' : 'Notificação de teste enviada.');
     }
     catch (e) { App.emit('notify', e.message); }
   }

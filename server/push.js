@@ -98,11 +98,13 @@ function createPush(store, opts) {
   }
 
   // envia para uma pessoa (todos os aparelhos que querem este tipo); apaga inscrições vencidas (404/410)
-  async function paraPessoa(userId, tipo, msg) {
+  // menos: endpoint de um aparelho que fica de fora (ele mesmo mostra o aviso, como nos exemplos)
+  async function paraPessoa(userId, tipo, msg, menos) {
     const all = await todas(), lista = all[userId] || [];
     if (!lista.length) return 0;
     let n = 0, mudou = false;
     for (const s of lista) {
+      if (menos && s.endpoint === menos) continue;
       const url = s.appUrl ? s.appUrl + (msg.hash || '') : '';
       try {
         const st = await enviaUm(s, { title: msg.title, body: msg.body, tag: msg.tag || tipo, url, forte: !!msg.forte || undefined });
