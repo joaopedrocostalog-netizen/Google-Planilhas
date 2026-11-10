@@ -406,6 +406,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const lote = await api('POST', '/api/carga/datas-baixa', { containers: ['TRHU 861.819-1', 'MSCU1234567', 'ABCD0000000'] }, ana.token);
     check('várias DATA BAIXA de uma vez', lote.resultados, { TRHU8618191: '05/11/2026', MSCU1234567: '30/10/2026', ABCD0000000: null });
     check('DATA BAIXA exige login', (await api('GET', '/api/carga/data-baixa?container=TRHU8618191'))._status, 401);
+    {
+      const g = async (u) => { const r = await fetch(`http://127.0.0.1:${PORT}${u}`); return [r.status, (r.headers.get('content-type') || '').split(';')[0]]; };
+      check('servidor entrega o service worker e o manifesto', [await g('/sw.js'), await g('/manifest.webmanifest'), (await g('/package.json'))[0]], [[200, 'text/javascript'], [200, 'application/manifest+json'], 404]);
+    }
     // ---------- notificações no celular: chave VAPID, inscrição, envio cifrado de verdade ----------
     {
       const crypto = require('crypto');
