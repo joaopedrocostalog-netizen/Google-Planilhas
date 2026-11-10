@@ -1,0 +1,1 @@
+Notificações: os exemplos aparecem no próprio aparelho, um a cada 2 segundos (funcionam no computador)

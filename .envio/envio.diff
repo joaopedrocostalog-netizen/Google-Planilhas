@@ -1,0 +1,89 @@
+diff --git a/server/index.js b/server/index.js
+index 2cd8ebf..fc97969 100644
+--- a/server/index.js
++++ b/server/index.js
+@@ -792,8 +792,10 @@ route('POST', '/api/push/teste', async (req) => {
+   const b = await readBody(req, 2000).catch(() => ({}));
+   if (b && b.exemplos) {
+     let n = 0;
+-    for (const [tipo, title, body] of EXEMPLOS_PUSH) n += await push.paraPessoa(user.id, 'teste', { title, body, tag: 'exemplo-' + tipo });
+-    return { enviadas: n, exemplos: EXEMPLOS_PUSH.length };
++    // o aparelho que pediu mostra os exemplos ele mesmo, um de cada vez (menos); os outros aparelhos da pessoa recebem pelo push
++    const menos = typeof b.menos === 'string' ? b.menos : '';
++    for (const [tipo, title, body] of EXEMPLOS_PUSH) n += await push.paraPessoa(user.id, 'teste', { title, body, tag: 'exemplo-' + tipo }, menos);
++    return { enviadas: n, exemplos: EXEMPLOS_PUSH.length, lista: EXEMPLOS_PUSH.map(([tipo, title, body]) => ({ tipo, title, body })) };
+   }
+   const n = await push.paraPessoa(user.id, 'teste', { title: 'Planilhas Costalog', body: 'As notificações estão funcionando neste aparelho.', tag: 'teste' });
+   return { enviadas: n };
+diff --git a/server/push.js b/server/push.js
+index a08496d..4db5d62 100644
+--- a/server/push.js
++++ b/server/push.js
+@@ -98,11 +98,13 @@ function createPush(store, opts) {
+   }
+ 
+   // envia para uma pessoa (todos os aparelhos que querem este tipo); apaga inscrições vencidas (404/410)
+-  async function paraPessoa(userId, tipo, msg) {
++  // menos: endpoint de um aparelho que fica de fora (ele mesmo mostra o aviso, como nos exemplos)
++  async function paraPessoa(userId, tipo, msg, menos) {
+     const all = await todas(), lista = all[userId] || [];
+     if (!lista.length) return 0;
+     let n = 0, mudou = false;
+     for (const s of lista) {
++      if (menos && s.endpoint === menos) continue;
+       const url = s.appUrl ? s.appUrl + (msg.hash || '') : '';
+       try {
+         const st = await enviaUm(s, { title: msg.title, body: msg.body, tag: msg.tag || tipo, url, forte: !!msg.forte || undefined });
+diff --git a/src/notify.js b/src/notify.js
+index 44519d9..621379a 100644
+--- a/src/notify.js
++++ b/src/notify.js
+@@ -69,10 +69,31 @@
+       testar();
+     } catch (e) { App.emit('notify', 'Não foi possível ligar as notificações: ' + e.message); }
+   }
++  // exemplos: este aparelho mostra um de cada vez (a cada 2 s), pelo service worker, igual a um aviso de verdade.
++  // Assim funcionam no computador, onde vários avisos chegando juntos ficam um por cima do outro ou na fila do sistema.
++  // Os outros aparelhos da pessoa recebem os exemplos pelo servidor.
++  let mostrando = false;
++  async function exemplosAqui() {
++    if (mostrando) return App.emit('notify', 'Os exemplos ainda estão aparecendo.');
++    mostrando = true;
++    try {
++      const reg = await registro(), sub = await reg.pushManager.getSubscription();
++      const r = await api('POST', '/api/push/teste', { exemplos: true, menos: sub ? sub.endpoint : '' });
++      const base = reg.scope;
++      App.emit('notify', `${r.lista.length} exemplos vão aparecer neste aparelho, um a cada 2 segundos${r.enviadas ? ' (e nos seus outros aparelhos)' : ''}.`);
++      for (let i = 0; i < r.lista.length; i++) {
++        const x = r.lista[i];
++        if (i) await new Promise((ok) => setTimeout(ok, 2000));
++        await reg.showNotification(x.title, { body: x.body, tag: 'exemplo-' + x.tipo, renotify: true, requireInteraction: true, icon: base + 'assets/apple-touch-icon.png', badge: base + 'assets/apple-touch-icon.png', data: { url: appUrl() } });
++      }
++    } catch (e) { App.emit('notify', 'Não foi possível mostrar os exemplos: ' + e.message); }
++    mostrando = false;
++  }
+   async function testar(exemplos) {
++    if (exemplos) return exemplosAqui();
+     try {
+-      const r = await api('POST', '/api/push/teste', exemplos ? { exemplos: true } : {});
+-      App.emit('notify', !r.enviadas ? 'Nenhum aparelho recebeu o teste.' : exemplos ? `${r.exemplos} exemplos enviados (um de cada aviso). Bloqueie o celular para ver chegando.` : 'Notificação de teste enviada.');
++      const r = await api('POST', '/api/push/teste', {});
++      App.emit('notify', !r.enviadas ? 'Nenhum aparelho recebeu o teste.' : 'Notificação de teste enviada.');
+     }
+     catch (e) { App.emit('notify', e.message); }
+   }
+diff --git a/tests/server.test.js b/tests/server.test.js
+index 38f96e1..05e7205 100644
+--- a/tests/server.test.js
++++ b/tests/server.test.js
+@@ -449,7 +449,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+       await api('POST', '/api/push/inscrever', { subscription: sub, prefs: {}, appUrl: 'https://exemplo.github.io/Google-Planilhas/' }, ana.token);
+       const antes = pushRecebidos.length;
+       const ex = await api('POST', '/api/push/teste', { exemplos: true }, ana.token);
+-      check('exemplo de cada aviso', [ex.exemplos, ex.enviadas, pushRecebidos.length - antes], [7, 7, 7]);
++      check('exemplo de cada aviso', [ex.exemplos, ex.enviadas, pushRecebidos.length - antes, ex.lista.length, ex.lista[0].tipo], [7, 7, 7, 7, 'critico']);
++      const ex2 = await api('POST', '/api/push/teste', { exemplos: true, menos: sub.endpoint }, ana.token);
++      check('exemplos: o aparelho que pediu mostra ele mesmo', [ex2.enviadas, ex2.lista.length, pushRecebidos.length - antes], [0, 7, 7]);
+ 
+       // ---------- rotinas: automações, alertas, demurrage, status automático, histórico ----------
+       const dr = await api('POST', '/api/docs', { title: 'Rotinas', data: { sheets: [
