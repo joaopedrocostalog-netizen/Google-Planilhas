@@ -419,7 +419,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const ins = await api('POST', '/api/push/inscrever', { subscription: sub, prefs: { critico: true, chat: false }, appUrl: 'https://exemplo.github.io/Google-Planilhas/' }, ana.token);
       check('inscrição do aparelho', ins.ok, true);
       const est = await api('POST', '/api/push/estado', { endpoint: sub.endpoint }, ana.token);
-      check('preferências guardadas', [est.inscrito, est.prefs.critico, est.prefs.chat, est.prefs.troca], [true, true, false, true]);
+      check('avisos obrigatórios: todos os tipos ligados', [est.inscrito, est.prefs.critico, est.prefs.chat, est.prefs.prestacking], [true, true, true, true]);
       const t = await api('POST', '/api/push/teste', {}, ana.token);
       check('teste enviado', t.enviadas, 1);
       const rec = pushRecebidos[pushRecebidos.length - 1];
@@ -483,6 +483,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       await api('POST', `/api/docs/${did}/status-auto/pendentes/${pend[0].id}/feito`, {}, ana.token);
       check('status automático: conferido', (await api('GET', `/api/docs/${did}/status-auto/pendentes`, null, ana.token)).length, 0);
       check('histórico do container responde', Array.isArray(await api('POST', `/api/docs/${did}/historico-container`, { container: 'CSQU 305438-3', linhas: [{ sheetId: 'mi', rows: [2] }] }, ana.token)), true);
+      // mensagem de administrador: chega destacada; e ninguém desliga um tipo de aviso (chat: false é ignorado)
+      const caio2 = await api('POST', '/api/login', { email: 'caio@empresa.com', password: 'segredo3' }); // a sessão antiga do Caio foi encerrada acima
+      const subCaio = { endpoint: `http://127.0.0.1:${PUSH_PORT}/push/caio`, keys: sub.keys };
+      await api('POST', '/api/push/inscrever', { subscription: subCaio, prefs: { chat: false }, appUrl: 'https://exemplo.github.io/Google-Planilhas/' }, caio2.token);
+      const n4 = pushRecebidos.length;
+      const adm = await api('POST', '/api/messages', { to: caio.user.id, text: 'Aviso da administração' }, ana.token);
+      const comum = await api('POST', '/api/messages', { to: ana.user.id, text: 'Recebido' }, caio2.token);
+      await new Promise((r) => setTimeout(r, 500));
+      check('mensagem de administrador: destaque e aviso obrigatório', [adm.fromAdmin, comum.fromAdmin, pushRecebidos.length - n4], [true, false, 2]);
+      check('conversa mostra quem é administrador', (await api('GET', `/api/messages/${ana.user.id}`, null, caio2.token)).with.admin, true);
+      await api('POST', '/api/push/cancelar', { endpoint: subCaio.endpoint }, caio2.token);
       await api('POST', '/api/push/cancelar', { endpoint: sub.endpoint }, ana.token);
     }
     // histórico de alterações da planilha inteira (administradores)

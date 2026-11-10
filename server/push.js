@@ -8,7 +8,6 @@ const crypto = require('crypto');
 const b64u = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const unb64u = (s) => Buffer.from(String(s).replace(/-/g, '+').replace(/_/g, '/'), 'base64');
 const TIPOS = ['critico', 'troca', 'chat', 'prestacking', 'alerta', 'demurrage', 'status'];
-const PREFS_PADRAO = { critico: true, troca: true, chat: true, prestacking: false, alerta: true, demurrage: true, status: true };
 
 function createPush(store, opts) {
   const log = (opts && opts.log) || console;
@@ -71,7 +70,8 @@ function createPush(store, opts) {
   // ---------- inscrições ----------
   async function todas() { try { return (await store.getSetting('push_subs')) || {}; } catch (e) { return {}; } }
   async function grava(all) { await store.setSetting('push_subs', all); }
-  const limpaPrefs = (p) => { const o = {}; for (const t of TIPOS) o[t] = p && t in p ? !!p[t] : PREFS_PADRAO[t]; return o; };
+  // as notificações são obrigatórias: todos os tipos ficam ligados, seja o que for que o aparelho mandar ou tiver guardado
+  const limpaPrefs = () => { const o = {}; for (const t of TIPOS) o[t] = true; return o; };
   const validaEndpoint = (e) => { try { const u = new URL(e); return (u.protocol === 'https:' || (process.env.PUSH_PERMITE_HTTP === '1' && u.protocol === 'http:')) && e.length < 1000; } catch (er) { return false; } };
 
   async function inscreve(userId, b) {
@@ -94,7 +94,7 @@ function createPush(store, opts) {
   async function estado(userId, endpoint) {
     const all = await todas(), lista = all[userId] || [];
     const deste = lista.find((x) => x.endpoint === endpoint);
-    return { inscrito: !!deste, prefs: deste ? deste.prefs : limpaPrefs(null), aparelhos: lista.length };
+    return { inscrito: !!deste, prefs: limpaPrefs(), aparelhos: lista.length };
   }
 
   // envia para uma pessoa (todos os aparelhos que querem este tipo); apaga inscrições vencidas (404/410)
@@ -103,10 +103,9 @@ function createPush(store, opts) {
     if (!lista.length) return 0;
     let n = 0, mudou = false;
     for (const s of lista) {
-      if (tipo !== 'teste' && !(s.prefs && s.prefs[tipo])) continue;
       const url = s.appUrl ? s.appUrl + (msg.hash || '') : '';
       try {
-        const st = await enviaUm(s, { title: msg.title, body: msg.body, tag: msg.tag || tipo, url });
+        const st = await enviaUm(s, { title: msg.title, body: msg.body, tag: msg.tag || tipo, url, forte: !!msg.forte || undefined });
         if (st === 404 || st === 410) { s.vencida = true; mudou = true; } else if (st < 300) n++;
         else log.error('[push] resposta', st, new URL(s.endpoint).host);
       } catch (e) { log.error('[push] falha ao enviar:', e.message); }

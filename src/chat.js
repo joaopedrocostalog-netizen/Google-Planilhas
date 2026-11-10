@@ -136,8 +136,8 @@
     const lastMine = [...st.msgs].reverse().find((m) => m.from === me);
     body.innerHTML = `<div class="chat-head"><button class="icon-btn chat-back" title="Voltar" aria-label="Voltar">←</button>${av(u, 32)}
         <span class="chat-who"><b>${esc(u.name)}</b><small>${u.online ? 'Na planilha agora' : u.admin ? 'Administrador' : u.sector ? 'Setor ' + esc(u.sector) : esc(u.email || '')}</small></span></div>
-      <div class="chat-msgs" id="chat-msgs">${loading && !st.msgs.length ? '<p class="sp-hint">Carregando…</p>' : st.msgs.length ? st.msgs.map((m) => `<div class="chat-msg${m.from === me ? ' mine' : ''}" style="${m.from === me ? '' : `--who:${esc(u.color || '#5f6368')}`}">
-          <div class="chat-bubble${stickerOf(m.text) ? ' sticker' : ''}">${stickerOf(m.text) ? stickerHtml(stickerOf(m.text)) : esc(m.text).replace(/\n/g, '<br>')}${m.ref ? `<button class="chat-ref" data-m="${m.id}" title="Ir para a célula">📍 ${esc(m.ref.label || m.ref.addr)}${m.ref.doc && m.ref.doc !== cloud.id && m.ref.title ? ' · ' + esc(m.ref.title) : ''}</button>` : ''}${unlockBtn(m)}</div>
+      <div class="chat-msgs" id="chat-msgs">${loading && !st.msgs.length ? '<p class="sp-hint">Carregando…</p>' : st.msgs.length ? st.msgs.map((m) => `<div class="chat-msg${m.from === me ? ' mine' : ''}${m.from !== me && (m.fromAdmin || u.admin) ? ' adm' : ''}" style="${m.from === me ? '' : `--who:${esc(u.color || '#5f6368')}`}">
+          <div class="chat-bubble${stickerOf(m.text) ? ' sticker' : ''}">${m.from !== me && (m.fromAdmin || u.admin) ? '<span class="chat-adm">Administrador</span>' : ''}${stickerOf(m.text) ? stickerHtml(stickerOf(m.text)) : esc(m.text).replace(/\n/g, '<br>')}${m.ref ? `<button class="chat-ref" data-m="${m.id}" title="Ir para a célula">📍 ${esc(m.ref.label || m.ref.addr)}${m.ref.doc && m.ref.doc !== cloud.id && m.ref.title ? ' · ' + esc(m.ref.title) : ''}</button>` : ''}${unlockBtn(m)}</div>
           <small>${when(m.at)}${m === lastMine && m.read ? ' · Visto' : ''}</small></div>`).join('') : `<p class="sp-hint">Mande a primeira mensagem para ${esc(u.name.split(' ')[0])}. Só vocês dois veem esta conversa.</p>`}</div>
       <div class="chat-compose">
         <div class="chat-refbar" ${st.ref ? '' : 'hidden'}>📍 Vai junto: <b id="chat-reflbl">${esc(refLabel().label)}</b><button class="icon-btn" id="chat-refx" title="Tirar a célula" aria-label="Tirar a célula">${icon('close', 14)}</button></div>
@@ -272,7 +272,8 @@
   function toast(m) {
     if (!toastEl) { toastEl = document.createElement('div'); toastEl.className = 'dm-toast'; document.body.appendChild(toastEl); }
     const u = m.fromUser || { name: 'Alguém' };
-    toastEl.innerHTML = `${av(u, 34)}<div class="dm-txt"><b>${esc(u.name)}</b><span>${esc(preview(m.text).slice(0, 140))}${m.ref ? ' · 📍 ' + esc(m.ref.label || m.ref.addr) : ''}</span></div>
+    toastEl.classList.toggle('adm', !!m.fromAdmin);
+    toastEl.innerHTML = `${av(u, 34)}<div class="dm-txt">${m.fromAdmin ? '<em class="chat-adm">Mensagem do administrador</em>' : ''}<b>${esc(u.name)}</b><span>${esc(preview(m.text).slice(0, 140))}${m.ref ? ' · 📍 ' + esc(m.ref.label || m.ref.addr) : ''}</span></div>
       <button class="btn btn-primary btn-sm">Responder</button><button class="icon-btn dm-x" aria-label="Fechar">${icon('close', 16)}</button>`;
     toastEl.hidden = false;
     toastEl.classList.remove('show'); void toastEl.offsetWidth; toastEl.classList.add('show');
@@ -281,7 +282,8 @@
     toastEl.querySelector('.dm-txt').onclick = go;
     toastEl.querySelector('.dm-x').onclick = () => { toastEl.hidden = true; };
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { toastEl.hidden = true; }, 9000);
+    // mensagem de administrador fica na tela até a pessoa responder ou fechar
+    if (!m.fromAdmin) toastTimer = setTimeout(() => { toastEl.hidden = true; }, 9000);
   }
   App.on('dm', (m) => addMsg(m));
   // pedido de troca atendido (por qualquer pessoa do setor): troca o botão por "efetuado"

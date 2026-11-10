@@ -1,6 +1,7 @@
-// Ferramentas › Notificações no celular: liga as notificações deste aparelho (iPhone com o app na Tela de Início,
-// Android ou computador) e escolhe o que avisar: container crítico, pedido de troca de veículo, mensagens no chat
-// e PRÉ STACKING finalizado. Quem faz a mudança não recebe o próprio aviso.
+// Ferramentas › Notificações: as notificações deste aparelho (iPhone com o app na Tela de Início, Android ou
+// computador) são obrigatórias: quem entra na conta só usa a planilha depois de aceitar. No computador o aviso é do
+// sistema (aparece por cima de qualquer janela, com a planilha na tela ou não). Todos os tipos de aviso ficam ligados
+// (container crítico, troca de veículo, chat, mensagem de administrador…). Quem faz a mudança não recebe o próprio aviso.
 (function (App) {
   'use strict';
   const esc = App.esc;
@@ -44,17 +45,15 @@
     if (sub) { try { st = await api('POST', '/api/push/estado', { endpoint: sub.endpoint }); } catch (e) { /* segue com o padrão */ } }
     const ligado = !!(sub && st.inscrito);
     const body = `<p class="modal-text">${ligado ? '<b>Ligadas neste aparelho.</b> ' : ''}Avise neste aparelho quando:</p>
-      <div class="nt-list">${TIPOS.map(([k, t]) => `<label class="check"><input type="checkbox" data-k="${k}"${st.prefs[k] ? ' checked' : ''}${aviso ? ' disabled' : ''}> ${esc(t)}</label>`).join('')}</div>
-      ${aviso ? `<p class="nt-aviso">${aviso}</p>` : `<p class="sp-hint">Os avisos chegam com o app fechado e o celular bloqueado. Na hora: crítico, troca, chat e PRÉ STACKING finalizado (assim que alguém muda a planilha). Alertas do botão ALERTA: quando alguém estiver com a planilha aberta (as regras são calculadas na tela). Demurrage (a cada 30 min) e status automático (no horário): pelo servidor. Você não recebe aviso das mudanças feitas por você; avisos seguidos do mesmo tipo chegam juntos.</p>`}`;
+      <div class="nt-list"><label class="check"><input type="checkbox" checked disabled> Mensagens de administradores</label>${TIPOS.map(([k, t]) => `<label class="check"><input type="checkbox" data-k="${k}" checked disabled> ${esc(t)}</label>`).join('')}</div>
+      ${aviso ? `<p class="nt-aviso">${aviso}</p>` : `<p class="sp-hint">Os avisos chegam com a planilha fechada, o celular bloqueado ou outra janela na frente (no computador, ficam na tela até você clicar ou fechar). As notificações são obrigatórias: todos os avisos ficam ligados e não dá para desligar. Na hora: crítico, troca, chat e PRÉ STACKING finalizado (assim que alguém muda a planilha). Alertas do botão ALERTA: quando alguém estiver com a planilha aberta (as regras são calculadas na tela). Demurrage (a cada 30 min) e status automático (no horário): pelo servidor. Você não recebe aviso das mudanças feitas por você; avisos seguidos do mesmo tipo chegam juntos.</p>`}`;
     const prefs = (d) => { const o = {}; d.querySelectorAll('[data-k]').forEach((x) => { o[x.dataset.k] = x.checked; }); return o; };
     const botoes = [{ label: 'Fechar' }];
     if (!aviso && ligado) {
-      botoes.unshift({ label: 'Desligar', action: () => { desligar(sub); } });
       botoes.push({ label: 'Enviar teste', action: () => { testar(); return false; } });
       botoes.push({ label: 'Exemplo de cada aviso', action: () => { testar(true); return false; } });
-      botoes.push({ label: 'Salvar', primary: true, action: (d) => { salvar(sub, prefs(d)); } });
     } else if (!aviso) botoes.push({ label: 'Ligar notificações', primary: true, action: (d) => { ligar(prefs(d)); } });
-    App.ui.modal({ title: 'Notificações no celular', width: '460px', body, buttons: botoes });
+    App.ui.modal({ title: 'Notificações', width: '460px', body, buttons: botoes });
   }
 
   async function ligar(prefs) {
@@ -70,14 +69,6 @@
       testar();
     } catch (e) { App.emit('notify', 'Não foi possível ligar as notificações: ' + e.message); }
   }
-  async function salvar(sub, prefs) {
-    try { await api('POST', '/api/push/inscrever', { subscription: sub.toJSON(), prefs, appUrl: appUrl(), aparelho: aparelho() }); App.emit('notify', 'Preferências salvas.'); }
-    catch (e) { App.emit('notify', e.message); }
-  }
-  async function desligar(sub) {
-    try { await api('POST', '/api/push/cancelar', { endpoint: sub.endpoint }); await sub.unsubscribe(); App.emit('notify', 'Notificações desligadas neste aparelho.'); }
-    catch (e) { App.emit('notify', e.message); }
-  }
   async function testar(exemplos) {
     try {
       const r = await api('POST', '/api/push/teste', exemplos ? { exemplos: true } : {});
@@ -85,5 +76,59 @@
     }
     catch (e) { App.emit('notify', e.message); }
   }
-  App.commands.def('notificacoes', 'Notificações no celular', abrir);
+  App.commands.def('notificacoes', 'Notificações', abrir);
+
+  // ---------- Notificações obrigatórias ----------
+  // Quem está na conta precisa aceitar as notificações neste aparelho: enquanto não aceitar, uma tela por cima de tudo
+  // impede o uso da planilha. Com a permissão já dada, a inscrição é refeita sozinha (aparelho novo, inscrição vencida).
+  let gate = null, gateEstado = '', okPara = null, conferindo = false, pulou = false;
+  function fecha() { if (gate) { gate.close(); gate.remove(); gate = null; gateEstado = ''; } }
+  function mostra(estado, detalhe) {
+    if (gate && gateEstado === estado) return;
+    fecha();
+    gateEstado = estado;
+    const T = {
+      pedir: ['Para usar a planilha, ative as notificações deste aparelho. É por elas que chegam os avisos de container crítico, troca de veículo, demurrage e as mensagens dos administradores, mesmo com a planilha fechada ou outra janela na frente.', 'Ativar notificações'],
+      bloqueado: ['As notificações da planilha estão <b>bloqueadas</b> neste navegador. Para liberar: clique no cadeado (ou no ícone ao lado do endereço do site) › <b>Notificações</b> › <b>Permitir</b>. No iPhone: Ajustes › Notificações › Planilhas. Depois clique em "Já liberei".', 'Já liberei'],
+      semsuporte: [iOS && !standalone ? 'No iPhone, as notificações funcionam com a planilha instalada: no Safari, toque em <b>Compartilhar › Adicionar à Tela de Início</b> e abra pelo ícone.' : 'Este navegador não aceita notificações. Abra a planilha no Chrome, Edge ou Firefox atualizado para receber os avisos.', 'Continuar sem notificações neste aparelho'],
+      erro: ['Não foi possível ativar as notificações agora: ' + esc(detalhe || 'erro desconhecido') + '.', 'Tentar de novo'],
+    }[estado];
+    gate = document.createElement('dialog');
+    gate.className = 'modal nt-gate';
+    gate.innerHTML = `<div class="modal-head"><h2>🔔 Notificações obrigatórias</h2></div><div class="modal-body"><p class="modal-text">${T[0]}</p></div>
+      <div class="modal-foot">${estado === 'erro' ? '<button class="btn" data-a="pular">Continuar por agora</button>' : ''}<button class="btn btn-primary" data-a="ok">${T[1]}</button></div>`;
+    gate.addEventListener('cancel', (e) => e.preventDefault()); // Esc não fecha
+    gate.querySelector('[data-a="ok"]').onclick = async () => {
+      if (estado === 'semsuporte') { pulou = true; return fecha(); }
+      if (estado === 'pedir') { try { await Notification.requestPermission(); } catch (e) { /* segue para conferir */ } } // no clique (iPhone exige)
+      gateEstado = ''; confere(true);
+    };
+    const pular = gate.querySelector('[data-a="pular"]');
+    if (pular) pular.onclick = () => { pulou = true; fecha(); };
+    document.body.appendChild(gate);
+    gate.showModal();
+  }
+  async function garanteInscricao() {
+    const r = await registro();
+    let sub = await r.pushManager.getSubscription();
+    if (!sub) { const { chave } = await api('GET', '/api/push/chave'); sub = await r.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: chaveBin(chave) }); }
+    const st = await api('POST', '/api/push/estado', { endpoint: sub.endpoint });
+    if (!st.inscrito) await api('POST', '/api/push/inscrever', { subscription: sub.toJSON(), prefs: st.prefs, appUrl: appUrl(), aparelho: aparelho() });
+  }
+  async function confere(clicou) {
+    const u = App.cloud && App.cloud.user;
+    if (!u) { okPara = null; pulou = false; return fecha(); }
+    if (conferindo) return;
+    if (!suporta) { if (!pulou) mostra('semsuporte'); return; }
+    if (Notification.permission === 'denied') return mostra('bloqueado');
+    if (Notification.permission !== 'granted') return mostra('pedir');
+    if (okPara === u.id) return fecha();
+    if (pulou || (gateEstado === 'erro' && !clicou)) return;
+    conferindo = true;
+    try { await garanteInscricao(); okPara = u.id; fecha(); }
+    catch (e) { mostra('erro', e.message); }
+    conferindo = false;
+  }
+  setInterval(confere, 3000);
+  setTimeout(confere, 800);
 })(window.App);
