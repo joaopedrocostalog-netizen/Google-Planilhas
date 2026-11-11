@@ -16,7 +16,7 @@
 // Tudo acontece dentro da mesma alteração (um Desfazer volta tudo).
 (function (App) {
   'use strict';
-  const E = App.E, doc = App.doc;
+  const E = App.E, doc = App.doc, esc = App.esc;
   const notify = (m) => setTimeout(() => App.emit('notify', m), 60);
   const norm = (s) => String(s === null || s === undefined ? '' : s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase()
     .replace(/\b(DE|DA|DO|DAS|DOS)\b/g, ' ').replace(/[^A-Z0-9]/g, '');
@@ -202,6 +202,27 @@
     return null;
   }
 
+  // ---------- AGENDAMENTO do PRÉ STACKING: sempre dd/mm/aaaa hh:mm ----------
+  const p2 = (n) => String(n).padStart(2, '0');
+  // texto dd/mm/aaaa hh:mm a partir de um valor (data/hora da planilha ou texto); null se não for data e hora
+  function agFmt(v, aceitaSoData) {
+    if (v === null || v === undefined || v === '') return '';
+    if (typeof v === 'number' && v > 20000 && v < 80000) { const d = E.serialToDate(v); return `${p2(d.getUTCDate())}/${p2(d.getUTCMonth() + 1)}/${d.getUTCFullYear()} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`; }
+    const t = String(v).trim();
+    let m = /^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2})$/.exec(t);
+    if (!m && aceitaSoData) { const m2 = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2}))?/.exec(t); if (m2) m = [0, p2(m2[1]), p2(m2[2]), m2[3], p2(m2[4] || 0), m2[5] || '00']; }
+    if (!m) return null;
+    const dia = +m[1], mes = +m[2], h = +m[4], mi = +m[5];
+    if (mes < 1 || mes > 12 || dia < 1 || dia > new Date(+m[3], mes, 0).getDate() || h > 23 || mi > 59) return null;
+    return `${m[1]}/${m[2]}/${m[3]} ${m[4]}:${m[5]}`;
+  }
+  function gravaAg(sh, r, c, txt) {
+    App.setRaw(sh, r, c, txt);
+    if (txt) App.setStyle(sh, r, c, (s) => { s.nf = 'dd/mm/yyyy hh:mm'; });
+  }
+  const STATUS_CANCELADO = 'CANCELADO';
+  const cancelada = (ps, map, r) => norm(rawAt(ps, r, findCol(map, A.STATUS))) === 'CANCELADO';
+
   // ---------- Marcar P.S. CH / P.S. VZ ----------
   function levar(sh, kind, map, r, k, cbCol, msgs) {
     const ps = psSheet(k);
@@ -215,7 +236,9 @@
     if (!ps) { desfaz(`A aba ${PS_NAME[k]} não existe ou não está liberada para você. A caixa foi desmarcada.`); return true; }
     const cell = sh.cells[cbAddr];
     // já levado antes (e a linha ainda está lá): não duplica
-    if (cell.psl && psRowsOf(ps, cell.psl).length) { msgs.push(`Linha ${r}: já está no ${PS_NAME[k]} (linha ${psRowsOf(ps, cell.psl).join(' e ')}).`); return false; }
+    const ativas = cell.psl ? psRowsOf(ps, cell.psl).filter((x) => !cancelada(ps, colMap(ps), x)) : [];
+    if (ativas.length) { msgs.push(`Linha ${r}: já está no ${PS_NAME[k]} (linha ${ativas.join(' e ')}).`); return false; }
+    if (cell.psl && psRowsOf(ps, cell.psl).length) cell.psl = null; // as anteriores foram canceladas: cria linhas novas
     const pm = colMap(ps);
     const cliente = readCell(sh, r, findCol(map, A.CLIENTE));
     // linhas a criar: 0 = colunas normais; clientes da regra (só no vazio): 1 e, se tiver 2 - preenchido, 2
@@ -233,7 +256,8 @@
         const tc = findCol(pm, A[f[0]]);
         if (!tc) continue;
         const val = readCell(sh, r, srcCol(map, kind, f, n));
-        if (val) writeCell(ps, row, tc, val);
+        if (val && f[0] === 'AGENDAMENTO') { const sc = srcCol(map, kind, f, n); const ag = agFmt(App.value(doc.sheets.indexOf(sh), r, sc), true); if (ag) gravaAg(ps, row, tc, ag); else msgs.push(`AGENDAMENTO "${val.v}" não é data e hora (dd/mm/aaaa hh:mm): ficou em branco no ${PS_NAME[k]}.`); }
+        else if (val) writeCell(ps, row, tc, val);
         if (f[0] === 'CONTAINER' && val) containers.push(val.v);
       }
       const oc = findCol(pm, A.OPERACAO);
@@ -357,7 +381,8 @@
           if (!alvo) continue;
           if (!canEdit(alvo.sh, alvo.r, alvo.c)) { sem.add(`${alvo.sh.name} ${E.numToCol ? E.numToCol(alvo.c) : alvo.c}`); continue; }
           if (sameRaw(rawAt(alvo.sh, alvo.r, alvo.c), x.val ? x.val.v : '')) continue;
-          writeCell(alvo.sh, alvo.r, alvo.c, x.val);
+          if (alvo.ag) { const ok = agFmt(x.val ? x.val.v : '', true); if (ok === null) { sem.add(`AGENDAMENTO (formato dd/mm/aaaa hh:mm)`); continue; } gravaAg(alvo.sh, alvo.r, alvo.c, ok); }
+          else writeCell(alvo.sh, alvo.r, alvo.c, x.val);
           feitos++;
           if (alvo.baixa) baixaForcar.set(alvo.sh.id + ':' + alvo.r, true);
         }
@@ -415,6 +440,36 @@
         rows.push(p.row);
       }
       for (const r of rows.sort((x, y) => x - y)) { levadas.add(k + r); if (levar(sh, kind, map, r, k, cbCol, msgs)) changed = true; }
+      // caixa DESMARCADA: com o PRÉ STACKING FINALIZADO não deixa; senão a linha do PRÉ STACKING fica CANCELADO
+      for (const a in fc) {
+        const p = E.parseAddr(a);
+        if (!p || p.col !== cbCol || p.row <= headerRow(sh)) continue;
+        const after = sh.cells[a];
+        if (!ic[a] || !cbOn(sh, p.row, cbCol, ic[a]) || cbOn(sh, p.row, cbCol, after)) continue;
+        const id = ic[a].psl;
+        if (!id || (after && after.psl && after.psl !== id)) continue;
+        if (contCol) { const ca = E.addrToStr(p.row, contCol); if (ca in fc && !sameRaw(fc[ca] && fc[ca].v, ic[ca] && ic[ca].v)) continue; }
+        const ps = psSheet(k);
+        if (!ps) continue;
+        const pm = colMap(ps), linhas = psRowsOf(ps, id).filter((x) => !cancelada(ps, pm, x));
+        if (!linhas.length) continue;
+        if (linhas.some((x) => rowConcluida(ps, pm, x))) {
+          const x = sh.cells[a] || (sh.cells[a] = { v: '' });
+          x.v = App.cbValues(App.dvAt(sh, p.row, cbCol)).on; x.psl = id;
+          msgs.push(`Linha ${p.row}: o ${PS_NAME[k]} já está FINALIZADO — não dá para tirar a marca.`);
+          changed = true;
+          continue;
+        }
+        const quem = `${Date.now()}|${(App.cloud && App.cloud.me && App.cloud.me.name) || (App.cloud && App.cloud.user && App.cloud.user.name) || ''}|${sh.name} linha ${p.row}`;
+        const sc = findCol(pm, A.STATUS), maxC = Math.max(...[...pm.values()], App.usedRange(ps).maxC || 1);
+        for (const pr of linhas) {
+          if (sc) App.setRaw(ps, pr, sc, statusText(ps, pr, sc, STATUS_CANCELADO));
+          // a linha inteira pisca em vermelho até alguém confirmar que viu (marca pscan em todas as células)
+          for (let c = 1; c <= maxC; c++) { const ad = E.addrToStr(pr, c); (ps.cells[ad] || (ps.cells[ad] = { v: '' })).pscan = quem; }
+        }
+        msgs.push(`${PS_NAME[k]} linha ${linhas.join(' e ')}: CANCELADO (desmarcado no ${sh.name}, linha ${p.row}).`);
+        changed = true;
+      }
     }
     // campos levados mudados no MAPA (linha já no PRÉ STACKING): pergunta antes de atualizar o PRÉ STACKING
     const porLinha = new Map();
@@ -452,7 +507,7 @@
                 if (!p2) return null;
                 const m2 = colMap(p2);
                 const row = psRowsOf(p2, id).find((x) => { const rl = rowLink(p2, m2, x); return rl && rl.n === n; });
-                return row ? { sh: p2, r: row, c: findCol(m2, A[tf]), baixa: k === 'vz' && tf === 'CONTAINER' } : null;
+                return row ? { sh: p2, r: row, c: findCol(m2, A[tf]), baixa: k === 'vz' && tf === 'CONTAINER', ag: tf === 'AGENDAMENTO' } : null;
               },
             });
           }
@@ -469,6 +524,20 @@
     const back = new Map();
     for (const f of FIELDS[k]) { const c = findCol(pm, A[f[0]]); if (c) back.set(c, f); }
     const dataCol = k === 'vz' ? findCol(pm, A.DATA) : null;
+    // AGENDAMENTO: só dd/mm/aaaa hh:mm; outro formato volta como estava
+    const agCol = findCol(pm, A.AGENDAMENTO);
+    if (agCol) for (const a in fc) {
+      const p = E.parseAddr(a);
+      if (!p || p.col !== agCol || p.row <= hr) continue;
+      const x = ps.cells[a], v = x ? x.v : '';
+      if (v === '' || v === null || v === undefined || sameRaw(v, ic[a] && ic[a].v)) continue;
+      const ok = agFmt(typeof v === 'string' && v[0] === '=' ? null : v);
+      if (ok === null) {
+        if (ic[a]) ps.cells[a] = JSON.parse(JSON.stringify(ic[a])); else delete ps.cells[a];
+        msgs.push(`AGENDAMENTO aceita só data e hora no formato dd/mm/aaaa hh:mm (ex.: 06/11/2026 14:30). "${v}" não foi aceito.`);
+        changed = true;
+      } else if (ok !== v || !(x.s && x.s.nf === 'dd/mm/yyyy hh:mm')) { gravaAg(ps, p.row, agCol, ok); changed = true; }
+    }
     const rows = new Map();
     for (const a in fc) {
       const p = E.parseAddr(a);
@@ -507,6 +576,8 @@
         if (sameRaw(fc[a] && fc[a].v, ic[a] && ic[a].v)) continue;
         let target = null, nome = '';
         let dtEnt = false;
+        // o CONTAINER só muda do MAPA para o PRÉ STACKING (nunca o contrário)
+        if (back.has(c) && back.get(c)[0] === 'CONTAINER') continue;
         if (back.has(c)) target = srcCol(map, kind, back.get(c), link.n);
         else if (c === dataCol && kind === 'impo') { target = findCol(map, A.DTENTVZ); dtEnt = true; }
         if (!target) continue;
@@ -576,6 +647,42 @@
     });
     setTimeout(() => { const t = document.getElementById('ps-regra'); if (t) t.addEventListener('keydown', (ev) => ev.stopPropagation()); }, 0);
   });
+
+  // ---------- PRÉ STACKING cancelado: confirmar que viu (tira o piscar da linha; fica no histórico de cada célula) ----------
+  function linhaCancelada() {
+    const sh = App.sheet(), S = App.sel;
+    if (!sh || !S || !kindOfPS(sh)) return null;
+    const p = App.realCell ? App.realCell(S.ar, S.ac) : { r: S.ar, c: S.ac };
+    if (!p) return null;
+    const x = sh.cells[E.addrToStr(p.r, p.c)];
+    return x && x.pscan ? { sh, r: p.r, info: String(x.pscan).split('|') } : null;
+  }
+  function confirmaVisto(l) {
+    App.change('Cancelamento do PRÉ STACKING visto', () => {
+      for (const a in l.sh.cells) { const q = E.parseAddr(a); if (q && q.row === l.r && l.sh.cells[a].pscan) { delete l.sh.cells[a].pscan; App.cleanup(l.sh, a); } }
+    });
+    if (App.logAuto) App.logAuto('PRÉ STACKING', `Cancelamento visto: ${l.sh.name} linha ${l.r}`, l.sh.name);
+    App.emit('notify', `Cancelamento da linha ${l.r} confirmado. Fica registrado no histórico das células.`);
+  }
+  const jaPerguntou = new Set();
+  App.on('selection', () => {
+    const l = linhaCancelada();
+    if (!l || App.editing && App.editing()) return;
+    const k = l.sh.id + ':' + l.r + ':' + l.info[0];
+    if (jaPerguntou.has(k)) return;
+    jaPerguntou.add(k);
+    const quando = l.info[0] ? new Date(+l.info[0]).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '';
+    setTimeout(() => App.ui.modal({
+      title: 'PRÉ STACKING cancelado', width: '480px',
+      body: `<p class="modal-text">A marca de PRÉ STACKING desta unidade foi <b>retirada</b>${l.info[2] ? ` em <b>${esc(l.info[2])}</b>` : ''}${l.info[1] ? ` por <b>${esc(l.info[1])}</b>` : ''}${quando ? ` (${esc(quando)})` : ''}. O STATUS ficou <b>CANCELADO</b>.</p><p class="modal-text">A linha ${l.r} pisca em vermelho até alguém confirmar que viu.</p>`,
+      buttons: [{ label: 'Depois' }, { label: 'Confirmar que vi', primary: true, action: () => confirmaVisto(l) }],
+    }), 60);
+  });
+  App.on('contextItems', ({ hit, items }) => {
+    if (hit.area !== 'cell' || !linhaCancelada()) return;
+    items.unshift({ label: 'Confirmar cancelamento do PRÉ STACKING (visto)', cmd: 'psCancelVisto' }, '-');
+  });
+  App.commands.def('psCancelVisto', 'Confirmar cancelamento do PRÉ STACKING', () => { const l = linhaCancelada(); if (l) confirmaVisto(l); });
 
   App.preStackingHook = (fwd, inv) => { try { return hook(fwd, inv); } catch (e) { console.error(e); App.emit('notify', 'PRÉ STACKING: não foi possível concluir a atualização automática.'); return false; } };
   App.preStacking = { isRuleClient, colMap, headerRow, lastInfoRow, findCol, A, linkOf, kindOfMapa, kindOfPS, psSheet, norm, rowConcluida };

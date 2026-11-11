@@ -4,6 +4,15 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '11/11/2026', title: 'Atalhos, AGENDAMENTO do PRÉ STACKING, cancelamento, escala e cidades', items: [
+      ['Atalhos', 'Ctrl+Alt+V (colar só a formatação) e Ctrl+Shift+7 (borda externa) voltaram a funcionar. Todos os atalhos de Ajuda › Atalhos do teclado foram conferidos.'],
+      ['AGENDAMENTO', 'No PRÉ STACKING CHEIO e VAZIO, a coluna AGENDAMENTO só aceita data e hora no formato dd/mm/aaaa hh:mm (ex.: 06/11/2026 14:30). Outro formato volta como estava, com aviso.'],
+      ['Cancelamento', 'No MAPA, a marca P.S. CH / P.S. VZ não pode ser retirada se o PRÉ STACKING já estiver FINALIZADO. Se ainda não estiver, o STATUS do PRÉ STACKING vira CANCELADO e a linha pisca em vermelho até alguém confirmar que viu (a confirmação fica no histórico de cada célula).'],
+      ['Escala no PRÉ STACKING', 'Escalar veículo no PRÉ STACKING CHEIO e VAZIO usa a BASE GERAL (CAVALO, CARRETA, MOTORISTA, CPF, CNH), com as mesmas regras e cores da escala do MAPA. O status da placa vem da coluna OBS (também no balão do cavalo).'],
+      ['Cidades', 'Terminais e depots mostram a cidade ao clicar e na lista de seleção também no MAPA EXPO (ENTREGA e RETIRADA) e no TERMINAL do PRÉ STACKING CHEIO e VAZIO.'],
+      ['CONTAINER', 'O CONTAINER só muda do MAPA para o PRÉ STACKING; mudar no PRÉ STACKING não altera o MAPA.'],
+      ['Modo escuro', 'As células da planilha continuam claras no modo escuro (só menus, barras e janelas ficam escuros).'],
+    ] },
     { date: '11/11/2026', title: 'Botão do modo escuro no cabeçalho', items: [
       ['Modo escuro', 'O botão de lua no cabeçalho liga o modo escuro; o de sol volta ao claro. Fica guardado neste aparelho. O modo Automático (segue o aparelho) continua em Ver › Tema.'],
     ] },

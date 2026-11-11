@@ -979,7 +979,7 @@
     // Alt+/ (pesquisar nos menus): no teclado brasileiro (ABNT2) a barra fica na tecla IntlRo ou no teclado numérico
     const slash = e.key === '/' || e.key === '?' || e.code === 'Slash' || e.code === 'IntlRo' || e.code === 'NumpadDivide';
     if (e.altKey && !ctrl && slash) { e.preventDefault(); App.run('menuSearch'); return; }
-    if (MAP[code] && cmds[MAP[code]]) {
+    if (MAP[code] && (cmds[MAP[code]] || MAP[code] === 'borderOuter')) {
       e.preventDefault();
       if (MAP[code] === 'borderOuter') App.run('border', { type: 'outer' });
       else App.run(MAP[code]);
@@ -987,7 +987,8 @@
     }
     if (code === 'Ctrl+KeyS') { e.preventDefault(); App.save(); notify('Todas as alterações foram salvas no navegador.'); return true; }
     if (code === 'Ctrl+Shift+KeyV') { App._pasteMode = 'values'; return false; }
-    if (code === 'Ctrl+Alt+KeyV') { App._pasteMode = 'format'; return false; }
+    // Ctrl+Alt+V: o navegador não dispara o "colar" com Alt, então a planilha cola a formatação por conta própria
+    if (code === 'Ctrl+Alt+KeyV') { e.preventDefault(); App.run('pasteFormat'); return true; }
     switch (k) {
       case 'ArrowUp': case 'ArrowDown': case 'ArrowLeft': case 'ArrowRight': {
         e.preventDefault();

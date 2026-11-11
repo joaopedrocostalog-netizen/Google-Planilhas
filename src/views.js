@@ -289,7 +289,7 @@
     'fmt_number', 'fmt_time', 'fmt_date', 'fmt_currency', 'fmt_percent', 'fmt_scientific', 'paintFormat', 'alignLeft', 'alignCenter', 'alignRight', 'valignTop', 'valignMiddle', 'valignBottom',
     'wrapOverflow', 'wrapWrap', 'wrapClip', 'insertDate', 'insertTime', 'insertDateTime', 'markCritical', 'cellHistory', 'zoom', 'toggleGridlines', 'toggleFormulas', 'toggleFormulaBar',
     'toggleMenus', 'fullscreen', 'selectAll', 'selectColumn', 'selectRow', 'switchSheet', 'nextSheet', 'prevSheet', 'openCloud', 'share', 'login', 'shortcuts', 'about',
-    'functionList', 'menuSearch', 'createFilterView', 'createGroupedView', 'closeFilterView', 'clearViewFilters', 'toggleOldRows', 'myView', 'viewAs', 'saveFilterView', 'manageSavedViews', 'openSavedViews', 'cellHistoryAll', 'alerts', 'alertRules', 'updates', 'versionHistory', 'dssLookup', 'messages', 'insertProcess', 'informCriticals', 'sendStatus', 'sheetColor', 'escalarVeiculo', 'confirmarEscala', 'bloquearVeiculo', 'destravarVeiculo', 'pedirTroca', 'painelDia', 'indicadores', 'tema', 'notificacoes', 'containerHistorico']);
+    'functionList', 'menuSearch', 'createFilterView', 'createGroupedView', 'closeFilterView', 'clearViewFilters', 'toggleOldRows', 'myView', 'viewAs', 'saveFilterView', 'manageSavedViews', 'openSavedViews', 'cellHistoryAll', 'alerts', 'alertRules', 'updates', 'versionHistory', 'dssLookup', 'messages', 'insertProcess', 'informCriticals', 'sendStatus', 'sheetColor', 'escalarVeiculo', 'confirmarEscala', 'bloquearVeiculo', 'destravarVeiculo', 'pedirTroca', 'painelDia', 'indicadores', 'tema', 'notificacoes', 'containerHistorico', 'psCancelVisto']);
   function lockInView() {
     for (const id in App.cmds) {
       const c = App.cmds[id];

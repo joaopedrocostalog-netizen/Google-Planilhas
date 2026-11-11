@@ -31,7 +31,7 @@
 
   // Colunas da escala de veículos pelo nome (nome dado pelo administrador ou texto da linha 1)
   const nrm = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\b(DE|DA|DO|DAS|DOS)\b/g, ' ').replace(/[^A-Z0-9]/g, '');
-  const ESC_FIELDS = ['CAVALO', 'CARRETA', 'MOTORISTA', 'CPF', 'CONTATO'];
+  const ESC_FIELDS = ['CAVALO', 'CARRETA', 'MOTORISTA', 'CPF', 'CONTATO', 'CNH'];
   const escCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
   // na tela, a planilha avisa quando muda (planilhaMudou); enquanto não mudar, o resultado guardado vale e não é
   // preciso remontar o nome de até 400 colunas a cada chamada (isso acontecia para cada célula desenhada).
@@ -43,8 +43,11 @@
     if (avisa) { const h = escCache && escCache.get(sheet); if (h && h.gen === geracao) return h.cols; }
     const names = sheet.colNames || {}, cells = sheet.cells || {};
     const maxC = Math.min(Math.max(sheet.cols || 26, ...Object.keys(names).map(Number)), 400);
+    // linha do cabeçalho: a 1ª (até a 15ª) que tem CAVALO (abas com título em cima, como o PRÉ STACKING)
+    let hr = 1;
+    for (const a in cells) { const m = /^([A-Z]+)(\d+)$/.exec(a); if (m && +m[2] <= 15 && +m[2] > 0 && nrm(cells[a].v) === 'CAVALO' && (hr === 1 || +m[2] < hr)) hr = +m[2]; }
     const labels = [];
-    for (let c = 1; c <= maxC; c++) labels.push(names[c] || (cells[colName(c) + '1'] && cells[colName(c) + '1'].v) || '');
+    for (let c = 1; c <= maxC; c++) labels.push(names[c] || (cells[colName(c) + hr] && cells[colName(c) + hr].v) || '');
     const key = labels.join('\u0001');
     const hit = escCache && escCache.get(sheet);
     if (hit && hit.key === key) { hit.gen = geracao; return hit.cols; }
@@ -230,7 +233,7 @@
   const EXEC_STYLE = ['nf', 'ff', 'fs', 'b', 'i', 'st', 'color', 'bg'];
   // Célula resultante quando um setor altera "before" para "after": só o valor e a formatação liberada mudam
   // marcas de linha que os setores podem mudar (quem pode cada uma é conferido em escalaCheck); psl = vínculo do PRÉ STACKING
-  const FLAG_KEYS = ['crit', 'esc', 'lock', 'swap', 'city', 'rodo', 'sc', 'spot', 'psl', 'psf'];
+  const FLAG_KEYS = ['crit', 'esc', 'lock', 'swap', 'city', 'rodo', 'sc', 'spot', 'psl', 'psf', 'pscan'];
   function execMerge(before, after) {
     const out = {}, s = {};
     if (before) for (const k in before) if (k !== 'v' && k !== 's' && !FLAG_KEYS.includes(k) && k[0] !== '_') out[k] = before[k];

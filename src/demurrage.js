@@ -33,7 +33,8 @@
     if (!c || r <= c.hr) return null;
     if (!String(raw(sh, si, r, c.cont) || '').trim()) return null;
     if (String(raw(sh, si, r, c.data) || '').trim()) return null;
-    if (P().norm(raw(sh, si, r, c.status)).includes('FINALIZ')) return null;
+    const stt = P().norm(raw(sh, si, r, c.status));
+    if (stt.includes('FINALIZ') || stt === 'CANCELADO') return null;
     const b = serial(raw(sh, si, r, c.baixa)), d = Number(String(raw(sh, si, r, c.dem) || '').replace(',', '.'));
     if (b === null || !(d > 0)) return null;
     const prazo = Math.floor(b) + d, falta = prazo - hoje();

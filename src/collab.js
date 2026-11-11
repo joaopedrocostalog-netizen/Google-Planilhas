@@ -1187,7 +1187,7 @@
   // (formatação, regras, estrutura, filtros, congelar, tamanho de linhas e colunas) é dos administradores,
   // e essas opções nem aparecem para eles.
   const EXEC_OK = new Set(['insertProcess', 'informCriticals', 'sendStatus', 'printDoc', 'tagSC', 'tagSPOT', 'escalarVeiculo', 'confirmarEscala', 'bloquearVeiculo', 'destravarVeiculo', 'pedirTroca', 'messages', 'undo', 'redo', 'cut', 'copy', 'paste', 'pasteValues', 'find', 'findReplace', 'clearValues',
-    'zoom', 'painelDia', 'indicadores', 'tema', 'notificacoes', 'containerHistorico', 'toggleFormulaBar', 'toggleMenus', 'fullscreen', 'toggleGridlines', 'toggleFormulas', 'switchSheet', 'nextSheet', 'prevSheet',
+    'zoom', 'painelDia', 'indicadores', 'tema', 'notificacoes', 'containerHistorico', 'psCancelVisto', 'toggleFormulaBar', 'toggleMenus', 'fullscreen', 'toggleGridlines', 'toggleFormulas', 'switchSheet', 'nextSheet', 'prevSheet',
     'selectAll', 'selectColumn', 'selectRow', 'insertDate', 'insertTime', 'insertDateTime', 'fillDown', 'fillRight',
     'print', 'download', 'openCloud', 'share', 'login', 'cellHistory', 'cellHistoryAll', 'shortcuts', 'about', 'updates', 'functionList', 'columnStats',
     // barra de ferramentas liberada para os setores
