@@ -20,8 +20,10 @@
     hdrSelBg: '#4a1418', hdrSelText: '#ff9aa1', freeze: '#4a4a4a', chipBg: '#3a3a3a', link: '#ff8a92', note: '#e8eaed',
   });
   const escuro = () => document.documentElement.classList.contains('dark');
-  // as células da planilha ficam sempre claras (o modo escuro vale só para menus, barras e janelas)
-  const temaCores = () => Object.assign(C, CLARO);
+  // as células ficam sempre claras; no modo escuro só os números das linhas, as letras das colunas e a faixa
+  // dos agrupamentos acompanham o tema
+  const HDR_ESC = { hdrBg: ESCURO.hdrBg, hdrText: ESCURO.hdrText, hdrLine: ESCURO.hdrLine, hdrSelBg: ESCURO.hdrSelBg, hdrSelText: ESCURO.hdrSelText, gutBg: '#1b1b1b' };
+  const temaCores = () => Object.assign(C, CLARO, { gutBg: '#ffffff' }, escuro() ? HDR_ESC : {});
   temaCores();
   // texto escuro sobre o fundo escuro da célula: troca pelo claro (luminância baixa)
   const escuroDemais = (hex) => { const m = /^#?([0-9a-f]{6})$/i.exec(hex || ''); if (!m) return false; const n = parseInt(m[1], 16); return ((n >> 16) * 299 + ((n >> 8) & 255) * 587 + (n & 255) * 114) / 1000 < 110; };
@@ -242,7 +244,7 @@
     if (window.Perms && window.Perms.escalaCols) {
       if (st.escFor !== sh) { st.escFor = sh; st.escCols = window.Perms.escalaCols(sh); }
       const ec = st.escCols;
-      if (ec.CAVALO && (c === ec.CAVALO || c === ec.CARRETA || c === ec.MOTORISTA || c === ec.CPF || c === ec.CONTATO)) {
+      if (ec.CAVALO && (c === ec.CAVALO || c === ec.CARRETA || c === ec.MOTORISTA || c === ec.CPF || c === ec.CONTATO || c === ec.CNH)) {
         const cav = sh.cells[E.addrToStr(r, ec.CAVALO)];
         if (cav && (cav.esc || cav.lock || cav.swap)) {
           const vehicle = c === ec.CAVALO || c === ec.CARRETA || c === ec.MOTORISTA;
@@ -463,7 +465,7 @@
     if (!st.gut) return;
     const g = st.gut, s = Math.round(12 * z);
     ctx.save();
-    ctx.fillStyle = C.bg; ctx.fillRect(hw, 0, W - hw, g);
+    ctx.fillStyle = C.gutBg || C.bg; ctx.fillRect(hw, 0, W - hw, g);
     ctx.fillStyle = C.hdrLine; ctx.fillRect(hw, g - 1, W - hw, 1);
     ctx.font = `${(10.5 * z).toFixed(1)}px Arial, sans-serif`; ctx.textBaseline = 'middle';
     const regions = [{ clipX: hw, clipW: st.FW, frozen: true }, { clipX: hw + st.FW, clipW: W - hw - st.FW, frozen: false }];

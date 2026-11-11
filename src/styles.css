@@ -1468,3 +1468,5 @@ html.dark .hc-de { color: #f87171; } html.dark .hc-para { color: #4ade80; }
 html.dark .chat-msg.adm .chat-bubble { background: #2a1113; border-color: #7a1c22; color: var(--ink); }
 html.dark .chat-adm { color: #ff6b74; }
 html.dark input.doc-title:not(:focus) { background: transparent; border-color: transparent; color: #fff; }
+.sp-ttl { display: flex; flex-direction: column; min-width: 0; }
+.sp-page { color: var(--text-3); font-size: 12px; }

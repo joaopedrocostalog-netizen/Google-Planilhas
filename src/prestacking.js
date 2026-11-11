@@ -397,6 +397,14 @@
           if (!alvo) continue;
           if (!canEdit(alvo.sh, alvo.r, alvo.c)) { sem.add(`${alvo.sh.name} ${E.numToCol ? E.numToCol(alvo.c) : alvo.c}`); continue; }
           if (sameRaw(rawAt(alvo.sh, alvo.r, alvo.c), x.val ? x.val.v : '')) continue;
+          if (alvo.desmarcar) {
+            const x = alvo.sh.cells[E.addrToStr(alvo.r, alvo.c)];
+            if (x) { x.v = App.cbValues(App.dvAt(alvo.sh, alvo.r, alvo.c)).off; delete x.psl; App.cleanup(alvo.sh, E.addrToStr(alvo.r, alvo.c)); feitos++; }
+            // a linha apagada do PRÉ STACKING perde o vínculo (não vira CANCELADO: ela não existe mais)
+            const pmx = colMap(alvo.ps);
+            for (const cx of [findCol(pmx, A.CONTAINER), findCol(pmx, A.OPERACAO)]) { if (!cx) continue; const ad = E.addrToStr(alvo.psRow, cx); const y = alvo.ps.cells[ad]; if (y) { delete y.psl; delete y.psf; App.cleanup(alvo.ps, ad); } }
+            continue;
+          }
           if (alvo.ag) { const ok = agFmt(x.val ? x.val.v : '', true); if (ok === null) { sem.add(`AGENDAMENTO (formato dd/mm/aaaa hh:mm)`); continue; } gravaAg(alvo.sh, alvo.r, alvo.c, ok); }
           else writeCell(alvo.sh, alvo.r, alvo.c, x.val);
           feitos++;
@@ -408,6 +416,99 @@
     if (feitos && App.logAuto) App.logAuto('Confirmação MAPA ↔ PRÉ STACKING', `Confirmado: ${lista.map((x) => x.desc).slice(0, 6).join('; ')}`);
     App.emit('notify', (feitos ? `${feitos} ${feitos === 1 ? 'campo atualizado' : 'campos atualizados'}.` : 'Nada a atualizar.') + (sem.size ? ` Sem permissão: ${[...sem].join(', ')}.` : ''));
   }
+
+  // ---------- Linhas vinculadas do PRÉ STACKING: apagar, sobrescrever (colar, Ctrl+D, arrastar) ----------
+  // Uma linha ligada ao MAPA não some sem confirmar: a mudança volta na hora e a planilha pergunta. Com Sim, a linha
+  // recebe o novo conteúdo e a marca P.S. no MAPA é retirada; com Não, fica como estava. Vínculo copiado para outra
+  // linha (Ctrl+D numa linha vinculada) é retirado da cópia.
+  const chaveLink = (l) => (l ? l.id + '|' + l.n : null);
+  const linkCells = (ps, pm) => [findCol(pm, A.CONTAINER), findCol(pm, A.OPERACAO)].filter(Boolean);
+  function protegeLinhas(ps, k, fc, ic, msgs) {
+    const pm = colMap(ps), hr = headerRow(ps);
+    const antes = Object.assign({}, ps.cells, ic);
+    const tocadas = new Set();
+    for (const a in fc) { const p = E.parseAddr(a); if (p && p.row > hr) tocadas.add(p.row); }
+    if (!tocadas.size) return false;
+    // onde cada vínculo está agora
+    const agora = new Map();
+    for (const c of linkCells(ps, pm)) for (const a in ps.cells) {
+      const p = E.parseAddr(a);
+      if (!p || p.col !== c || p.row <= hr) continue;
+      const l = linkOf(ps.cells[a].psl);
+      if (l) { const k2 = chaveLink(l); if (!agora.has(k2)) agora.set(k2, new Set()); agora.get(k2).add(p.row); }
+    }
+    const pend = [];
+    let mexeu = false;
+    for (const r of tocadas) {
+      const lb = rowLink(ps, pm, r, antes);
+      if (!lb) continue;
+      // Delete: o vínculo fica na célula vazia, mas a unidade sumiu (sem CONTAINER e sem CLIENTE)
+      const cc0 = findCol(pm, A.CONTAINER), cl0 = findCol(pm, A.CLIENTE);
+      const tinha = hasText((antes[E.addrToStr(r, cc0)] || {}).v), ficou = hasText(rawAt(ps, r, cc0)) || (cl0 && hasText(rawAt(ps, r, cl0)));
+      const esvaziou = tinha && !ficou;
+      if (!esvaziou && agora.has(chaveLink(lb))) continue; // sem perda: o vínculo só mudou de linha (ordenar)
+      // a unidade desta linha sumiu (apagada ou sobrescrita): volta como estava e pergunta
+      const depois = {}, cont = String(rawAt(ps, r, findCol(pm, A.CONTAINER)) || '');
+      for (const a in fc) {
+        const p = E.parseAddr(a);
+        if (!p || p.row !== r) continue;
+        depois[a] = ps.cells[a] ? JSON.parse(JSON.stringify(ps.cells[a])) : null;
+        if (ic[a]) ps.cells[a] = JSON.parse(JSON.stringify(ic[a])); else delete ps.cells[a];
+      }
+      const contAntes = String(((antes[E.addrToStr(r, findCol(pm, A.CONTAINER))] || {}).v) || '');
+      pend.push({ r, depois, link: lb, apagou: !String(cont).trim(), cont: contAntes });
+      linhasApagadas.add(ps.id + ':' + r);
+      mexeu = true;
+    }
+    // vínculo copiado para outra linha: a cópia fica sem vínculo
+    for (const r of tocadas) {
+      const la = rowLink(ps, pm, r), lb = rowLink(ps, pm, r, antes);
+      if (!la || chaveLink(la) === chaveLink(lb)) continue;
+      const linhas = agora.get(chaveLink(la));
+      if (!linhas || linhas.size < 2) continue;
+      for (const c of linkCells(ps, pm)) { const a = E.addrToStr(r, c), x = ps.cells[a]; if (x) { delete x.psl; delete x.psf; delete x.pscan; App.cleanup(ps, a); } }
+      linhas.delete(r);
+      mexeu = true;
+    }
+    if (pend.length) setTimeout(() => confirmaTroca(ps.id, k, pend), 80);
+    return mexeu;
+  }
+  function confirmaTroca(psId, k, pend) {
+    const ps = doc.sheets.find((x) => x.id === psId);
+    if (!ps) return;
+    const itens = pend.map((x) => {
+      const sh = doc.sheets.find((y) => y.id === x.link.sheetId);
+      const mr = sh && kindOfMapa(sh) ? mapaRowOf(sh, colMap(sh), x.link.k, x.link.id) : null;
+      return `<li>Linha <b>${x.r}</b>${x.cont ? ` (container <b>${esc(x.cont)}</b>)` : ''} — ${x.apagou ? 'apagar' : 'substituir pelo que foi colado'}${sh && mr ? `; a marca ${x.link.k === 'ch' ? 'P.S. CH' : 'P.S. VZ'} do <b>${esc(sh.name)}</b> linha ${mr} será retirada` : ''}</li>`;
+    }).join('');
+    App.ui.modal({
+      title: pend.every((x) => x.apagou) ? 'Apagar unidade do PRÉ STACKING?' : 'Substituir unidade do PRÉ STACKING?', width: '560px',
+      body: `<p class="modal-text">${pend.length === 1 ? 'Esta linha está vinculada' : 'Estas linhas estão vinculadas'} ao MAPA. Nada foi apagado ainda:</p><ul class="modal-text" style="margin:6px 0 0 18px">${itens}</ul><p class="modal-text">Confirma?</p>`,
+      buttons: [{ label: 'Não, manter' }, { label: 'Sim, confirmar', primary: true, action: () => {
+        aplicando = true;
+        try {
+          App.withReal(() => App.change(pend.every((x) => x.apagou) ? 'Apagar linha do PRÉ STACKING' : 'Substituir linha do PRÉ STACKING', () => {
+            for (const x of pend) {
+              for (const a in x.depois) {
+                const novo = x.depois[a];
+                if (novo) { delete novo.psl; delete novo.psf; delete novo.pscan; ps.cells[a] = novo; App.cleanup(ps, a); } else delete ps.cells[a];
+              }
+              // o vínculo antigo sai da linha e a marca do MAPA é retirada
+              const pm = colMap(ps);
+              for (const c of linkCells(ps, pm)) { const a = E.addrToStr(x.r, c), y = ps.cells[a]; if (y && y.psl) { const l = linkOf(y.psl); if (l && l.id === x.link.id) { delete y.psl; delete y.psf; delete y.pscan; App.cleanup(ps, a); } } }
+              const sh = doc.sheets.find((y) => y.id === x.link.sheetId);
+              if (!sh || !kindOfMapa(sh)) continue;
+              const m = colMap(sh), mr = mapaRowOf(sh, m, x.link.k, x.link.id), cb = findCol(m, x.link.k === 'ch' ? A.PSCH : A.PSVZ);
+              if (mr && cb) { const ad = E.addrToStr(mr, cb), z = sh.cells[ad]; if (z) { z.v = App.cbValues(App.dvAt(sh, mr, cb)).off; delete z.psl; App.cleanup(sh, ad); } }
+            }
+          }));
+        } finally { aplicando = false; }
+        if (App.logAuto) App.logAuto('PRÉ STACKING', `${pend.length} ${pend.length === 1 ? 'linha' : 'linhas'} ${pend.every((x) => x.apagou) ? 'apagada(s)' : 'substituída(s)'} com confirmação; marca retirada no MAPA`, ps.name);
+        App.emit('notify', 'Feito: a marca no MAPA foi retirada.');
+      } }],
+    });
+  }
+  const linhasApagadas = new Set();
 
   // ---------- Gancho chamado por App.change ----------
   // fwd/inv: o que a pessoa mudou. Devolve true se mexeu em mais alguma coisa.
@@ -426,9 +527,10 @@
         const ic = (inv.sheets[id] && inv.sheets[id].cells) || {};
         const kind = kindOfMapa(sh), pk = kindOfPS(sh);
         if (kind) changed = fromMapa(sh, kind, e.cells, ic, msgs) || changed;
-        else if (pk) changed = fromPS(sh, pk, e.cells, ic, msgs) || changed;
+        else if (pk) { changed = protegeLinhas(sh, pk, e.cells, ic, msgs) || changed; changed = fromPS(sh, pk, e.cells, ic, msgs) || changed; }
       }
     });
+    linhasApagadas.clear();
     if (msgs.length) notify(msgs.slice(0, 4).join(' ') + (msgs.length > 4 ? ` (+${msgs.length - 4})` : ''));
     if (msgs.length && App.logAuto) msgs.forEach((m) => App.logAuto('PRÉ STACKING', m));
     if (baixaPend) setTimeout(buscaBaixa, 200);
@@ -444,6 +546,24 @@
     for (const k of ['ch', 'vz']) {
       const cbCol = findCol(map, k === 'ch' ? A.PSCH : A.PSVZ);
       if (!cbCol) continue;
+      // marca copiada para outra linha (Ctrl+D, colar, arrastar): a cópia vem desmarcada
+      let copias = 0;
+      for (const a in fc) {
+        const p = E.parseAddr(a);
+        if (!p || p.col !== cbCol || p.row <= headerRow(sh)) continue;
+        const after = sh.cells[a];
+        if (!after || !after.psl || !cbOn(sh, p.row, cbCol, after)) continue;
+        if (ic[a] && ic[a].psl === after.psl) continue; // esta linha já era a dona do vínculo
+        // o vínculo veio de outra linha (a original não mudou agora): é cópia
+        let original = null;
+        for (const b in sh.cells) { const q = E.parseAddr(b); if (q && q.col === cbCol && q.row !== p.row && sh.cells[b].psl === after.psl) { original = q.row; break; } }
+        if (original === null) continue;
+        after.v = App.cbValues(App.dvAt(sh, p.row, cbCol)).off;
+        delete after.psl;
+        App.cleanup(sh, a);
+        copias++; changed = true;
+      }
+      if (copias) msgs.push(`${copias === 1 ? 'A cópia da marca' : `${copias} cópias da marca`} ${k === 'ch' ? 'P.S. CH' : 'P.S. VZ'} ${copias === 1 ? 'veio desmarcada' : 'vieram desmarcadas'}: marque na própria linha para levar a unidade ao ${PS_NAME[k]}.`);
       const rows = [];
       for (const a in fc) {
         const p = E.parseAddr(a);
@@ -541,7 +661,8 @@
     for (const f of FIELDS[k]) { const c = findCol(pm, A[f[0]]); if (c) back.set(c, f); }
     const dataCol = k === 'vz' ? findCol(pm, A.DATA) : null;
     // AGENDAMENTO: só dd/mm/aaaa hh:mm; outro formato volta como estava
-    const agCol = findCol(pm, A.AGENDAMENTO);
+    const agCol = findCol(pm, A.AGENDAMENTO), avisoAg = [];
+    let changed = false;
     if (agCol) for (const a in fc) {
       const p = E.parseAddr(a);
       if (!p || p.col !== agCol || p.row <= hr) continue;
@@ -550,10 +671,17 @@
       const ok = agFmt(typeof v === 'string' && v[0] === '=' ? null : v);
       if (ok === null) {
         if (ic[a]) ps.cells[a] = JSON.parse(JSON.stringify(ic[a])); else delete ps.cells[a];
-        msgs.push(`AGENDAMENTO aceita só data e hora no formato dd/mm/aaaa hh:mm (ex.: 06/11/2026 14:30). "${v}" não foi aceito.`);
+        avisoAg.push(String(v));
         changed = true;
       } else if (ok !== v || !(x.s && x.s.nf === 'dd/mm/yyyy hh:mm')) { gravaAg(ps, p.row, agCol, ok); changed = true; }
     }
+    if (avisoAg.length) setTimeout(() => App.ui.modal({
+      title: 'AGENDAMENTO fora do formato padrão', width: '480px',
+      body: `<p class="modal-text"><b>O AGENDAMENTO precisa estar no formato padrão</b> para ser aceito. No PRÉ STACKING, a coluna AGENDAMENTO só aceita data e hora assim:</p>
+        <p class="modal-text"><b>dd/mm/aaaa hh:mm</b> — por exemplo, <b>06/11/2026 14:30</b>.</p>
+        <p class="modal-text">${avisoAg.length === 1 ? 'Não foi aceito:' : 'Não foram aceitos:'} ${avisoAg.slice(0, 5).map((x) => `<b>${esc(x)}</b>`).join(', ')}${avisoAg.length > 5 ? ` e mais ${avisoAg.length - 5}` : ''}. ${avisoAg.length === 1 ? 'A célula voltou' : 'As células voltaram'} como ${avisoAg.length === 1 ? 'estava' : 'estavam'}.</p>`,
+      buttons: [{ label: 'Entendi', primary: true }],
+    }), 80);
     const rows = new Map();
     for (const a in fc) {
       const p = E.parseAddr(a);
@@ -561,7 +689,6 @@
       if (!rows.has(p.row)) rows.set(p.row, []);
       rows.get(p.row).push(p.col);
     }
-    let changed = false;
     const semPerm = new Set();
     const concl = concluidoCols(pm).map((o) => o.c);
     if (k === 'vz') {
@@ -576,6 +703,7 @@
       }
     }
     for (const [r, cs] of rows) {
+      if (linhasApagadas.has(ps.id + ':' + r)) continue; // a linha foi apagada: a pergunta é outra
       const link = rowLink(ps, pm, r);
       if (!link || link.k !== k) continue;
       // a linha só trocou de lugar (o vínculo mudou junto): nada a fazer
