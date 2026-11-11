@@ -1,0 +1,360 @@
+diff --git a/src/grid.js b/src/grid.js
+index cd1c9d5..7b57fa9 100644
+--- a/src/grid.js
++++ b/src/grid.js
+@@ -20,8 +20,10 @@
+     hdrSelBg: '#4a1418', hdrSelText: '#ff9aa1', freeze: '#4a4a4a', chipBg: '#3a3a3a', link: '#ff8a92', note: '#e8eaed',
+   });
+   const escuro = () => document.documentElement.classList.contains('dark');
+-  // as células da planilha ficam sempre claras (o modo escuro vale só para menus, barras e janelas)
+-  const temaCores = () => Object.assign(C, CLARO);
++  // as células ficam sempre claras; no modo escuro só os números das linhas, as letras das colunas e a faixa
++  // dos agrupamentos acompanham o tema
++  const HDR_ESC = { hdrBg: ESCURO.hdrBg, hdrText: ESCURO.hdrText, hdrLine: ESCURO.hdrLine, hdrSelBg: ESCURO.hdrSelBg, hdrSelText: ESCURO.hdrSelText, gutBg: '#1b1b1b' };
++  const temaCores = () => Object.assign(C, CLARO, { gutBg: '#ffffff' }, escuro() ? HDR_ESC : {});
+   temaCores();
+   // texto escuro sobre o fundo escuro da célula: troca pelo claro (luminância baixa)
+   const escuroDemais = (hex) => { const m = /^#?([0-9a-f]{6})$/i.exec(hex || ''); if (!m) return false; const n = parseInt(m[1], 16); return ((n >> 16) * 299 + ((n >> 8) & 255) * 587 + (n & 255) * 114) / 1000 < 110; };
+@@ -242,7 +244,7 @@
+     if (window.Perms && window.Perms.escalaCols) {
+       if (st.escFor !== sh) { st.escFor = sh; st.escCols = window.Perms.escalaCols(sh); }
+       const ec = st.escCols;
+-      if (ec.CAVALO && (c === ec.CAVALO || c === ec.CARRETA || c === ec.MOTORISTA || c === ec.CPF || c === ec.CONTATO)) {
++      if (ec.CAVALO && (c === ec.CAVALO || c === ec.CARRETA || c === ec.MOTORISTA || c === ec.CPF || c === ec.CONTATO || c === ec.CNH)) {
+         const cav = sh.cells[E.addrToStr(r, ec.CAVALO)];
+         if (cav && (cav.esc || cav.lock || cav.swap)) {
+           const vehicle = c === ec.CAVALO || c === ec.CARRETA || c === ec.MOTORISTA;
+@@ -463,7 +465,7 @@
+     if (!st.gut) return;
+     const g = st.gut, s = Math.round(12 * z);
+     ctx.save();
+-    ctx.fillStyle = C.bg; ctx.fillRect(hw, 0, W - hw, g);
++    ctx.fillStyle = C.gutBg || C.bg; ctx.fillRect(hw, 0, W - hw, g);
+     ctx.fillStyle = C.hdrLine; ctx.fillRect(hw, g - 1, W - hw, 1);
+     ctx.font = `${(10.5 * z).toFixed(1)}px Arial, sans-serif`; ctx.textBaseline = 'middle';
+     const regions = [{ clipX: hw, clipW: st.FW, frozen: true }, { clipX: hw + st.FW, clipW: W - hw - st.FW, frozen: false }];
+diff --git a/src/panels.js b/src/panels.js
+index 46aff9a..d8a3641 100644
+--- a/src/panels.js
++++ b/src/panels.js
+@@ -14,15 +14,28 @@
+ 
+   // ---------- Estrutura do painel ----------
+   let current = null;
+-  function openPanel(title, render, onClose) {
++  // o painel mostra de qual página são as regras e, ao trocar de aba, passa a mostrar as da aba aberta
++  function panelPage(sheetId) {
++    const p = $('side-panel');
++    if (!p || p.hidden) return;
++    const el = p.querySelector('.sp-page');
++    const sh = doc.sheets.find((x) => x.id === sheetId) || App.sheet();
++    if (el && sh) el.textContent = 'Página: ' + sh.name;
++  }
++  App.on('sheet', () => { if (current && current.onSheet) current.onSheet(); });
++  // regra em edição de cada aba (para reabrir quando a pessoa volta para a aba): { 'cf:idDaAba' | 'dv:idDaAba': idDaRegra }
++  const emEdicao = {};
++  function openPanel(title, render, onClose, sheetId) {
+     closePanel();
+     const p = $('side-panel');
+     p.hidden = false;
+-    p.innerHTML = `<div class="sp-head"><h2>${esc(title)}</h2><button class="icon-btn sp-x" aria-label="Fechar">${icon('close', 20)}</button></div><div class="sp-body"></div>`;
+-    current = { onClose, body: p.querySelector('.sp-body'), render };
++    p.innerHTML = `<div class="sp-head"><div class="sp-ttl"><h2>${esc(title)}</h2><small class="sp-page"></small></div><button class="icon-btn sp-x" aria-label="Fechar">${icon('close', 20)}</button></div><div class="sp-body"></div>`;
++    current = { onClose, body: p.querySelector('.sp-body'), render, cmd: null };
++    panelPage(sheetId || App.sheet().id);
+     p.querySelector('.sp-x').onclick = closePanel;
+     render(current.body);
+     document.body.classList.add('panel-open');
++    App.panelAberto = current;
+     App.grid.layout();
+     return current;
+   }
+@@ -33,6 +46,7 @@
+     current = null;
+     if (c.onClose) c.onClose();
+     p.hidden = true; p.innerHTML = '';
++    App.panelAberto = null;
+     document.body.classList.remove('panel-open');
+     App.grid.layout();
+     App.grid.focus();
+@@ -205,7 +219,15 @@
+       body.querySelector('.sp-dup').onclick = () => { duplicate(r.id); render(body); };
+       body.querySelector('.sp-back').onclick = () => { editingId = null; preview(true); render(body); };
+     };
+-    openPanel('Regras de formatação condicional', render, finish);
++    const cur = openPanel('Regras de formatação condicional', render, finish, sid);
++    // trocar de aba: grava, guarda qual regra estava em edição nesta aba e mostra as regras da aba aberta
++    cur.onSheet = () => {
++      if (!alive || App.sheet().id === sid) return;
++      if (editingId) emEdicao['cf:' + sid] = editingId; else delete emEdicao['cf:' + sid];
++      setTimeout(() => condFormat(), 0);
++    };
++    const volta = emEdicao['cf:' + sid];
++    if (volta && work.some((r) => r.id === volta)) { editingId = volta; render(cur.body); }
+   }
+ 
+   // ---------- Cores alternadas ----------
+@@ -263,6 +285,8 @@
+     const R0 = App.selRect();
+     const newRule = (type) => ({ id: App.uid(), range: Object.assign({}, R0), type: type || 'list', items: ['Opção 1', 'Opção 2'], colors: {}, src: '', cond: { type: 'between', a: '', b: '' }, reject: false, help: '', style: 'chip' });
+     if (opts && opts.newType) { editing = newRule(opts.newType); sh.dv.push(editing); }
++    // voltando para esta aba: a regra que estava em edição aqui abre de novo, com o que foi digitado
++    if (!editing && emEdicao['dv:' + sh.id]) editing = sh.dv.find((d) => d.id === emEdicao['dv:' + sh.id]) || null;
+     const finish = () => {
+       const final = clone(sh.dv);
+       sh.dv = original;
+@@ -278,7 +302,7 @@
+       } else preview();
+     };
+     const render = (body) => {
+-      if (editing) return renderRule(body);
++      if (editing) { if (!editing.colors) editing.colors = {}; return renderRule(body); }
+       // em ordem de coluna (C, depois D, depois F…) e, na mesma coluna, de linha
+       const ordered = sh.dv.slice().sort((x, y) => (x.range.c1 - y.range.c1) || (x.range.r1 - y.range.r1) || (x.range.c2 - y.range.c2));
+       const colLbl = (d) => 'Coluna ' + (App.colLabelOf ? App.colLabelOf(sh, d.range.c1) : App.E.numToCol(d.range.c1)) + (d.range.c2 > d.range.c1 ? ' até ' + App.E.numToCol(d.range.c2) : '');
+@@ -345,7 +369,14 @@
+       body.querySelector('.sp-remove').onclick = () => { sh.dv = sh.dv.filter((x) => x !== d); editing = null; preview(); render(body); };
+       body.querySelector('.sp-back').onclick = () => { editing = null; render(body); };
+     };
+-    openPanel('Regras de validação de dados', render, finish);
++    const cur = openPanel('Regras de validação de dados', render, finish, sh.id);
++    // trocar de aba: grava o que foi digitado, guarda a regra em edição desta aba e mostra as regras da aba aberta
++    cur.onSheet = () => {
++      if (App.sheet().id === sh.id) return;
++      if (editing) emEdicao['dv:' + sh.id] = editing.id; else delete emEdicao['dv:' + sh.id];
++      closePanel();
++      setTimeout(() => dataValidation(), 0);
++    };
+   }
+ 
+   // ---------- Estatísticas da coluna ----------
+diff --git a/src/prestacking.js b/src/prestacking.js
+index ea86a13..14e3946 100644
+--- a/src/prestacking.js
++++ b/src/prestacking.js
+@@ -397,6 +397,14 @@
+           if (!alvo) continue;
+           if (!canEdit(alvo.sh, alvo.r, alvo.c)) { sem.add(`${alvo.sh.name} ${E.numToCol ? E.numToCol(alvo.c) : alvo.c}`); continue; }
+           if (sameRaw(rawAt(alvo.sh, alvo.r, alvo.c), x.val ? x.val.v : '')) continue;
++          if (alvo.desmarcar) {
++            const x = alvo.sh.cells[E.addrToStr(alvo.r, alvo.c)];
++            if (x) { x.v = App.cbValues(App.dvAt(alvo.sh, alvo.r, alvo.c)).off; delete x.psl; App.cleanup(alvo.sh, E.addrToStr(alvo.r, alvo.c)); feitos++; }
++            // a linha apagada do PRÉ STACKING perde o vínculo (não vira CANCELADO: ela não existe mais)
++            const pmx = colMap(alvo.ps);
++            for (const cx of [findCol(pmx, A.CONTAINER), findCol(pmx, A.OPERACAO)]) { if (!cx) continue; const ad = E.addrToStr(alvo.psRow, cx); const y = alvo.ps.cells[ad]; if (y) { delete y.psl; delete y.psf; App.cleanup(alvo.ps, ad); } }
++            continue;
++          }
+           if (alvo.ag) { const ok = agFmt(x.val ? x.val.v : '', true); if (ok === null) { sem.add(`AGENDAMENTO (formato dd/mm/aaaa hh:mm)`); continue; } gravaAg(alvo.sh, alvo.r, alvo.c, ok); }
+           else writeCell(alvo.sh, alvo.r, alvo.c, x.val);
+           feitos++;
+@@ -409,6 +417,99 @@
+     App.emit('notify', (feitos ? `${feitos} ${feitos === 1 ? 'campo atualizado' : 'campos atualizados'}.` : 'Nada a atualizar.') + (sem.size ? ` Sem permissão: ${[...sem].join(', ')}.` : ''));
+   }
+ 
++  // ---------- Linhas vinculadas do PRÉ STACKING: apagar, sobrescrever (colar, Ctrl+D, arrastar) ----------
++  // Uma linha ligada ao MAPA não some sem confirmar: a mudança volta na hora e a planilha pergunta. Com Sim, a linha
++  // recebe o novo conteúdo e a marca P.S. no MAPA é retirada; com Não, fica como estava. Vínculo copiado para outra
++  // linha (Ctrl+D numa linha vinculada) é retirado da cópia.
++  const chaveLink = (l) => (l ? l.id + '|' + l.n : null);
++  const linkCells = (ps, pm) => [findCol(pm, A.CONTAINER), findCol(pm, A.OPERACAO)].filter(Boolean);
++  function protegeLinhas(ps, k, fc, ic, msgs) {
++    const pm = colMap(ps), hr = headerRow(ps);
++    const antes = Object.assign({}, ps.cells, ic);
++    const tocadas = new Set();
++    for (const a in fc) { const p = E.parseAddr(a); if (p && p.row > hr) tocadas.add(p.row); }
++    if (!tocadas.size) return false;
++    // onde cada vínculo está agora
++    const agora = new Map();
++    for (const c of linkCells(ps, pm)) for (const a in ps.cells) {
++      const p = E.parseAddr(a);
++      if (!p || p.col !== c || p.row <= hr) continue;
++      const l = linkOf(ps.cells[a].psl);
++      if (l) { const k2 = chaveLink(l); if (!agora.has(k2)) agora.set(k2, new Set()); agora.get(k2).add(p.row); }
++    }
++    const pend = [];
++    let mexeu = false;
++    for (const r of tocadas) {
++      const lb = rowLink(ps, pm, r, antes);
++      if (!lb) continue;
++      // Delete: o vínculo fica na célula vazia, mas a unidade sumiu (sem CONTAINER e sem CLIENTE)
++      const cc0 = findCol(pm, A.CONTAINER), cl0 = findCol(pm, A.CLIENTE);
++      const tinha = hasText((antes[E.addrToStr(r, cc0)] || {}).v), ficou = hasText(rawAt(ps, r, cc0)) || (cl0 && hasText(rawAt(ps, r, cl0)));
++      const esvaziou = tinha && !ficou;
++      if (!esvaziou && agora.has(chaveLink(lb))) continue; // sem perda: o vínculo só mudou de linha (ordenar)
++      // a unidade desta linha sumiu (apagada ou sobrescrita): volta como estava e pergunta
++      const depois = {}, cont = String(rawAt(ps, r, findCol(pm, A.CONTAINER)) || '');
++      for (const a in fc) {
++        const p = E.parseAddr(a);
++        if (!p || p.row !== r) continue;
++        depois[a] = ps.cells[a] ? JSON.parse(JSON.stringify(ps.cells[a])) : null;
++        if (ic[a]) ps.cells[a] = JSON.parse(JSON.stringify(ic[a])); else delete ps.cells[a];
++      }
++      const contAntes = String(((antes[E.addrToStr(r, findCol(pm, A.CONTAINER))] || {}).v) || '');
++      pend.push({ r, depois, link: lb, apagou: !String(cont).trim(), cont: contAntes });
++      linhasApagadas.add(ps.id + ':' + r);
++      mexeu = true;
++    }
++    // vínculo copiado para outra linha: a cópia fica sem vínculo
++    for (const r of tocadas) {
++      const la = rowLink(ps, pm, r), lb = rowLink(ps, pm, r, antes);
++      if (!la || chaveLink(la) === chaveLink(lb)) continue;
++      const linhas = agora.get(chaveLink(la));
++      if (!linhas || linhas.size < 2) continue;
++      for (const c of linkCells(ps, pm)) { const a = E.addrToStr(r, c), x = ps.cells[a]; if (x) { delete x.psl; delete x.psf; delete x.pscan; App.cleanup(ps, a); } }
++      linhas.delete(r);
++      mexeu = true;
++    }
++    if (pend.length) setTimeout(() => confirmaTroca(ps.id, k, pend), 80);
++    return mexeu;
++  }
++  function confirmaTroca(psId, k, pend) {
++    const ps = doc.sheets.find((x) => x.id === psId);
++    if (!ps) return;
++    const itens = pend.map((x) => {
++      const sh = doc.sheets.find((y) => y.id === x.link.sheetId);
++      const mr = sh && kindOfMapa(sh) ? mapaRowOf(sh, colMap(sh), x.link.k, x.link.id) : null;
++      return `<li>Linha <b>${x.r}</b>${x.cont ? ` (container <b>${esc(x.cont)}</b>)` : ''} — ${x.apagou ? 'apagar' : 'substituir pelo que foi colado'}${sh && mr ? `; a marca ${x.link.k === 'ch' ? 'P.S. CH' : 'P.S. VZ'} do <b>${esc(sh.name)}</b> linha ${mr} será retirada` : ''}</li>`;
++    }).join('');
++    App.ui.modal({
++      title: pend.every((x) => x.apagou) ? 'Apagar unidade do PRÉ STACKING?' : 'Substituir unidade do PRÉ STACKING?', width: '560px',
++      body: `<p class="modal-text">${pend.length === 1 ? 'Esta linha está vinculada' : 'Estas linhas estão vinculadas'} ao MAPA. Nada foi apagado ainda:</p><ul class="modal-text" style="margin:6px 0 0 18px">${itens}</ul><p class="modal-text">Confirma?</p>`,
++      buttons: [{ label: 'Não, manter' }, { label: 'Sim, confirmar', primary: true, action: () => {
++        aplicando = true;
++        try {
++          App.withReal(() => App.change(pend.every((x) => x.apagou) ? 'Apagar linha do PRÉ STACKING' : 'Substituir linha do PRÉ STACKING', () => {
++            for (const x of pend) {
++              for (const a in x.depois) {
++                const novo = x.depois[a];
++                if (novo) { delete novo.psl; delete novo.psf; delete novo.pscan; ps.cells[a] = novo; App.cleanup(ps, a); } else delete ps.cells[a];
++              }
++              // o vínculo antigo sai da linha e a marca do MAPA é retirada
++              const pm = colMap(ps);
++              for (const c of linkCells(ps, pm)) { const a = E.addrToStr(x.r, c), y = ps.cells[a]; if (y && y.psl) { const l = linkOf(y.psl); if (l && l.id === x.link.id) { delete y.psl; delete y.psf; delete y.pscan; App.cleanup(ps, a); } } }
++              const sh = doc.sheets.find((y) => y.id === x.link.sheetId);
++              if (!sh || !kindOfMapa(sh)) continue;
++              const m = colMap(sh), mr = mapaRowOf(sh, m, x.link.k, x.link.id), cb = findCol(m, x.link.k === 'ch' ? A.PSCH : A.PSVZ);
++              if (mr && cb) { const ad = E.addrToStr(mr, cb), z = sh.cells[ad]; if (z) { z.v = App.cbValues(App.dvAt(sh, mr, cb)).off; delete z.psl; App.cleanup(sh, ad); } }
++            }
++          }));
++        } finally { aplicando = false; }
++        if (App.logAuto) App.logAuto('PRÉ STACKING', `${pend.length} ${pend.length === 1 ? 'linha' : 'linhas'} ${pend.every((x) => x.apagou) ? 'apagada(s)' : 'substituída(s)'} com confirmação; marca retirada no MAPA`, ps.name);
++        App.emit('notify', 'Feito: a marca no MAPA foi retirada.');
++      } }],
++    });
++  }
++  const linhasApagadas = new Set();
++
+   // ---------- Gancho chamado por App.change ----------
+   // fwd/inv: o que a pessoa mudou. Devolve true se mexeu em mais alguma coisa.
+   function hook(fwd, inv) {
+@@ -426,9 +527,10 @@
+         const ic = (inv.sheets[id] && inv.sheets[id].cells) || {};
+         const kind = kindOfMapa(sh), pk = kindOfPS(sh);
+         if (kind) changed = fromMapa(sh, kind, e.cells, ic, msgs) || changed;
+-        else if (pk) changed = fromPS(sh, pk, e.cells, ic, msgs) || changed;
++        else if (pk) { changed = protegeLinhas(sh, pk, e.cells, ic, msgs) || changed; changed = fromPS(sh, pk, e.cells, ic, msgs) || changed; }
+       }
+     });
++    linhasApagadas.clear();
+     if (msgs.length) notify(msgs.slice(0, 4).join(' ') + (msgs.length > 4 ? ` (+${msgs.length - 4})` : ''));
+     if (msgs.length && App.logAuto) msgs.forEach((m) => App.logAuto('PRÉ STACKING', m));
+     if (baixaPend) setTimeout(buscaBaixa, 200);
+@@ -444,6 +546,24 @@
+     for (const k of ['ch', 'vz']) {
+       const cbCol = findCol(map, k === 'ch' ? A.PSCH : A.PSVZ);
+       if (!cbCol) continue;
++      // marca copiada para outra linha (Ctrl+D, colar, arrastar): a cópia vem desmarcada
++      let copias = 0;
++      for (const a in fc) {
++        const p = E.parseAddr(a);
++        if (!p || p.col !== cbCol || p.row <= headerRow(sh)) continue;
++        const after = sh.cells[a];
++        if (!after || !after.psl || !cbOn(sh, p.row, cbCol, after)) continue;
++        if (ic[a] && ic[a].psl === after.psl) continue; // esta linha já era a dona do vínculo
++        // o vínculo veio de outra linha (a original não mudou agora): é cópia
++        let original = null;
++        for (const b in sh.cells) { const q = E.parseAddr(b); if (q && q.col === cbCol && q.row !== p.row && sh.cells[b].psl === after.psl) { original = q.row; break; } }
++        if (original === null) continue;
++        after.v = App.cbValues(App.dvAt(sh, p.row, cbCol)).off;
++        delete after.psl;
++        App.cleanup(sh, a);
++        copias++; changed = true;
++      }
++      if (copias) msgs.push(`${copias === 1 ? 'A cópia da marca' : `${copias} cópias da marca`} ${k === 'ch' ? 'P.S. CH' : 'P.S. VZ'} ${copias === 1 ? 'veio desmarcada' : 'vieram desmarcadas'}: marque na própria linha para levar a unidade ao ${PS_NAME[k]}.`);
+       const rows = [];
+       for (const a in fc) {
+         const p = E.parseAddr(a);
+@@ -541,7 +661,8 @@
+     for (const f of FIELDS[k]) { const c = findCol(pm, A[f[0]]); if (c) back.set(c, f); }
+     const dataCol = k === 'vz' ? findCol(pm, A.DATA) : null;
+     // AGENDAMENTO: só dd/mm/aaaa hh:mm; outro formato volta como estava
+-    const agCol = findCol(pm, A.AGENDAMENTO);
++    const agCol = findCol(pm, A.AGENDAMENTO), avisoAg = [];
++    let changed = false;
+     if (agCol) for (const a in fc) {
+       const p = E.parseAddr(a);
+       if (!p || p.col !== agCol || p.row <= hr) continue;
+@@ -550,10 +671,17 @@
+       const ok = agFmt(typeof v === 'string' && v[0] === '=' ? null : v);
+       if (ok === null) {
+         if (ic[a]) ps.cells[a] = JSON.parse(JSON.stringify(ic[a])); else delete ps.cells[a];
+-        msgs.push(`AGENDAMENTO aceita só data e hora no formato dd/mm/aaaa hh:mm (ex.: 06/11/2026 14:30). \"${v}\" não foi aceito.`);
++        avisoAg.push(String(v));
+         changed = true;
+       } else if (ok !== v || !(x.s && x.s.nf === 'dd/mm/yyyy hh:mm')) { gravaAg(ps, p.row, agCol, ok); changed = true; }
+     }
++    if (avisoAg.length) setTimeout(() => App.ui.modal({
++      title: 'AGENDAMENTO fora do formato padrão', width: '480px',
++      body: `<p class="modal-text"><b>O AGENDAMENTO precisa estar no formato padrão</b> para ser aceito. No PRÉ STACKING, a coluna AGENDAMENTO só aceita data e hora assim:</p>
++        <p class="modal-text"><b>dd/mm/aaaa hh:mm</b> — por exemplo, <b>06/11/2026 14:30</b>.</p>
++        <p class="modal-text">${avisoAg.length === 1 ? 'Não foi aceito:' : 'Não foram aceitos:'} ${avisoAg.slice(0, 5).map((x) => `<b>${esc(x)}</b>`).join(', ')}${avisoAg.length > 5 ? ` e mais ${avisoAg.length - 5}` : ''}. ${avisoAg.length === 1 ? 'A célula voltou' : 'As células voltaram'} como ${avisoAg.length === 1 ? 'estava' : 'estavam'}.</p>`,
++      buttons: [{ label: 'Entendi', primary: true }],
++    }), 80);
+     const rows = new Map();
+     for (const a in fc) {
+       const p = E.parseAddr(a);
+@@ -561,7 +689,6 @@
+       if (!rows.has(p.row)) rows.set(p.row, []);
+       rows.get(p.row).push(p.col);
+     }
+-    let changed = false;
+     const semPerm = new Set();
+     const concl = concluidoCols(pm).map((o) => o.c);
+     if (k === 'vz') {
+@@ -576,6 +703,7 @@
+       }
+     }
+     for (const [r, cs] of rows) {
++      if (linhasApagadas.has(ps.id + ':' + r)) continue; // a linha foi apagada: a pergunta é outra
+       const link = rowLink(ps, pm, r);
+       if (!link || link.k !== k) continue;
+       // a linha só trocou de lugar (o vínculo mudou junto): nada a fazer
+diff --git a/src/styles.css b/src/styles.css
+index 3edb306..8be0278 100644
+--- a/src/styles.css
++++ b/src/styles.css
+@@ -1468,3 +1468,5 @@ html.dark .hc-de { color: #f87171; } html.dark .hc-para { color: #4ade80; }
+ html.dark .chat-msg.adm .chat-bubble { background: #2a1113; border-color: #7a1c22; color: var(--ink); }
+ html.dark .chat-adm { color: #ff6b74; }
+ html.dark input.doc-title:not(:focus) { background: transparent; border-color: transparent; color: #fff; }
++.sp-ttl { display: flex; flex-direction: column; min-width: 0; }
++.sp-page { color: var(--text-3); font-size: 12px; }
+diff --git a/src/updates.js b/src/updates.js
+index 21865d6..c03e96a 100644
+--- a/src/updates.js
++++ b/src/updates.js
+@@ -4,6 +4,14 @@
+   const esc = App.esc;
+   // a mais nova primeiro; cada item: [área, o que mudou]
+   const UPDATES = [
++    { date: '11/11/2026', title: 'PRÉ STACKING protegido, CNH na escala, painéis por aba e aviso do AGENDAMENTO', items: [
++      ['Linhas protegidas', 'No PRÉ STACKING, apagar (Delete) ou sobrescrever (colar, Ctrl+D, arrastar) uma linha vinculada ao MAPA não acontece sem confirmar: a linha volta na hora e aparece a pergunta. Com Sim, a mudança vale e a marca P.S. no MAPA é retirada; com Não, fica como estava.'],
++      ['Cópias', 'Copiar uma linha vinculada (Ctrl+D, colar) não copia o vínculo; no MAPA, a cópia da caixa P.S. vem desmarcada, com aviso.'],
++      ['CNH', 'Com a escala não confirmada no PRÉ STACKING, a CNH também fica em vermelho até confirmar (e pisca em azul no pedido de troca).'],
++      ['Painéis', 'Validação de dados e formatação condicional mostram a página no topo e mudam junto com a aba. A regra que estava em edição numa aba abre de novo quando você volta para ela.'],
++      ['AGENDAMENTO', 'Entrada recusada abre a janela "AGENDAMENTO fora do formato padrão", explicando que precisa estar em dd/mm/aaaa hh:mm, com exemplo e o que foi recusado. Corrigido o erro que mostrava só "não foi possível concluir a atualização automática".'],
++      ['Modo escuro', 'Os números das linhas, as letras das colunas e a faixa dos agrupamentos acompanham o modo escuro; as células continuam claras.'],
++    ] },
+     { date: '11/11/2026', title: 'PRÉ STACKING: abas da escala pela OBS, aviso de cancelamento e posição da linha nova', items: [
+       ['Escala no PRÉ STACKING', 'Em PRÉ STACKING CHEIO e VAZIO, as abas da escala de frota são os valores da coluna OBS da BASE GERAL (no lugar de Rodotrem, CONVENC. L, CONVENC. LS…).'],
+       ['Cancelamento', 'O aviso "Confirmar que vi" volta toda vez que alguém clica no STATUS da linha que pisca, até ser confirmado. A confirmação agora vale também para quem só visualiza algumas colunas (antes o aviso sumia e a linha continuava piscando).'],
