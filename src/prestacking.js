@@ -150,14 +150,30 @@
   };
 
   // última linha com informação (depois do cabeçalho)
-  function lastInfoRow(sh) {
+  // a célula tem informação? Validação de dados vazia (caixa de seleção desmarcada, FALSO) não conta
+  function temInfo(sh, r, c, cell) {
+    const raw = cell && cell.v;
+    if (!hasText(raw)) return false;
+    if (raw === false || /^(false|falso)$/i.test(String(raw).trim())) return false;
+    const d = App.dvAt(sh, r, c);
+    return !(d && d.type === 'checkbox' && !cbOn(sh, r, c, cell));
+  }
+  // No PRÉ STACKING (k = 'ch' ou 'vz') só contam a coluna STATUS e as colunas que a automação preenche (CONTAINER,
+  // OPERAÇÃO, CLIENTE…): texto perdido lá embaixo em outra coluna não empurra a linha nova. Em qualquer caso, célula
+  // de validação de dados vazia (caixa de seleção desmarcada, FALSO) não é informação.
+  function lastInfoRow(sh, k) {
     const hr = headerRow(sh), si = doc.sheets.indexOf(sh);
+    let so = null;
+    if (k && FIELDS[k]) {
+      const pm = colMap(sh), st = findCol(pm, A.STATUS);
+      if (st) { so = new Set([st]); for (const f of FIELDS[k].map((x) => x[0]).concat('OPERACAO')) { const c = findCol(pm, A[f]); if (c) so.add(c); } }
+    }
     let last = hr;
     for (const a in sh.cells) {
       const p = E.parseAddr(a);
-      if (!p || p.row <= last) continue;
+      if (!p || p.row <= last || (so && !so.has(p.col))) continue;
       const raw = sh.cells[a].v;
-      if (!hasText(raw)) continue;
+      if (!temInfo(sh, p.row, p.col, sh.cells[a])) continue;
       if (typeof raw === 'string' && raw[0] === '=') { const v = App.value(si, p.row, p.col); if (!hasText(v) || (E.isErr && E.isErr(v))) continue; }
       last = p.row;
     }
@@ -248,7 +264,7 @@
       parts = has2 ? [1, 2] : [1];
     }
     const id = cell.psl || newId();
-    let row = lastInfoRow(ps) + 2;
+    let row = lastInfoRow(ps, k) + 2;
     const made = [], containers = [];
     for (const n of parts) {
       if (row > (ps.rows || 0)) ps.rows = row + 50;
@@ -465,7 +481,7 @@
         for (const pr of linhas) {
           if (sc) App.setRaw(ps, pr, sc, statusText(ps, pr, sc, STATUS_CANCELADO));
           // a linha inteira pisca em vermelho até alguém confirmar que viu (marca pscan em todas as células)
-          for (let c = 1; c <= maxC; c++) { const ad = E.addrToStr(pr, c); (ps.cells[ad] || (ps.cells[ad] = { v: '' })).pscan = quem; }
+          for (let c = 1; c <= maxC; c++) { if (App.colBlocked && App.colBlocked(ps, c)) continue; const ad = E.addrToStr(pr, c); (ps.cells[ad] || (ps.cells[ad] = { v: '' })).pscan = quem; }
         }
         msgs.push(`${PS_NAME[k]} linha ${linhas.join(' e ')}: CANCELADO (desmarcado no ${sh.name}, linha ${p.row}).`);
         changed = true;
@@ -657,24 +673,50 @@
     const x = sh.cells[E.addrToStr(p.r, p.c)];
     return x && x.pscan ? { sh, r: p.r, info: String(x.pscan).split('|') } : null;
   }
-  function confirmaVisto(l) {
-    App.change('Cancelamento do PRÉ STACKING visto', () => {
-      for (const a in l.sh.cells) { const q = E.parseAddr(a); if (q && q.row === l.r && l.sh.cells[a].pscan) { delete l.sh.cells[a].pscan; App.cleanup(l.sh, a); } }
+  // tira a marca (o piscar) das linhas; células de colunas ocultas para a pessoa ficam como estão
+  function tiraMarca(sh, linhas, rotulo) {
+    const set = new Set(linhas);
+    App.change(rotulo, () => {
+      for (const a in sh.cells) { const q = E.parseAddr(a); if (q && set.has(q.row) && sh.cells[a].pscan && !sh.cells[a]._h) { delete sh.cells[a].pscan; App.cleanup(sh, a); } }
     });
+  }
+  // linha que pisca mas está vazia (o conteúdo foi apagado ou a linha mudou de lugar): não há o que confirmar
+  function linhaVazia(sh, r) {
+    for (const a in sh.cells) { const q = E.parseAddr(a); if (q && q.row === r && (sh.cells[a]._h || temInfo(sh, r, q.col, sh.cells[a]))) return false; }
+    return true;
+  }
+  function limpaVazias() {
+    const sh = doc.sheets[doc.active];
+    if (!sh || !kindOfPS(sh)) return;
+    const marcadas = new Set();
+    for (const a in sh.cells) if (sh.cells[a].pscan) { const q = E.parseAddr(a); if (q) marcadas.add(q.row); }
+    const vazias = [...marcadas].filter((r) => linhaVazia(sh, r));
+    if (vazias.length) tiraMarca(sh, vazias, 'PRÉ STACKING: linhas vazias param de piscar');
+  }
+  App.on('sheet', () => setTimeout(() => { try { limpaVazias(); } catch (e) { console.error(e); } }, 300));
+  function confirmaVisto(l) {
+    tiraMarca(l.sh, [l.r], 'Cancelamento do PRÉ STACKING visto');
     if (App.logAuto) App.logAuto('PRÉ STACKING', `Cancelamento visto: ${l.sh.name} linha ${l.r}`, l.sh.name);
     App.emit('notify', `Cancelamento da linha ${l.r} confirmado. Fica registrado no histórico das células.`);
   }
+  // O aviso abre na primeira vez que a pessoa clica em qualquer célula da linha e TODA vez que clica no STATUS dela,
+  // até alguém confirmar que viu ("Depois" só fecha: a linha continua piscando e o aviso volta no próximo clique).
   const jaPerguntou = new Set();
+  let avisoAberto = false;
   App.on('selection', () => {
     const l = linhaCancelada();
-    if (!l || App.editing && App.editing()) return;
+    if (!l || avisoAberto || App.editing && App.editing()) return;
+    if (linhaVazia(l.sh, l.r)) { setTimeout(() => { try { limpaVazias(); } catch (e) { console.error(e); } }, 0); return; }
     const k = l.sh.id + ':' + l.r + ':' + l.info[0];
-    if (jaPerguntou.has(k)) return;
+    const S = App.sel, p = App.realCell ? App.realCell(S.ar, S.ac) : { c: S.ac };
+    const noStatus = !!p && p.c === findCol(colMap(l.sh), A.STATUS);
+    if (jaPerguntou.has(k) && !noStatus) return;
     jaPerguntou.add(k);
+    avisoAberto = true;
     const quando = l.info[0] ? new Date(+l.info[0]).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '';
     setTimeout(() => App.ui.modal({
-      title: 'PRÉ STACKING cancelado', width: '480px',
-      body: `<p class="modal-text">A marca de PRÉ STACKING desta unidade foi <b>retirada</b>${l.info[2] ? ` em <b>${esc(l.info[2])}</b>` : ''}${l.info[1] ? ` por <b>${esc(l.info[1])}</b>` : ''}${quando ? ` (${esc(quando)})` : ''}. O STATUS ficou <b>CANCELADO</b>.</p><p class="modal-text">A linha ${l.r} pisca em vermelho até alguém confirmar que viu.</p>`,
+      title: 'PRÉ STACKING cancelado', width: '480px', onClose: () => { avisoAberto = false; },
+      body: `<p class="modal-text">A marca de PRÉ STACKING desta unidade foi <b>retirada</b>${l.info[2] ? ` em <b>${esc(l.info[2])}</b>` : ''}${l.info[1] ? ` por <b>${esc(l.info[1])}</b>` : ''}${quando ? ` (${esc(quando)})` : ''}. O STATUS ficou <b>CANCELADO</b>.</p><p class="modal-text">A linha ${l.r} pisca em vermelho até alguém confirmar que viu. Este aviso volta sempre que você clicar no STATUS dela.</p>`,
       buttons: [{ label: 'Depois' }, { label: 'Confirmar que vi', primary: true, action: () => confirmaVisto(l) }],
     }), 60);
   });
