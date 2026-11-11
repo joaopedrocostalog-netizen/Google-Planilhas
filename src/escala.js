@@ -170,14 +170,16 @@
       }
     });
 
-    const tipos = [...new Set(list.map((v) => v.tipo))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
-    const hasRodo = list.some((v) => v.rodo);
+    // abas da lista: no PRÉ STACKING (BASE GERAL) os veículos são separados pela coluna OBS; nas outras páginas, pelo TIPO (e rodotrem)
+    const grupo = (v) => (src.base ? v.OBS || 'Sem OBS' : v.tipo);
+    const tipos = [...new Set(list.map(grupo))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+    const hasRodo = !src.base && list.some((v) => v.rodo);
     let tipo = rows.length === 2 && hasRodo ? '__rodo' : tipos.length === 1 ? tipos[0] : '';
     let picked = null;
     const title = () => `Escalar veículo — ${rows.length === 2 ? `linhas ${rows[0]} e ${rows[1]} (rodotrem)` : `linha ${rows[0]}`}`;
     const m = App.ui.modal({
       title: title(), width: 'min(1020px, 96vw)', cls: 'modal-tall esc-modal', enterSubmits: false,
-      body: `<p class="sp-hint">${src.base ? `Veículos da aba <b>BASE GERAL</b> (CAVALO, CARRETA, MOTORISTA, CPF e CNH); o status da placa vem da coluna <b>OBS</b>.` : `Veículos da aba <b>${esc(src.sh.name)}</b> com a data de hoje (<b>${keyLabel(today)}</b>).`} Rodotrem (mesmo cavalo com 2 carretas) aparece como um veículo só e preenche 2 linhas.</p>
+      body: `<p class="sp-hint">${src.base ? `Veículos da aba <b>BASE GERAL</b> (CAVALO, CARRETA, MOTORISTA, CPF e CNH); as abas abaixo são os valores da coluna <b>OBS</b>.` : `Veículos da aba <b>${esc(src.sh.name)}</b> com a data de hoje (<b>${keyLabel(today)}</b>).`} Rodotrem (mesmo cavalo com 2 carretas) aparece como um veículo só e preenche 2 linhas.</p>
         <div class="esc-tipos" id="esc-tipos"></div>
         <input class="input" id="esc-find" placeholder="Procurar placa, motorista, CPF…" autocomplete="off">
         <div class="esc-list" id="esc-list"></div>
@@ -189,13 +191,13 @@
     const drawTipos = () => {
       const chips = [['', `Todos (${list.length})`]];
       if (hasRodo) chips.push(['__rodo', `Rodotrem · 2 carretas (${list.filter((v) => v.rodo).length})`]);
-      for (const t of tipos) chips.push([t, `${t} (${list.filter((v) => v.tipo === t).length})`]);
+      for (const t of tipos) chips.push([t, `${t} (${list.filter((v) => grupo(v) === t).length})`]);
       tbox.innerHTML = chips.map(([t, l]) => `<button class="esc-tipo${t === tipo ? ' on' : ''}${t === '__rodo' ? ' rodo' : ''}" data-t="${esc(t)}">${esc(l)}</button>`).join('');
       tbox.querySelectorAll('.esc-tipo').forEach((b) => (b.onclick = () => { tipo = b.dataset.t; picked = null; drawTipos(); drawList(); }));
     };
     const drawList = () => {
       const q = norm(find.value);
-      const vis = list.filter((v) => (!tipo || (tipo === '__rodo' ? v.rodo : v.tipo === tipo)) && (!q || norm(FIELDS.map((f) => v[f]).join(' ')).includes(q)))
+      const vis = list.filter((v) => (!tipo || (tipo === '__rodo' ? v.rodo : grupo(v) === tipo)) && (!q || norm(FIELDS.map((f) => v[f]).join(' ')).includes(q)))
         .sort((a, b) => (rows.length === 2 ? b.rodo - a.rodo : a.rodo - b.rodo));
       box.innerHTML = vis.length ? `<table class="esc-table"><thead><tr>${FIELDS.map((f) => `<th>${f}</th>`).join('')}<th>TIPO</th>${src.base ? '<th>STATUS (OBS)</th>' : ''}</tr></thead><tbody>${vis.map((v) => {
         const busy = usedPlates.get(norm(v.CAVALO));

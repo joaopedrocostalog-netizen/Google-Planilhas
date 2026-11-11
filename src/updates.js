@@ -4,6 +4,12 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '11/11/2026', title: 'PRÉ STACKING: abas da escala pela OBS, aviso de cancelamento e posição da linha nova', items: [
+      ['Escala no PRÉ STACKING', 'Em PRÉ STACKING CHEIO e VAZIO, as abas da escala de frota são os valores da coluna OBS da BASE GERAL (no lugar de Rodotrem, CONVENC. L, CONVENC. LS…).'],
+      ['Cancelamento', 'O aviso "Confirmar que vi" volta toda vez que alguém clica no STATUS da linha que pisca, até ser confirmado. A confirmação agora vale também para quem só visualiza algumas colunas (antes o aviso sumia e a linha continuava piscando).'],
+      ['Linhas vazias piscando', 'Linha sem informação nenhuma para de piscar sozinha.'],
+      ['Linha nova', 'Ao marcar P.S. CH / P.S. VZ, a linha entra 2 linhas depois da última com STATUS (ou com os dados que a marcação preenche). Caixas de seleção desmarcadas e textos perdidos em outras colunas não empurram mais a linha para baixo.'],
+    ] },
     { date: '11/11/2026', title: 'Atalhos, AGENDAMENTO do PRÉ STACKING, cancelamento, escala e cidades', items: [
       ['Atalhos', 'Ctrl+Alt+V (colar só a formatação) e Ctrl+Shift+7 (borda externa) voltaram a funcionar. Todos os atalhos de Ajuda › Atalhos do teclado foram conferidos.'],
       ['AGENDAMENTO', 'No PRÉ STACKING CHEIO e VAZIO, a coluna AGENDAMENTO só aceita data e hora no formato dd/mm/aaaa hh:mm (ex.: 06/11/2026 14:30). Outro formato volta como estava, com aviso.'],

@@ -288,6 +288,13 @@
         for (const a in e.cells) {
           const c = colOf(a);
           const cl = colLevel(perms, id, c);
+          // PRÉ STACKING cancelado: a marca que faz a linha piscar (pscan) é posta e tirada ("confirmar que vi") na linha
+          // inteira, também nas colunas que a pessoa só visualiza; nada mais da célula pode mudar junto
+          if (cl !== 'none') {
+            const b0 = invCells ? (a in invCells ? invCells[a] : null) : sheet ? (sheet.cells || {})[a] || null : null;
+            const sem = (x) => { const o = normCell(x); if (o) delete o.pscan; return o && Object.keys(o).length ? o : null; };
+            if (stable(sem(b0)) === stable(sem(e.cells[a])) && ((b0 || {}).pscan || '') !== ((e.cells[a] || {}).pscan || '')) continue;
+          }
           if (cl !== 'edit') {
             if (cl === 'none') return `Esta operação alteraria dados em colunas que estão ocultas para você (por exemplo, ao ordenar, inserir ou excluir linhas). Peça a um administrador.`;
             return hasColRules(perms, id) ? `Você só pode visualizar a coluna ${colName(c)} da página ${name}.` : `Você só pode visualizar a página ${name}.`;
