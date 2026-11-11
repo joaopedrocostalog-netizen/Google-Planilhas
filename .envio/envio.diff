@@ -1,0 +1,54 @@
+diff --git a/src/styles.css b/src/styles.css
+index 8177208..3edb306 100644
+--- a/src/styles.css
++++ b/src/styles.css
+@@ -1467,3 +1467,4 @@ html.dark .hc-de { color: #f87171; } html.dark .hc-para { color: #4ade80; }
+ .nt-gate::backdrop { background: rgba(13, 13, 13, .82); }
+ html.dark .chat-msg.adm .chat-bubble { background: #2a1113; border-color: #7a1c22; color: var(--ink); }
+ html.dark .chat-adm { color: #ff6b74; }
++html.dark input.doc-title:not(:focus) { background: transparent; border-color: transparent; color: #fff; }
+diff --git a/src/tema.js b/src/tema.js
+index 1a064f1..8bff696 100644
+--- a/src/tema.js
++++ b/src/tema.js
+@@ -19,6 +19,26 @@
+     App.emit('notify', t === 'escuro' ? 'Tema escuro ligado neste aparelho.' : t === 'auto' ? 'Tema automático: segue o aparelho.' : 'Tema claro ligado neste aparelho.');
+   });
+   App.temaAtual = atual;
++  // botão no cabeçalho: lua (ligar o escuro) / sol (voltar ao claro)
++  const LUA = '<svg width="20" height="20" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>';
++  const SOL = '<svg width="20" height="20" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
++  function botao() {
++    const right = document.querySelector('.appbar-right');
++    if (!right) return;
++    let b = document.getElementById('btn-tema');
++    if (!b) {
++      b = document.createElement('button');
++      b.id = 'btn-tema'; b.className = 'icon-btn';
++      b.onclick = () => App.run('tema', document.documentElement.classList.contains('dark') ? 'claro' : 'escuro');
++      right.insertBefore(b, right.firstChild);
++    }
++    const dark = document.documentElement.classList.contains('dark');
++    b.innerHTML = dark ? SOL : LUA;
++    b.title = dark ? 'Voltar ao modo claro' : 'Modo escuro';
++    b.setAttribute('aria-label', b.title);
++  }
++  App.on('tema', botao);
++  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(botao, 0)); else setTimeout(botao, 0);
+   if (mq && mq.addEventListener) mq.addEventListener('change', aplica);
+   aplica();
+ })(window.App);
+diff --git a/src/updates.js b/src/updates.js
+index e473b39..2f5e0aa 100644
+--- a/src/updates.js
++++ b/src/updates.js
+@@ -4,6 +4,9 @@
+   const esc = App.esc;
+   // a mais nova primeiro; cada item: [área, o que mudou]
+   const UPDATES = [
++    { date: '11/11/2026', title: 'Botão do modo escuro no cabeçalho', items: [
++      ['Modo escuro', 'O botão de lua no cabeçalho liga o modo escuro; o de sol volta ao claro. Fica guardado neste aparelho. O modo Automático (segue o aparelho) continua em Ver › Tema.'],
++    ] },
+     { date: '10/11/2026', title: 'Notificações obrigatórias, mensagem de administrador em destaque e versões a cada 3 horas', items: [
+       ['Notificações', 'Agora são obrigatórias: ao entrar na conta, a planilha só abre depois de ativar as notificações do aparelho, e não há mais como desligar: todos os avisos ficam ligados (a lista está em Ferramentas › Notificações).'],
+       ['Computador', 'Os avisos aparecem como notificação do sistema, por cima de qualquer janela, com a planilha na tela ou não, e ficam até você clicar ou fechar.'],
