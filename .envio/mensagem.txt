@@ -1,0 +1,1 @@
+Atalhos (Ctrl+Alt+V, Ctrl+Shift+7), AGENDAMENTO dd/mm/aaaa hh:mm no PRÉ STACKING, cancelamento ao desmarcar, escala pela BASE GERAL, cidades em todas as abas, CONTAINER só do MAPA e células claras no escuro
