@@ -41,10 +41,15 @@
   const cols = (sh) => (window.Perms ? window.Perms.escalaCols(sh) : {});
   // primeira linha de dados: com o nome da coluna definido pelo administrador (A = CAVALO), a linha 1 já é dado;
   // sem nome, a linha 1 é o cabeçalho
-  const firstRow = (sh, c) => (c && sh.colNames && sh.colNames[c] ? 1 : 2);
+  const firstRow = (sh, c) => (c && sh.colNames && sh.colNames[c] ? 1 : (App.preStacking && App.preStacking.kindOfPS(sh) ? App.preStacking.headerRow(sh) + 1 : 2));
+  // PRÉ STACKING CHEIO / VAZIO: a escala vem da BASE GERAL (CAVALO, CARRETA, MOTORISTA, CPF, CNH; status pela OBS)
+  const ehPS = (sh) => !!(App.preStacking && App.preStacking.kindOfPS(sh));
+  const FIELDS_PS = ['CAVALO', 'CARRETA', 'MOTORISTA', 'CPF', 'CNH'];
+  const fieldsFor = (sh) => (ehPS(sh) ? FIELDS_PS : FIELDS);
   const cavCell = (sh, r) => { const c = cols(sh).CAVALO; return c ? sh.cells[E.addrToStr(r, c)] || null : null; };
 
   function srcSheet(sh) {
+    if (ehPS(sh)) { const i = doc.sheets.findIndex((s) => norm(s.name) === norm('BASE GERAL')); return i >= 0 ? { si: i, sh: doc.sheets[i], base: true } : null; }
     const cfg = sh.escala || {};
     let i = cfg.src ? doc.sheets.findIndex((s) => s.id === cfg.src) : -1;
     if (i < 0) i = doc.sheets.findIndex((s) => norm(s.name) === norm(SRC_NAME));
@@ -76,8 +81,29 @@
     return true;
   }
 
+  // veículos da BASE GERAL (para o PRÉ STACKING): todas as linhas com CAVALO; o status da placa vem da OBS
+  function vehiclesBase(src) {
+    return App.withReal(() => {
+      const s = src.sh, si = src.si, col = {};
+      for (const f of ['TIPO', 'OBS'].concat(FIELDS_PS)) col[f] = App.colByName(s, f);
+      const used = App.usedRange(s), byCav = new Map(), list = [];
+      for (let r = firstRow(s, col.CAVALO); r <= used.maxR; r++) {
+        const o = { rows: [r], tipo: text(si, s, r, col.TIPO) || 'Sem tipo', OBS: text(si, s, r, col.OBS) };
+        for (const f of FIELDS_PS) o[f] = text(si, s, r, col[f]);
+        if (!o.CAVALO) continue;
+        o.carretas = o.CARRETA ? [o.CARRETA] : [];
+        const same = byCav.get(norm(o.CAVALO));
+        if (same) { if (o.CARRETA && !same.carretas.includes(o.CARRETA)) same.carretas.push(o.CARRETA); for (const f of ['MOTORISTA', 'CPF', 'CNH', 'OBS']) if (!same[f] && o[f]) same[f] = o[f]; continue; }
+        byCav.set(norm(o.CAVALO), o);
+        list.push(o);
+      }
+      for (const v of list) { v.rodo = v.carretas.length > 1; v.CARRETA = v.carretas.join(' + '); }
+      return { list, col: Object.assign({ DATA: true }, col), today: todayKey() };
+    });
+  }
   // veículos de hoje; o mesmo cavalo em mais de uma linha (rodotrem) vira um veículo com várias carretas
   function vehiclesToday(src) {
+    if (src.base) return vehiclesBase(src);
     return App.withReal(() => {
       const s = src.sh, si = src.si;
       const col = {};
@@ -118,6 +144,7 @@
 
   function escalar() {
     const sh = App.sheet();
+    const FIELDS = fieldsFor(sh);
     if (!canEscalar(sh)) return notify('Escalar veículo não está liberado para o seu setor. Peça a um administrador.');
     const tc = cols(sh);
     if (!tc.CAVALO) return notify('Esta página não tem a coluna CAVALO.');
@@ -128,7 +155,7 @@
     if (!src) return notify(`A aba ${SRC_NAME} não foi encontrada${perms() && !perms().admin ? ' ou não está liberada para o seu setor (peça ao administrador para liberar ao menos a visualização)' : ''}.`);
     const { list, col: scol, today } = vehiclesToday(src);
     if (!scol.DATA) return notify(`A aba ${SRC_NAME} não tem a coluna DATA.`);
-    if (!list.length) return notify(`Nenhum veículo na ${SRC_NAME} com a data de hoje (${keyLabel(today)}).`);
+    if (!list.length) return notify(src.base ? 'Nenhum veículo na BASE GERAL (coluna CAVALO).' : `Nenhum veículo na ${SRC_NAME} com a data de hoje (${keyLabel(today)}).`);
 
     // veículos já escalados nesta página NA MESMA DATA da linha que está sendo escalada (pela placa do cavalo)
     const usedPlates = new Map();
@@ -150,7 +177,7 @@
     const title = () => `Escalar veículo — ${rows.length === 2 ? `linhas ${rows[0]} e ${rows[1]} (rodotrem)` : `linha ${rows[0]}`}`;
     const m = App.ui.modal({
       title: title(), width: 'min(1020px, 96vw)', cls: 'modal-tall esc-modal', enterSubmits: false,
-      body: `<p class="sp-hint">Veículos da aba <b>${esc(src.sh.name)}</b> com a data de hoje (<b>${keyLabel(today)}</b>). Rodotrem (mesmo cavalo com 2 carretas) aparece como um veículo só e preenche 2 linhas.</p>
+      body: `<p class="sp-hint">${src.base ? `Veículos da aba <b>BASE GERAL</b> (CAVALO, CARRETA, MOTORISTA, CPF e CNH); o status da placa vem da coluna <b>OBS</b>.` : `Veículos da aba <b>${esc(src.sh.name)}</b> com a data de hoje (<b>${keyLabel(today)}</b>).`} Rodotrem (mesmo cavalo com 2 carretas) aparece como um veículo só e preenche 2 linhas.</p>
         <div class="esc-tipos" id="esc-tipos"></div>
         <input class="input" id="esc-find" placeholder="Procurar placa, motorista, CPF…" autocomplete="off">
         <div class="esc-list" id="esc-list"></div>
@@ -170,9 +197,9 @@
       const q = norm(find.value);
       const vis = list.filter((v) => (!tipo || (tipo === '__rodo' ? v.rodo : v.tipo === tipo)) && (!q || norm(FIELDS.map((f) => v[f]).join(' ')).includes(q)))
         .sort((a, b) => (rows.length === 2 ? b.rodo - a.rodo : a.rodo - b.rodo));
-      box.innerHTML = vis.length ? `<table class="esc-table"><thead><tr>${FIELDS.map((f) => `<th>${f}</th>`).join('')}<th>TIPO</th></tr></thead><tbody>${vis.map((v) => {
+      box.innerHTML = vis.length ? `<table class="esc-table"><thead><tr>${FIELDS.map((f) => `<th>${f}</th>`).join('')}<th>TIPO</th>${src.base ? '<th>STATUS (OBS)</th>' : ''}</tr></thead><tbody>${vis.map((v) => {
         const busy = usedPlates.get(norm(v.CAVALO));
-        return `<tr data-k="${v.rows[0]}" class="${picked === v ? 'on' : ''}${busy ? ' busy' : ''}">${FIELDS.map((f) => `<td>${f === 'CARRETA' && v.rodo ? v.carretas.map((c) => `<span class="esc-car">${esc(c)}</span>`).join('') : esc(v[f])}${f === 'CAVALO' && v.rodo ? '<i class="esc-rodo">rodotrem</i>' : ''}${f === 'CAVALO' && busy ? `<em title="Já aparece nesta página">já escalado (linha ${busy.slice(0, 3).join(', ')})</em>` : ''}</td>`).join('')}<td>${esc(v.tipo)}</td></tr>`;
+        return `<tr data-k="${v.rows[0]}" class="${picked === v ? 'on' : ''}${busy ? ' busy' : ''}">${FIELDS.map((f) => `<td>${f === 'CARRETA' && v.rodo ? v.carretas.map((c) => `<span class="esc-car">${esc(c)}</span>`).join('') : esc(v[f])}${f === 'CAVALO' && v.rodo ? '<i class="esc-rodo">rodotrem</i>' : ''}${f === 'CAVALO' && busy ? `<em title="Já aparece nesta página">já escalado (linha ${busy.slice(0, 3).join(', ')})</em>` : ''}</td>`).join('')}<td>${esc(v.tipo)}</td>${src.base ? `<td class="esc-obs">${esc(v.OBS || '—')}</td>` : ''}</tr>`;
       }).join('')}</tbody></table>` : '<p class="sp-hint">Nenhum veículo encontrado.</p>';
       box.querySelectorAll('tr[data-k]').forEach((tr) => {
         const v = list.find((x) => String(x.rows[0]) === tr.dataset.k);
@@ -497,13 +524,13 @@
       map = new Map();
       App.withReal(() => {
         const bc = {};
-        for (const f of ['CAVALO', 'MARCA', 'TIPO', 'CATEGORIA']) bc[f] = App.colByName(bs, f);
+        for (const f of ['CAVALO', 'MARCA', 'TIPO', 'CATEGORIA', 'OBS']) bc[f] = App.colByName(bs, f);
         if (!bc.CAVALO) { map = null; return; }
         const used = App.usedRange(bs);
         for (let r = firstRow(bs, bc.CAVALO); r <= used.maxR; r++) {
           const k = norm(text(bi, bs, r, bc.CAVALO));
           if (!k || map.has(k)) continue;
-          map.set(k, { MARCA: text(bi, bs, r, bc.MARCA), TIPO: text(bi, bs, r, bc.TIPO), CATEGORIA: text(bi, bs, r, bc.CATEGORIA) });
+          map.set(k, { MARCA: text(bi, bs, r, bc.MARCA), TIPO: text(bi, bs, r, bc.TIPO), CATEGORIA: text(bi, bs, r, bc.CATEGORIA), OBS: bc.OBS ? text(bi, bs, r, bc.OBS) : '' });
         }
       });
     }
@@ -523,7 +550,8 @@
     const names = sh.colNames || {};
     const maxC = Math.max(App.usedRange(sh).maxC || 0, ...Object.keys(names).map(Number), 1);
     const out = [null];
-    for (let c = 1; c <= maxC; c++) out.push(norm(names[c] || App.raw(sh, 1, c)));
+    const hr = App.preStacking ? App.preStacking.headerRow(sh) : 1;
+    for (let c = 1; c <= maxC; c++) out.push(norm(names[c] || App.raw(sh, hr, c)));
     return out;
   }
   let lookCache = null;
@@ -570,6 +598,11 @@
     if (k === 'CLIENTE' || k === 'CLIENTES') return 'cliente';
     if (k === 'TERMINALCOLETA') return 'coleta';
     if (k === 'TERMINALVAZIO') return 'vazio';
+    // as outras abas também mostram a cidade: MAPA EXPO (ENTREGA = terminal, RETIRADA = depot) e
+    // PRÉ STACKING (TERMINAL: terminal no CHEIO, depot no VAZIO)
+    const nome = norm(sh.name), ps = App.preStacking && App.preStacking.kindOfPS(sh);
+    if (nome.startsWith('MAPA') && nome.includes('EXPO')) { if (k === 'ENTREGA') return 'coleta'; if (k === 'RETIRADA') return 'vazio'; }
+    if (ps && k === 'TERMINAL') return ps === 'vz' ? 'vazio' : 'coleta';
     return null;
   }
   const fold = (t) => norm(t);
@@ -702,7 +735,13 @@
     const cities = look[kind].filter((x) => norm(x.name) === norm(name) && x.city).map((x) => x.city);
     return cities.length ? { cities } : { cities: [], missing: true };
   }
-  function canSeeInfo(sh) { const p = perms(); return !p || p.admin || !!(sh.escala && window.Perms.inList(sh.escala.infoSectors || [], p)); }
+  // quem vê os balões: o configurado na aba; abas sem configuração seguem a principal (MAPA com escala)
+  function canSeeInfo(sh) {
+    const p = perms();
+    if (!p || p.admin) return true;
+    const cfg = (sh.escala && sh.escala.infoSectors) ? sh.escala : (doc.sheets.find((x) => x.escala && x.escala.infoSectors) || {}).escala;
+    return !!(cfg && window.Perms.inList(cfg.infoSectors || [], p));
+  }
   // FRETE vazio numa linha com cavalo de terceiro: pisca até preencher (usado pela grade)
   let freteCache = { ver: -1 };
   App.freteAlert = (sh, si, r, c) => {
@@ -739,7 +778,7 @@
     const info = plate ? vehicleInfo(plate) : null;
     if (!info) return hideInfo();
     place(R, info.terceiro ? '<span><i>Categoria</i> <b class="t3">Terceiro</b></span><span class="cav-warn">preencha o FRETE</span>'
-      : ['MARCA', 'TIPO', 'CATEGORIA'].filter((f) => info[f]).map((f) => `<span><i>${f[0] + f.slice(1).toLowerCase()}</i> <b>${esc(info[f])}</b></span>`).join('') || '<span><i>Sem dados na BASE GERAL</i></span>');
+      : ['MARCA', 'TIPO', 'CATEGORIA', 'OBS'].filter((f) => info[f]).map((f) => `<span><i>${f === 'OBS' ? 'Status' : f[0] + f.slice(1).toLowerCase()}</i> <b>${esc(info[f])}</b></span>`).join('') || '<span><i>Sem dados na BASE GERAL</i></span>');
   }
   function place(R, html) {
     if (!infoEl) { infoEl = document.createElement('div'); infoEl.className = 'cav-info'; document.getElementById('grid-wrap').appendChild(infoEl); }

@@ -94,7 +94,7 @@
       if (!sh) continue;
       for (const L of linhas(sh)) {
         const st = txt(L.get('STATUS'));
-        if (fin(st)) continue;
+        if (fin(st) || PS().norm(st) === 'CANCELADO') continue;
         out.abertos[k]++;
         const ag = serial(L.get('AGENDAMENTO'));
         const base = { sh, r: L.r, cont: txt(L.get('CONTAINER')), cli: txt(L.get('CLIENTE')), op: txt(L.get('OPERACAO')) };

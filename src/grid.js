@@ -20,7 +20,8 @@
     hdrSelBg: '#4a1418', hdrSelText: '#ff9aa1', freeze: '#4a4a4a', chipBg: '#3a3a3a', link: '#ff8a92', note: '#e8eaed',
   });
   const escuro = () => document.documentElement.classList.contains('dark');
-  const temaCores = () => Object.assign(C, escuro() ? ESCURO : CLARO);
+  // as células da planilha ficam sempre claras (o modo escuro vale só para menus, barras e janelas)
+  const temaCores = () => Object.assign(C, CLARO);
   temaCores();
   // texto escuro sobre o fundo escuro da célula: troca pelo claro (luminância baixa)
   const escuroDemais = (hex) => { const m = /^#?([0-9a-f]{6})$/i.exec(hex || ''); if (!m) return false; const n = parseInt(m[1], 16); return ((n >> 16) * 299 + ((n >> 8) & 255) * 587 + (n & 255) * 114) / 1000 < 110; };
@@ -257,6 +258,8 @@
         st.hasCrit = true;
         s = Object.assign({}, s, Math.floor(Date.now() / 550) % 2 ? { bg: '#d93025', color: '#ffffff', b: true } : { bg: '#fce8e6', color: '#b3261e', b: true });
       }
+      // PRÉ STACKING cancelado no MAPA: a linha inteira pisca em vermelho até alguém confirmar que viu
+      if (cell && cell.pscan) { st.hasCrit = true; s = Object.assign({}, s, Math.floor(Date.now() / 550) % 2 ? { bg: '#d93025', color: '#ffffff', b: true } : { bg: '#fce8e6', color: '#b3261e', b: true }); }
       // demurrage do vazio vencendo (amarelo) ou vencida (vermelho), sem piscar
       if (App.demurrageCell) { const dm = App.demurrageCell(sh, si, r, c); if (dm) s = Object.assign({}, s, dm); }
       // veículo preenchido sem CARRETA, MOTORISTA, CPF ou CONTATO: campo obrigatório em laranja

@@ -144,7 +144,7 @@ module.exports = function rotinas(d) {
         for (const a in sh.cells) { const p = parseAddr(a); if (p && p.col === cc && p.row > C.hr && String(sh.cells[a].v || '').trim()) linhas.add(p.row); }
         const avisos = [];
         for (const r of linhas) {
-          if (norm(valor(sh, r, cs)).includes('FINALIZ') || String(valor(sh, r, cdt)).trim()) continue;
+          if (norm(valor(sh, r, cs)).includes('FINALIZ') || norm(valor(sh, r, cs)) === 'CANCELADO' || String(valor(sh, r, cdt)).trim()) continue;
           const baixa = serialDe(valor(sh, r, cb)), dem = Number(String(valor(sh, r, cd)).replace(',', '.'));
           if (baixa === null || !(dem > 0)) continue;
           const prazo = baixa + dem, falta = prazo - hoje;

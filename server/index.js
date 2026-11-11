@@ -398,6 +398,10 @@ function historyEntries(room, p) {
     for (const a in e.cells) {
       const b = val((sh.cells || {})[a]), f = val(e.cells[a]);
       if (b !== f) out.push({ s: id, a, b, f });
+      // PRÉ STACKING cancelado no MAPA (marca pscan) e a confirmação de que alguém viu: ficam no histórico da célula
+      const pb = ((sh.cells || {})[a] || {}).pscan, pf = (e.cells[a] || {}).pscan;
+      if (!pb && pf) out.push({ s: id, a, b, f: `${f || ''} [PRÉ STACKING CANCELADO: desmarcado em ${String(pf).split('|')[2] || 'MAPA'}]`.trim() });
+      else if (pb && !pf) out.push({ s: id, a, b: `${b || ''} [cancelamento pendente]`.trim(), f: `${f || ''} [cancelamento visto e confirmado]`.trim() });
       if (out.length >= 5000) return out;
     }
   }
