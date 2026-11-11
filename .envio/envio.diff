@@ -1,0 +1,208 @@
+diff --git a/src/escala.js b/src/escala.js
+index 5798d55..3505369 100644
+--- a/src/escala.js
++++ b/src/escala.js
+@@ -170,14 +170,16 @@
+       }
+     });
+ 
+-    const tipos = [...new Set(list.map((v) => v.tipo))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+-    const hasRodo = list.some((v) => v.rodo);
++    // abas da lista: no PRÉ STACKING (BASE GERAL) os veículos são separados pela coluna OBS; nas outras páginas, pelo TIPO (e rodotrem)
++    const grupo = (v) => (src.base ? v.OBS || 'Sem OBS' : v.tipo);
++    const tipos = [...new Set(list.map(grupo))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
++    const hasRodo = !src.base && list.some((v) => v.rodo);
+     let tipo = rows.length === 2 && hasRodo ? '__rodo' : tipos.length === 1 ? tipos[0] : '';
+     let picked = null;
+     const title = () => `Escalar veículo — ${rows.length === 2 ? `linhas ${rows[0]} e ${rows[1]} (rodotrem)` : `linha ${rows[0]}`}`;
+     const m = App.ui.modal({
+       title: title(), width: 'min(1020px, 96vw)', cls: 'modal-tall esc-modal', enterSubmits: false,
+-      body: `<p class="sp-hint">${src.base ? `Veículos da aba <b>BASE GERAL</b> (CAVALO, CARRETA, MOTORISTA, CPF e CNH); o status da placa vem da coluna <b>OBS</b>.` : `Veículos da aba <b>${esc(src.sh.name)}</b> com a data de hoje (<b>${keyLabel(today)}</b>).`} Rodotrem (mesmo cavalo com 2 carretas) aparece como um veículo só e preenche 2 linhas.</p>
++      body: `<p class="sp-hint">${src.base ? `Veículos da aba <b>BASE GERAL</b> (CAVALO, CARRETA, MOTORISTA, CPF e CNH); as abas abaixo são os valores da coluna <b>OBS</b>.` : `Veículos da aba <b>${esc(src.sh.name)}</b> com a data de hoje (<b>${keyLabel(today)}</b>).`} Rodotrem (mesmo cavalo com 2 carretas) aparece como um veículo só e preenche 2 linhas.</p>
+         <div class="esc-tipos" id="esc-tipos"></div>
+         <input class="input" id="esc-find" placeholder="Procurar placa, motorista, CPF…" autocomplete="off">
+         <div class="esc-list" id="esc-list"></div>
+@@ -189,13 +191,13 @@
+     const drawTipos = () => {
+       const chips = [['', `Todos (${list.length})`]];
+       if (hasRodo) chips.push(['__rodo', `Rodotrem · 2 carretas (${list.filter((v) => v.rodo).length})`]);
+-      for (const t of tipos) chips.push([t, `${t} (${list.filter((v) => v.tipo === t).length})`]);
++      for (const t of tipos) chips.push([t, `${t} (${list.filter((v) => grupo(v) === t).length})`]);
+       tbox.innerHTML = chips.map(([t, l]) => `<button class="esc-tipo${t === tipo ? ' on' : ''}${t === '__rodo' ? ' rodo' : ''}" data-t="${esc(t)}">${esc(l)}</button>`).join('');
+       tbox.querySelectorAll('.esc-tipo').forEach((b) => (b.onclick = () => { tipo = b.dataset.t; picked = null; drawTipos(); drawList(); }));
+     };
+     const drawList = () => {
+       const q = norm(find.value);
+-      const vis = list.filter((v) => (!tipo || (tipo === '__rodo' ? v.rodo : v.tipo === tipo)) && (!q || norm(FIELDS.map((f) => v[f]).join(' ')).includes(q)))
++      const vis = list.filter((v) => (!tipo || (tipo === '__rodo' ? v.rodo : grupo(v) === tipo)) && (!q || norm(FIELDS.map((f) => v[f]).join(' ')).includes(q)))
+         .sort((a, b) => (rows.length === 2 ? b.rodo - a.rodo : a.rodo - b.rodo));
+       box.innerHTML = vis.length ? `<table class="esc-table"><thead><tr>${FIELDS.map((f) => `<th>${f}</th>`).join('')}<th>TIPO</th>${src.base ? '<th>STATUS (OBS)</th>' : ''}</tr></thead><tbody>${vis.map((v) => {
+         const busy = usedPlates.get(norm(v.CAVALO));
+diff --git a/src/perms.js b/src/perms.js
+index 98785ca..34ea036 100644
+--- a/src/perms.js
++++ b/src/perms.js
+@@ -288,6 +288,13 @@
+         for (const a in e.cells) {
+           const c = colOf(a);
+           const cl = colLevel(perms, id, c);
++          // PRÉ STACKING cancelado: a marca que faz a linha piscar (pscan) é posta e tirada ("confirmar que vi") na linha
++          // inteira, também nas colunas que a pessoa só visualiza; nada mais da célula pode mudar junto
++          if (cl !== 'none') {
++            const b0 = invCells ? (a in invCells ? invCells[a] : null) : sheet ? (sheet.cells || {})[a] || null : null;
++            const sem = (x) => { const o = normCell(x); if (o) delete o.pscan; return o && Object.keys(o).length ? o : null; };
++            if (stable(sem(b0)) === stable(sem(e.cells[a])) && ((b0 || {}).pscan || '') !== ((e.cells[a] || {}).pscan || '')) continue;
++          }
+           if (cl !== 'edit') {
+             if (cl === 'none') return `Esta operação alteraria dados em colunas que estão ocultas para você (por exemplo, ao ordenar, inserir ou excluir linhas). Peça a um administrador.`;
+             return hasColRules(perms, id) ? `Você só pode visualizar a coluna ${colName(c)} da página ${name}.` : `Você só pode visualizar a página ${name}.`;
+diff --git a/src/prestacking.js b/src/prestacking.js
+index 9571ac5..ea86a13 100644
+--- a/src/prestacking.js
++++ b/src/prestacking.js
+@@ -150,14 +150,30 @@
+   };
+ 
+   // última linha com informação (depois do cabeçalho)
+-  function lastInfoRow(sh) {
++  // a célula tem informação? Validação de dados vazia (caixa de seleção desmarcada, FALSO) não conta
++  function temInfo(sh, r, c, cell) {
++    const raw = cell && cell.v;
++    if (!hasText(raw)) return false;
++    if (raw === false || /^(false|falso)$/i.test(String(raw).trim())) return false;
++    const d = App.dvAt(sh, r, c);
++    return !(d && d.type === 'checkbox' && !cbOn(sh, r, c, cell));
++  }
++  // No PRÉ STACKING (k = 'ch' ou 'vz') só contam a coluna STATUS e as colunas que a automação preenche (CONTAINER,
++  // OPERAÇÃO, CLIENTE…): texto perdido lá embaixo em outra coluna não empurra a linha nova. Em qualquer caso, célula
++  // de validação de dados vazia (caixa de seleção desmarcada, FALSO) não é informação.
++  function lastInfoRow(sh, k) {
+     const hr = headerRow(sh), si = doc.sheets.indexOf(sh);
++    let so = null;
++    if (k && FIELDS[k]) {
++      const pm = colMap(sh), st = findCol(pm, A.STATUS);
++      if (st) { so = new Set([st]); for (const f of FIELDS[k].map((x) => x[0]).concat('OPERACAO')) { const c = findCol(pm, A[f]); if (c) so.add(c); } }
++    }
+     let last = hr;
+     for (const a in sh.cells) {
+       const p = E.parseAddr(a);
+-      if (!p || p.row <= last) continue;
++      if (!p || p.row <= last || (so && !so.has(p.col))) continue;
+       const raw = sh.cells[a].v;
+-      if (!hasText(raw)) continue;
++      if (!temInfo(sh, p.row, p.col, sh.cells[a])) continue;
+       if (typeof raw === 'string' && raw[0] === '=') { const v = App.value(si, p.row, p.col); if (!hasText(v) || (E.isErr && E.isErr(v))) continue; }
+       last = p.row;
+     }
+@@ -248,7 +264,7 @@
+       parts = has2 ? [1, 2] : [1];
+     }
+     const id = cell.psl || newId();
+-    let row = lastInfoRow(ps) + 2;
++    let row = lastInfoRow(ps, k) + 2;
+     const made = [], containers = [];
+     for (const n of parts) {
+       if (row > (ps.rows || 0)) ps.rows = row + 50;
+@@ -465,7 +481,7 @@
+         for (const pr of linhas) {
+           if (sc) App.setRaw(ps, pr, sc, statusText(ps, pr, sc, STATUS_CANCELADO));
+           // a linha inteira pisca em vermelho até alguém confirmar que viu (marca pscan em todas as células)
+-          for (let c = 1; c <= maxC; c++) { const ad = E.addrToStr(pr, c); (ps.cells[ad] || (ps.cells[ad] = { v: '' })).pscan = quem; }
++          for (let c = 1; c <= maxC; c++) { if (App.colBlocked && App.colBlocked(ps, c)) continue; const ad = E.addrToStr(pr, c); (ps.cells[ad] || (ps.cells[ad] = { v: '' })).pscan = quem; }
+         }
+         msgs.push(`${PS_NAME[k]} linha ${linhas.join(' e ')}: CANCELADO (desmarcado no ${sh.name}, linha ${p.row}).`);
+         changed = true;
+@@ -657,24 +673,50 @@
+     const x = sh.cells[E.addrToStr(p.r, p.c)];
+     return x && x.pscan ? { sh, r: p.r, info: String(x.pscan).split('|') } : null;
+   }
+-  function confirmaVisto(l) {
+-    App.change('Cancelamento do PRÉ STACKING visto', () => {
+-      for (const a in l.sh.cells) { const q = E.parseAddr(a); if (q && q.row === l.r && l.sh.cells[a].pscan) { delete l.sh.cells[a].pscan; App.cleanup(l.sh, a); } }
++  // tira a marca (o piscar) das linhas; células de colunas ocultas para a pessoa ficam como estão
++  function tiraMarca(sh, linhas, rotulo) {
++    const set = new Set(linhas);
++    App.change(rotulo, () => {
++      for (const a in sh.cells) { const q = E.parseAddr(a); if (q && set.has(q.row) && sh.cells[a].pscan && !sh.cells[a]._h) { delete sh.cells[a].pscan; App.cleanup(sh, a); } }
+     });
++  }
++  // linha que pisca mas está vazia (o conteúdo foi apagado ou a linha mudou de lugar): não há o que confirmar
++  function linhaVazia(sh, r) {
++    for (const a in sh.cells) { const q = E.parseAddr(a); if (q && q.row === r && (sh.cells[a]._h || temInfo(sh, r, q.col, sh.cells[a]))) return false; }
++    return true;
++  }
++  function limpaVazias() {
++    const sh = doc.sheets[doc.active];
++    if (!sh || !kindOfPS(sh)) return;
++    const marcadas = new Set();
++    for (const a in sh.cells) if (sh.cells[a].pscan) { const q = E.parseAddr(a); if (q) marcadas.add(q.row); }
++    const vazias = [...marcadas].filter((r) => linhaVazia(sh, r));
++    if (vazias.length) tiraMarca(sh, vazias, 'PRÉ STACKING: linhas vazias param de piscar');
++  }
++  App.on('sheet', () => setTimeout(() => { try { limpaVazias(); } catch (e) { console.error(e); } }, 300));
++  function confirmaVisto(l) {
++    tiraMarca(l.sh, [l.r], 'Cancelamento do PRÉ STACKING visto');
+     if (App.logAuto) App.logAuto('PRÉ STACKING', `Cancelamento visto: ${l.sh.name} linha ${l.r}`, l.sh.name);
+     App.emit('notify', `Cancelamento da linha ${l.r} confirmado. Fica registrado no histórico das células.`);
+   }
++  // O aviso abre na primeira vez que a pessoa clica em qualquer célula da linha e TODA vez que clica no STATUS dela,
++  // até alguém confirmar que viu ("Depois" só fecha: a linha continua piscando e o aviso volta no próximo clique).
+   const jaPerguntou = new Set();
++  let avisoAberto = false;
+   App.on('selection', () => {
+     const l = linhaCancelada();
+-    if (!l || App.editing && App.editing()) return;
++    if (!l || avisoAberto || App.editing && App.editing()) return;
++    if (linhaVazia(l.sh, l.r)) { setTimeout(() => { try { limpaVazias(); } catch (e) { console.error(e); } }, 0); return; }
+     const k = l.sh.id + ':' + l.r + ':' + l.info[0];
+-    if (jaPerguntou.has(k)) return;
++    const S = App.sel, p = App.realCell ? App.realCell(S.ar, S.ac) : { c: S.ac };
++    const noStatus = !!p && p.c === findCol(colMap(l.sh), A.STATUS);
++    if (jaPerguntou.has(k) && !noStatus) return;
+     jaPerguntou.add(k);
++    avisoAberto = true;
+     const quando = l.info[0] ? new Date(+l.info[0]).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '';
+     setTimeout(() => App.ui.modal({
+-      title: 'PRÉ STACKING cancelado', width: '480px',
+-      body: `<p class="modal-text">A marca de PRÉ STACKING desta unidade foi <b>retirada</b>${l.info[2] ? ` em <b>${esc(l.info[2])}</b>` : ''}${l.info[1] ? ` por <b>${esc(l.info[1])}</b>` : ''}${quando ? ` (${esc(quando)})` : ''}. O STATUS ficou <b>CANCELADO</b>.</p><p class="modal-text">A linha ${l.r} pisca em vermelho até alguém confirmar que viu.</p>`,
++      title: 'PRÉ STACKING cancelado', width: '480px', onClose: () => { avisoAberto = false; },
++      body: `<p class="modal-text">A marca de PRÉ STACKING desta unidade foi <b>retirada</b>${l.info[2] ? ` em <b>${esc(l.info[2])}</b>` : ''}${l.info[1] ? ` por <b>${esc(l.info[1])}</b>` : ''}${quando ? ` (${esc(quando)})` : ''}. O STATUS ficou <b>CANCELADO</b>.</p><p class="modal-text">A linha ${l.r} pisca em vermelho até alguém confirmar que viu. Este aviso volta sempre que você clicar no STATUS dela.</p>`,
+       buttons: [{ label: 'Depois' }, { label: 'Confirmar que vi', primary: true, action: () => confirmaVisto(l) }],
+     }), 60);
+   });
+diff --git a/src/updates.js b/src/updates.js
+index 83862ff..21865d6 100644
+--- a/src/updates.js
++++ b/src/updates.js
+@@ -4,6 +4,12 @@
+   const esc = App.esc;
+   // a mais nova primeiro; cada item: [área, o que mudou]
+   const UPDATES = [
++    { date: '11/11/2026', title: 'PRÉ STACKING: abas da escala pela OBS, aviso de cancelamento e posição da linha nova', items: [
++      ['Escala no PRÉ STACKING', 'Em PRÉ STACKING CHEIO e VAZIO, as abas da escala de frota são os valores da coluna OBS da BASE GERAL (no lugar de Rodotrem, CONVENC. L, CONVENC. LS…).'],
++      ['Cancelamento', 'O aviso "Confirmar que vi" volta toda vez que alguém clica no STATUS da linha que pisca, até ser confirmado. A confirmação agora vale também para quem só visualiza algumas colunas (antes o aviso sumia e a linha continuava piscando).'],
++      ['Linhas vazias piscando', 'Linha sem informação nenhuma para de piscar sozinha.'],
++      ['Linha nova', 'Ao marcar P.S. CH / P.S. VZ, a linha entra 2 linhas depois da última com STATUS (ou com os dados que a marcação preenche). Caixas de seleção desmarcadas e textos perdidos em outras colunas não empurram mais a linha para baixo.'],
++    ] },
+     { date: '11/11/2026', title: 'Atalhos, AGENDAMENTO do PRÉ STACKING, cancelamento, escala e cidades', items: [
+       ['Atalhos', 'Ctrl+Alt+V (colar só a formatação) e Ctrl+Shift+7 (borda externa) voltaram a funcionar. Todos os atalhos de Ajuda › Atalhos do teclado foram conferidos.'],
+       ['AGENDAMENTO', 'No PRÉ STACKING CHEIO e VAZIO, a coluna AGENDAMENTO só aceita data e hora no formato dd/mm/aaaa hh:mm (ex.: 06/11/2026 14:30). Outro formato volta como estava, com aviso.'],
+diff --git a/tests/server.test.js b/tests/server.test.js
+index 05e7205..dc07251 100644
+--- a/tests/server.test.js
++++ b/tests/server.test.js
+@@ -142,6 +142,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+     B.send({ type: 'patch', id: 41, patch: { sheets: { p1: { cells: { C1: { v: 'x' } } } } } });
+     check('coluna somente leitura', (await B.wait('reject')).reason, 'Você só pode visualizar a coluna C da página "Vendas".');
+     await B.wait('init');
++    // PRÉ STACKING cancelado: a marca que faz a linha piscar (pscan) entra e sai também em coluna só de leitura
++    B.send({ type: 'patch', id: 411, patch: { sheets: { p1: { cells: { C9: { pscan: '1|Bia|MAPA linha 9' } } } } } });
++    const ps1 = (await B.wait('ack')).id;
++    B.send({ type: 'patch', id: 412, patch: { sheets: { p1: { cells: { C9: { v: 'x', pscan: '1|Bia|MAPA linha 9' } } } } } });
++    const ps2 = (await B.wait('reject')).reason;
++    await B.wait('init');
++    B.send({ type: 'patch', id: 413, patch: { sheets: { p1: { cells: { C9: null } } } } });
++    check('marca de cancelamento em coluna só de leitura', [ps1, /só pode visualizar/.test(ps2), (await B.wait('ack')).id], [411, true, 413]);
+     B.send({ type: 'patch', id: 42, patch: { sheets: { p1: { cells: { B5: {} } } } } });
+     check('coluna oculta não pode ser alterada', /ocultas para você/.test((await B.wait('reject')).reason), true);
+     await B.wait('init');
