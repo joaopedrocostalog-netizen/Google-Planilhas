@@ -142,6 +142,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     B.send({ type: 'patch', id: 41, patch: { sheets: { p1: { cells: { C1: { v: 'x' } } } } } });
     check('coluna somente leitura', (await B.wait('reject')).reason, 'Você só pode visualizar a coluna C da página "Vendas".');
     await B.wait('init');
+    // PRÉ STACKING cancelado: a marca que faz a linha piscar (pscan) entra e sai também em coluna só de leitura
+    B.send({ type: 'patch', id: 411, patch: { sheets: { p1: { cells: { C9: { pscan: '1|Bia|MAPA linha 9' } } } } } });
+    const ps1 = (await B.wait('ack')).id;
+    B.send({ type: 'patch', id: 412, patch: { sheets: { p1: { cells: { C9: { v: 'x', pscan: '1|Bia|MAPA linha 9' } } } } } });
+    const ps2 = (await B.wait('reject')).reason;
+    await B.wait('init');
+    B.send({ type: 'patch', id: 413, patch: { sheets: { p1: { cells: { C9: null } } } } });
+    check('marca de cancelamento em coluna só de leitura', [ps1, /só pode visualizar/.test(ps2), (await B.wait('ack')).id], [411, true, 413]);
     B.send({ type: 'patch', id: 42, patch: { sheets: { p1: { cells: { B5: {} } } } } });
     check('coluna oculta não pode ser alterada', /ocultas para você/.test((await B.wait('reject')).reason), true);
     await B.wait('init');
