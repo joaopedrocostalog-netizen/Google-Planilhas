@@ -14,15 +14,28 @@
 
   // ---------- Estrutura do painel ----------
   let current = null;
-  function openPanel(title, render, onClose) {
+  // o painel mostra de qual página são as regras e, ao trocar de aba, passa a mostrar as da aba aberta
+  function panelPage(sheetId) {
+    const p = $('side-panel');
+    if (!p || p.hidden) return;
+    const el = p.querySelector('.sp-page');
+    const sh = doc.sheets.find((x) => x.id === sheetId) || App.sheet();
+    if (el && sh) el.textContent = 'Página: ' + sh.name;
+  }
+  App.on('sheet', () => { if (current && current.onSheet) current.onSheet(); });
+  // regra em edição de cada aba (para reabrir quando a pessoa volta para a aba): { 'cf:idDaAba' | 'dv:idDaAba': idDaRegra }
+  const emEdicao = {};
+  function openPanel(title, render, onClose, sheetId) {
     closePanel();
     const p = $('side-panel');
     p.hidden = false;
-    p.innerHTML = `<div class="sp-head"><h2>${esc(title)}</h2><button class="icon-btn sp-x" aria-label="Fechar">${icon('close', 20)}</button></div><div class="sp-body"></div>`;
-    current = { onClose, body: p.querySelector('.sp-body'), render };
+    p.innerHTML = `<div class="sp-head"><div class="sp-ttl"><h2>${esc(title)}</h2><small class="sp-page"></small></div><button class="icon-btn sp-x" aria-label="Fechar">${icon('close', 20)}</button></div><div class="sp-body"></div>`;
+    current = { onClose, body: p.querySelector('.sp-body'), render, cmd: null };
+    panelPage(sheetId || App.sheet().id);
     p.querySelector('.sp-x').onclick = closePanel;
     render(current.body);
     document.body.classList.add('panel-open');
+    App.panelAberto = current;
     App.grid.layout();
     return current;
   }
@@ -33,6 +46,7 @@
     current = null;
     if (c.onClose) c.onClose();
     p.hidden = true; p.innerHTML = '';
+    App.panelAberto = null;
     document.body.classList.remove('panel-open');
     App.grid.layout();
     App.grid.focus();
@@ -205,7 +219,15 @@
       body.querySelector('.sp-dup').onclick = () => { duplicate(r.id); render(body); };
       body.querySelector('.sp-back').onclick = () => { editingId = null; preview(true); render(body); };
     };
-    openPanel('Regras de formatação condicional', render, finish);
+    const cur = openPanel('Regras de formatação condicional', render, finish, sid);
+    // trocar de aba: grava, guarda qual regra estava em edição nesta aba e mostra as regras da aba aberta
+    cur.onSheet = () => {
+      if (!alive || App.sheet().id === sid) return;
+      if (editingId) emEdicao['cf:' + sid] = editingId; else delete emEdicao['cf:' + sid];
+      setTimeout(() => condFormat(), 0);
+    };
+    const volta = emEdicao['cf:' + sid];
+    if (volta && work.some((r) => r.id === volta)) { editingId = volta; render(cur.body); }
   }
 
   // ---------- Cores alternadas ----------
@@ -263,6 +285,8 @@
     const R0 = App.selRect();
     const newRule = (type) => ({ id: App.uid(), range: Object.assign({}, R0), type: type || 'list', items: ['Opção 1', 'Opção 2'], colors: {}, src: '', cond: { type: 'between', a: '', b: '' }, reject: false, help: '', style: 'chip' });
     if (opts && opts.newType) { editing = newRule(opts.newType); sh.dv.push(editing); }
+    // voltando para esta aba: a regra que estava em edição aqui abre de novo, com o que foi digitado
+    if (!editing && emEdicao['dv:' + sh.id]) editing = sh.dv.find((d) => d.id === emEdicao['dv:' + sh.id]) || null;
     const finish = () => {
       const final = clone(sh.dv);
       sh.dv = original;
@@ -278,7 +302,7 @@
       } else preview();
     };
     const render = (body) => {
-      if (editing) return renderRule(body);
+      if (editing) { if (!editing.colors) editing.colors = {}; return renderRule(body); }
       // em ordem de coluna (C, depois D, depois F…) e, na mesma coluna, de linha
       const ordered = sh.dv.slice().sort((x, y) => (x.range.c1 - y.range.c1) || (x.range.r1 - y.range.r1) || (x.range.c2 - y.range.c2));
       const colLbl = (d) => 'Coluna ' + (App.colLabelOf ? App.colLabelOf(sh, d.range.c1) : App.E.numToCol(d.range.c1)) + (d.range.c2 > d.range.c1 ? ' até ' + App.E.numToCol(d.range.c2) : '');
@@ -345,7 +369,14 @@
       body.querySelector('.sp-remove').onclick = () => { sh.dv = sh.dv.filter((x) => x !== d); editing = null; preview(); render(body); };
       body.querySelector('.sp-back').onclick = () => { editing = null; render(body); };
     };
-    openPanel('Regras de validação de dados', render, finish);
+    const cur = openPanel('Regras de validação de dados', render, finish, sh.id);
+    // trocar de aba: grava o que foi digitado, guarda a regra em edição desta aba e mostra as regras da aba aberta
+    cur.onSheet = () => {
+      if (App.sheet().id === sh.id) return;
+      if (editing) emEdicao['dv:' + sh.id] = editing.id; else delete emEdicao['dv:' + sh.id];
+      closePanel();
+      setTimeout(() => dataValidation(), 0);
+    };
   }
 
   // ---------- Estatísticas da coluna ----------

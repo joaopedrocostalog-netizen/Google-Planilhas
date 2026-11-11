@@ -4,6 +4,14 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '11/11/2026', title: 'PRÉ STACKING protegido, CNH na escala, painéis por aba e aviso do AGENDAMENTO', items: [
+      ['Linhas protegidas', 'No PRÉ STACKING, apagar (Delete) ou sobrescrever (colar, Ctrl+D, arrastar) uma linha vinculada ao MAPA não acontece sem confirmar: a linha volta na hora e aparece a pergunta. Com Sim, a mudança vale e a marca P.S. no MAPA é retirada; com Não, fica como estava.'],
+      ['Cópias', 'Copiar uma linha vinculada (Ctrl+D, colar) não copia o vínculo; no MAPA, a cópia da caixa P.S. vem desmarcada, com aviso.'],
+      ['CNH', 'Com a escala não confirmada no PRÉ STACKING, a CNH também fica em vermelho até confirmar (e pisca em azul no pedido de troca).'],
+      ['Painéis', 'Validação de dados e formatação condicional mostram a página no topo e mudam junto com a aba. A regra que estava em edição numa aba abre de novo quando você volta para ela.'],
+      ['AGENDAMENTO', 'Entrada recusada abre a janela "AGENDAMENTO fora do formato padrão", explicando que precisa estar em dd/mm/aaaa hh:mm, com exemplo e o que foi recusado. Corrigido o erro que mostrava só "não foi possível concluir a atualização automática".'],
+      ['Modo escuro', 'Os números das linhas, as letras das colunas e a faixa dos agrupamentos acompanham o modo escuro; as células continuam claras.'],
+    ] },
     { date: '11/11/2026', title: 'PRÉ STACKING: abas da escala pela OBS, aviso de cancelamento e posição da linha nova', items: [
       ['Escala no PRÉ STACKING', 'Em PRÉ STACKING CHEIO e VAZIO, as abas da escala de frota são os valores da coluna OBS da BASE GERAL (no lugar de Rodotrem, CONVENC. L, CONVENC. LS…).'],
       ['Cancelamento', 'O aviso "Confirmar que vi" volta toda vez que alguém clica no STATUS da linha que pisca, até ser confirmado. A confirmação agora vale também para quem só visualiza algumas colunas (antes o aviso sumia e a linha continuava piscando).'],
