@@ -4,6 +4,9 @@
   const esc = App.esc;
   // a mais nova primeiro; cada item: [área, o que mudou]
   const UPDATES = [
+    { date: '11/11/2026', title: 'Botão do modo escuro no cabeçalho', items: [
+      ['Modo escuro', 'O botão de lua no cabeçalho liga o modo escuro; o de sol volta ao claro. Fica guardado neste aparelho. O modo Automático (segue o aparelho) continua em Ver › Tema.'],
+    ] },
     { date: '10/11/2026', title: 'Notificações obrigatórias, mensagem de administrador em destaque e versões a cada 3 horas', items: [
       ['Notificações', 'Agora são obrigatórias: ao entrar na conta, a planilha só abre depois de ativar as notificações do aparelho, e não há mais como desligar: todos os avisos ficam ligados (a lista está em Ferramentas › Notificações).'],
       ['Computador', 'Os avisos aparecem como notificação do sistema, por cima de qualquer janela, com a planilha na tela ou não, e ficam até você clicar ou fechar.'],
